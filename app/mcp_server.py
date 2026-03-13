@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
@@ -32,7 +33,22 @@ from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
 from app.services.system_status import vector_status_payload
 
-mcp = FastMCP("fashion_db_mcp", json_response=True, streamable_http_path="/")
+
+def _split_csv(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+settings = get_settings()
+mcp = FastMCP(
+    "fashion_db_mcp",
+    json_response=True,
+    streamable_http_path="/",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_split_csv(settings.mcp_allowed_hosts),
+        allowed_origins=_split_csv(settings.mcp_allowed_origins),
+    ),
+)
 
 
 class LatestRunResponse(BaseModel):

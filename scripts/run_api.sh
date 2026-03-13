@@ -77,7 +77,7 @@ fi
 
 alembic upgrade head
 if [ "$UVICORN_RELOAD" = "true" ]; then
-  exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips="*"
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"

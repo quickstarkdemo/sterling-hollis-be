@@ -60,6 +60,8 @@ jobs:
           STORE_SOURCE_INDEX_URL=${{ secrets.STORE_SOURCE_INDEX_URL }}
           STORE_SOURCE_DETAIL_URL_TEMPLATE=${{ secrets.STORE_SOURCE_DETAIL_URL_TEMPLATE }}
           STORE_SOURCE_CACHE_PATH=${{ secrets.STORE_SOURCE_CACHE_PATH || '/app/data/store_source_snapshot.json' }}
+          MCP_ALLOWED_HOSTS=${{ secrets.MCP_ALLOWED_HOSTS || '127.0.0.1:*,localhost:*,[::1]:*' }}
+          MCP_ALLOWED_ORIGINS=${{ secrets.MCP_ALLOWED_ORIGINS || 'http://127.0.0.1:*,http://localhost:*,http://[::1]:*' }}
           UVICORN_RELOAD=false
           EOF
 

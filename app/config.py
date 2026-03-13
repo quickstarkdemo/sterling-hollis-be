@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     store_source_index_url: str | None = None
     store_source_detail_url_template: str | None = None
     store_source_cache_path: str = "data/store_source_snapshot.json"
+    mcp_allowed_hosts: str = "127.0.0.1:*,localhost:*,[::1]:*"
+    mcp_allowed_origins: str = "http://127.0.0.1:*,http://localhost:*,http://[::1]:*"
 
     openai_api_key: str | None = None
     embedding_model: str = "text-embedding-3-small"

@@ -39,6 +39,8 @@ Set at minimum:
 - `DATABASE_URL` or the `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD` group
 - `STORE_SOURCE_INDEX_URL`
 - `STORE_SOURCE_DETAIL_URL_TEMPLATE`
+- `MCP_ALLOWED_HOSTS` for any non-local MCP hostname
+- `MCP_ALLOWED_ORIGINS` if your MCP clients send `Origin`
 
 Optional for vector cloud indexing:
 - `OPENAI_API_KEY`
@@ -66,6 +68,8 @@ Runtime / database:
 - `STORE_SOURCE_INDEX_URL`
 - `STORE_SOURCE_DETAIL_URL_TEMPLATE`
 - `STORE_SOURCE_CACHE_PATH`
+- `MCP_ALLOWED_HOSTS`
+- `MCP_ALLOWED_ORIGINS`
 
 Vector / recommendation:
 - `OPENAI_API_KEY`
@@ -86,6 +90,7 @@ Notes:
 - `DOCKERHUB_IMAGE` must include the Docker Hub namespace, for example `quickstark/product-api`, not just `product-api`.
 - Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
 - The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
+- FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
 
 ### 2) Run with Docker Compose
 
