@@ -57,6 +57,9 @@ jobs:
           EMBEDDING_MODEL=${{ secrets.EMBEDDING_MODEL || 'text-embedding-3-small' }}
           EMBEDDING_DIMENSION=${{ secrets.EMBEDDING_DIMENSION || '1536' }}
           DATA_DIR=/app/data/runs
+          STORE_SOURCE_INDEX_URL=${{ secrets.STORE_SOURCE_INDEX_URL }}
+          STORE_SOURCE_DETAIL_URL_TEMPLATE=${{ secrets.STORE_SOURCE_DETAIL_URL_TEMPLATE }}
+          STORE_SOURCE_CACHE_PATH=${{ secrets.STORE_SOURCE_CACHE_PATH || '/app/data/store_source_snapshot.json' }}
           UVICORN_RELOAD=false
           EOF
 

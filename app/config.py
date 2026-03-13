@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     pgpassword: str | None = None
 
     data_dir: str = "data/runs"
+    store_source_index_url: str | None = None
+    store_source_detail_url_template: str | None = None
+    store_source_cache_path: str = "data/store_source_snapshot.json"
 
     openai_api_key: str | None = None
     embedding_model: str = "text-embedding-3-small"

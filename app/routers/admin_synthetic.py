@@ -22,7 +22,7 @@ from app.schemas import (
 )
 from app.services.indexing import index_products_for_run
 from app.services.loader import current_loaded_counts, finalize_run, load_entity_csv, read_generated_counts, reset_synthetic_tables
-from app.services.store_source import fetch_neiman_store_snapshot, normalize_stores
+from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
 from app.services.system_status import vector_status_payload
 from app.services.validation import run_validation_checks
@@ -51,7 +51,7 @@ def generate_synthetic(req: SyntheticGenerateRequest, db: Session = Depends(get_
     db.commit()
 
     try:
-        snapshot = fetch_neiman_store_snapshot()
+        snapshot = fetch_store_snapshot()
         normalized_stores = normalize_stores(snapshot=snapshot, seed_run_id=run_id)
 
         volumes = GenerationVolumes(**req.volumes.model_dump())

@@ -28,7 +28,7 @@ from app.schemas import (
 from app.services.indexing import index_products_for_run
 from app.services.loader import current_loaded_counts, load_entity_csv, read_generated_counts, reset_synthetic_tables
 from app.services.recommendations import customer_recommendations, merchandising_recommendations
-from app.services.store_source import fetch_neiman_store_snapshot, normalize_stores
+from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
 from app.services.system_status import vector_status_payload
 
@@ -79,7 +79,7 @@ def _generate_synthetic_impl(params: SyntheticGenerateRequest) -> SyntheticGener
         db.commit()
 
         try:
-            snapshot = fetch_neiman_store_snapshot()
+            snapshot = fetch_store_snapshot()
             normalized_stores = normalize_stores(snapshot=snapshot, seed_run_id=run_id)
             volumes = GenerationVolumes(**params.volumes.model_dump())
             artifacts = generate_synthetic_dataset(
@@ -180,7 +180,7 @@ def fashion_generate_synthetic(
     orders: int = 80000,
     profile_overrides: dict[str, float] | None = None,
 ) -> SyntheticGenerateResponse:
-    """Generate a new Neiman Marcus-mapped synthetic dataset and persist CSV artifacts for a run."""
+    """Generate a new synthetic retail dataset and persist CSV artifacts for a run."""
     params = SyntheticGenerateRequest(
         seed=seed,
         trailing_months=trailing_months,

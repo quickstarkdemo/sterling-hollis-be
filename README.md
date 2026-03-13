@@ -1,15 +1,13 @@
 # product-db
 
-Neiman Marcus-mapped synthetic fashion data platform with:
+Synthetic fashion data platform with:
 - Postgres as source of truth
 - Pinecone as vector retrieval layer
 - FastAPI for generation, ingestion, indexing, and recommendation APIs
 
 ## What this implements
 
-- Live Neiman Marcus store seeding from:
-  - `https://stores.neimanmarcus.com/info/min/allStoresAddr_nm.min.json`
-  - `https://stores.neimanmarcus.com/info/{store_id}.json`
+- Live store seeding from configurable source endpoints
 - Deterministic synthetic generators for:
   - `stores`, `customers`, `products`, `orders`, `order_items`, `store_daily_metrics`
 - CSV run artifacts under `data/runs/<run_id>/`
@@ -39,6 +37,8 @@ cp .env.example .env
 
 Set at minimum:
 - `DATABASE_URL` or the `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD` group
+- `STORE_SOURCE_INDEX_URL`
+- `STORE_SOURCE_DETAIL_URL_TEMPLATE`
 
 Optional for vector cloud indexing:
 - `OPENAI_API_KEY`
@@ -63,6 +63,9 @@ Runtime / database:
 - `PGUSER`
 - `PGPASSWORD`
 - `DATA_DIR`
+- `STORE_SOURCE_INDEX_URL`
+- `STORE_SOURCE_DETAIL_URL_TEMPLATE`
+- `STORE_SOURCE_CACHE_PATH`
 
 Vector / recommendation:
 - `OPENAI_API_KEY`
@@ -82,6 +85,7 @@ Deployment:
 Notes:
 - `DOCKERHUB_IMAGE` must include the Docker Hub namespace, for example `quickstark/product-api`, not just `product-api`.
 - Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
+- The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
 
 ### 2) Run with Docker Compose
 

@@ -5,8 +5,7 @@ from pathlib import Path
 
 import httpx
 
-ALL_STORES_URL = "https://stores.neimanmarcus.com/info/min/allStoresAddr_nm.min.json"
-STORE_DETAIL_URL = "https://stores.neimanmarcus.com/info/{store_id}.json"
+from app.config import get_settings
 
 
 def infer_profile_type(store: dict) -> str:
@@ -37,13 +36,25 @@ def _flatten_store_map(store_map: dict) -> list[dict]:
     return flat
 
 
-def fetch_neiman_store_snapshot(cache_path: Path | None = None, timeout_seconds: int = 30) -> dict:
+def fetch_store_snapshot(cache_path: Path | None = None, timeout_seconds: int = 30) -> dict:
+    settings = get_settings()
+    index_url = settings.store_source_index_url
+    detail_url_template = settings.store_source_detail_url_template
+
     if cache_path is None:
-        cache_path = Path("data/neiman_stores_snapshot.json")
+        cache_path = Path(settings.store_source_cache_path)
+
+    if not index_url or not detail_url_template:
+        if cache_path.exists():
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        raise RuntimeError(
+            "Store source URLs are not configured. Set STORE_SOURCE_INDEX_URL and "
+            "STORE_SOURCE_DETAIL_URL_TEMPLATE, or provide a cached snapshot."
+        )
 
     try:
         with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
-            all_stores_resp = client.get(ALL_STORES_URL)
+            all_stores_resp = client.get(index_url)
             all_stores_resp.raise_for_status()
             store_map = all_stores_resp.json()
 
@@ -51,15 +62,15 @@ def fetch_neiman_store_snapshot(cache_path: Path | None = None, timeout_seconds:
             details = {}
             for store in stores:
                 sid = str(store["id"])
-                detail_resp = client.get(STORE_DETAIL_URL.format(store_id=sid))
+                detail_resp = client.get(detail_url_template.format(store_id=sid))
                 if detail_resp.status_code == 200:
                     details[sid] = detail_resp.json()
                 else:
                     details[sid] = {}
 
         snapshot = {
-            "all_stores_url": ALL_STORES_URL,
-            "detail_url_template": STORE_DETAIL_URL,
+            "all_stores_url": index_url,
+            "detail_url_template": detail_url_template,
             "store_map": store_map,
             "stores": stores,
             "details": details,
