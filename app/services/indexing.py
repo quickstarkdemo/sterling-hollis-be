@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from app.models import Product, ProductEmbedding
+from app.services.embeddings import EmbeddingService
+from app.services.pinecone_service import PineconeService
+
+
+def build_product_embedding_text(product: Product) -> str:
+    attrs = [product.category, product.brand, product.color or "", product.material or "", product.gender or "", product.season or ""]
+    attrs_text = " | ".join(a for a in attrs if a)
+    return f"{product.title}\n{product.description}\n{attrs_text}"
+
+
+def index_products_for_run(db: Session, run_id: str, batch_size: int = 128) -> dict:
+    embedding_service = EmbeddingService()
+    pinecone = PineconeService()
+
+    db.execute(delete(ProductEmbedding).where(ProductEmbedding.seed_run_id == run_id))
+    db.commit()
+
+    products = db.scalars(select(Product).where(Product.seed_run_id == run_id).order_by(Product.id)).all()
+    attempted = len(products)
+
+    status_counter: Counter[str] = Counter()
+    failed = 0
+
+    for start in range(0, len(products), batch_size):
+        batch = products[start : start + batch_size]
+        texts = [build_product_embedding_text(p) for p in batch]
+
+        try:
+            vectors = embedding_service.embed_texts(texts)
+        except Exception:
+            vectors = [embedding_service._deterministic_vector(t) for t in texts]
+            status_counter["embedded_fallback"] += len(batch)
+
+        # group upserts by namespace for Pinecone
+        pinecone_payloads: dict[str, list[dict]] = defaultdict(list)
+        embedding_rows = []
+
+        for product, vector in zip(batch, vectors, strict=True):
+            namespace = f"store_{product.store_id}"
+            vector_id = f"product:{product.id}"
+            metadata = {
+                "product_id": product.id,
+                "store_id": product.store_id,
+                "category": product.category,
+                "brand": product.brand,
+                "availability": product.availability,
+                "price": float(product.price),
+                "margin_pct": float(product.margin_pct),
+            }
+
+            pinecone_payloads[namespace].append({"id": vector_id, "values": vector, "metadata": metadata})
+            embedding_rows.append(
+                {
+                    "product_id": product.id,
+                    "seed_run_id": run_id,
+                    "store_id": product.store_id,
+                    "namespace": namespace,
+                    "vector_id": vector_id,
+                    "embedding_model": embedding_service.model,
+                    "status": "pending",
+                    "embedded_at": datetime.now(timezone.utc),
+                }
+            )
+
+        for namespace, payload in pinecone_payloads.items():
+            try:
+                pinecone.upsert(namespace=namespace, vectors=payload)
+                status = "indexed" if pinecone.enabled else "local_only"
+                status_counter[status] += len(payload)
+                for row in embedding_rows:
+                    if row["namespace"] == namespace:
+                        row["status"] = status
+            except Exception as exc:
+                failed += len(payload)
+                status_counter["failed"] += len(payload)
+                for row in embedding_rows:
+                    if row["namespace"] == namespace:
+                        row["status"] = "failed"
+                        row["error"] = str(exc)[:1000]
+
+        db.bulk_insert_mappings(ProductEmbedding, embedding_rows)
+        db.commit()
+
+    indexed = status_counter.get("indexed", 0) + status_counter.get("local_only", 0)
+    return {
+        "attempted": attempted,
+        "indexed": indexed,
+        "failed": failed,
+        "status_breakdown": dict(status_counter),
+    }

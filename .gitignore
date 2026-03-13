@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+product_db.egg-info/
+deploy/runtime.env
+test-results/
+
+# Synthetic outputs
+/data/runs/
+/data/neiman_stores_snapshot.json
+
+/examples/
