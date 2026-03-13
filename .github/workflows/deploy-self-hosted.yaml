@@ -68,6 +68,8 @@ jobs:
           docker compose -f deploy/docker-compose.prod.yml ps
 
       - name: Health check
+        env:
+          PRODUCT_API_IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.version }}
         run: |
           ATTEMPTS=24
           SLEEP_SECONDS=5

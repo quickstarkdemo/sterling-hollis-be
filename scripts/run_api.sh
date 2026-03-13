@@ -6,7 +6,7 @@ DB_PORT="${DB_PORT:-${PGPORT:-5432}}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-60}"
 UVICORN_RELOAD="${UVICORN_RELOAD:-false}"
 
-if [ -z "${DATABASE_URL:-}" ] && [ -n "${PGHOST:-}" ] && [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ]; then
+if [ -n "${PGHOST:-}" ] && [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ]; then
   DATABASE_URL="$(python <<'PY'
 from urllib.parse import quote_plus
 import os

@@ -34,13 +34,12 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    if not settings.database_url:
-        if settings.pghost and settings.pgdatabase and settings.pguser and settings.pgpassword is not None:
-            user = quote_plus(settings.pguser)
-            password = quote_plus(settings.pgpassword)
-            settings.database_url = (
-                f"postgresql+psycopg://{user}:{password}@{settings.pghost}:{settings.pgport}/{settings.pgdatabase}"
-            )
-        else:
-            settings.database_url = "postgresql+psycopg://postgres:postgres@localhost:5432/productdb"
+    if settings.pghost and settings.pgdatabase and settings.pguser and settings.pgpassword is not None:
+        user = quote_plus(settings.pguser)
+        password = quote_plus(settings.pgpassword)
+        settings.database_url = (
+            f"postgresql+psycopg://{user}:{password}@{settings.pghost}:{settings.pgport}/{settings.pgdatabase}"
+        )
+    elif not settings.database_url:
+        settings.database_url = "postgresql+psycopg://postgres:postgres@localhost:5432/productdb"
     return settings
