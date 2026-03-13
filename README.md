@@ -53,6 +53,36 @@ Deployment-related values:
 - `DOCKERHUB_IMAGE` such as `quickstark/product-api`
 - `API_PORT` if you do not want to expose the API on `8000`
 
+### Environment reference
+
+Runtime / database:
+- `DATABASE_URL`
+- `PGHOST`
+- `PGPORT`
+- `PGDATABASE`
+- `PGUSER`
+- `PGPASSWORD`
+- `DATA_DIR`
+
+Vector / recommendation:
+- `OPENAI_API_KEY`
+- `PINECONE_API_KEY`
+- `PINECONE_INDEX_NAME`
+- `PINECONE_CLOUD`
+- `PINECONE_REGION`
+- `EMBEDDING_MODEL`
+- `EMBEDDING_DIMENSION`
+
+Deployment:
+- `DOCKERHUB_USER`
+- `DOCKERHUB_TOKEN`
+- `DOCKERHUB_IMAGE`
+- `API_PORT`
+
+Notes:
+- `DOCKERHUB_IMAGE` must include the Docker Hub namespace, for example `quickstark/product-api`, not just `product-api`.
+- Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
+
 ### 2) Run with Docker Compose
 
 ```bash
@@ -65,6 +95,8 @@ Compose now starts the API in migration-first mode:
 - wait for Postgres
 - run `alembic upgrade head`
 - start FastAPI
+
+The local development compose file includes a bundled Postgres container and sets `UVICORN_RELOAD=true`. The production deployment path does not bundle Postgres and runs Uvicorn without reload.
 
 ### 2a) Understand vector modes
 
@@ -139,6 +171,38 @@ Important constraint:
 - `EMBEDDING_DIMENSION` must match the Pinecone index dimension.
 - The default pairing is `text-embedding-3-small` with dimension `1536`.
 - If you change embedding models to a different dimension, use a new `PINECONE_INDEX_NAME` or recreate the old index.
+
+### Postgres and Pinecone
+
+Postgres:
+- Postgres is the system of record.
+- The schema is managed by Alembic.
+- Startup runs `alembic upgrade head`, so an empty database is created automatically on first boot.
+- The initial schema migration lives in [alembic/versions/f790a40c397b_initial_schema.py](/Users/dirk.nielsen/Documents/Github/personal/product-db/alembic/versions/f790a40c397b_initial_schema.py).
+
+Key tables:
+- `synthetic_runs`
+- `stores`
+- `customers`
+- `products`
+- `orders`
+- `order_items`
+- `product_embeddings`
+- `store_daily_metrics`
+- `synthetic_validation_failures`
+
+If you want SQL instead of running Alembic directly:
+
+```bash
+. .venv/bin/activate
+alembic upgrade head --sql > schema.sql
+```
+
+Pinecone:
+- Pinecone is a hosted service, not a container in this repo.
+- The app talks to Pinecone through [app/services/pinecone_service.py](/Users/dirk.nielsen/Documents/Github/personal/product-db/app/services/pinecone_service.py).
+- The Pinecone index is created on demand by the code when product indexing runs.
+- Rebuilding Postgres from scratch requires reloading data and re-running product indexing so Postgres rows and Pinecone vectors are aligned.
 
 ## API highlights
 
@@ -312,6 +376,7 @@ Production defaults:
 - container name: `products-api`
 - exposed host port: `8000`
 - Postgres: external instance, not a bundled container
+- transport: REST API and MCP served from the same container on port `8000`
 
 ### Deploy flow
 
@@ -328,6 +393,23 @@ That script:
 - uploads GitHub secrets
 - prompts for a commit message
 - pushes the current branch to trigger the workflow
+
+If there are no tracked changes to commit, the script can dispatch the workflow manually instead.
+
+### Production deployment assets
+
+- Workflow: [.github/workflows/deploy-self-hosted.yaml](/Users/dirk.nielsen/Documents/Github/personal/product-db/.github/workflows/deploy-self-hosted.yaml)
+- Runtime compose file: [deploy/docker-compose.prod.yml](/Users/dirk.nielsen/Documents/Github/personal/product-db/deploy/docker-compose.prod.yml)
+- Deploy script: [scripts/deploy.sh](/Users/dirk.nielsen/Documents/Github/personal/product-db/scripts/deploy.sh)
+- Secret uploader: [scripts/setup-secrets.sh](/Users/dirk.nielsen/Documents/Github/personal/product-db/scripts/setup-secrets.sh)
+- Version file: [VERSION](/Users/dirk.nielsen/Documents/Github/personal/product-db/VERSION)
+
+The workflow:
+- builds and pushes `latest`
+- builds and pushes `<version>-<short_sha>`
+- writes `deploy/runtime.env` from GitHub secrets
+- runs `docker compose -f deploy/docker-compose.prod.yml up -d`
+- health-checks `http://localhost:${API_PORT:-8000}/health`
 
 ### Secrets expected by the workflow
 
@@ -351,6 +433,25 @@ Optional:
 - `PINECONE_REGION`
 - `EMBEDDING_MODEL`
 - `EMBEDDING_DIMENSION`
+
+Example external Postgres settings:
+
+```env
+PGHOST=192.168.1.200
+PGPORT=9001
+PGDATABASE=products
+PGUSER=postgres
+PGPASSWORD=your-password
+```
+
+Example Docker Hub settings:
+
+```env
+DOCKERHUB_USER=quickstark
+DOCKERHUB_TOKEN=your-token
+DOCKERHUB_IMAGE=quickstark/product-api
+API_PORT=8000
+```
 
 ## Make Targets
 

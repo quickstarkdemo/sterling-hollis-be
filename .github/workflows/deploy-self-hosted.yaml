@@ -64,13 +64,44 @@ jobs:
         env:
           PRODUCT_API_IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.version }}
         run: |
-          docker compose -f deploy/docker-compose.prod.yml up -d
+          docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate --remove-orphans
           docker compose -f deploy/docker-compose.prod.yml ps
 
       - name: Health check
         run: |
-          sleep 10
-          curl -fsS "http://localhost:${API_PORT}/health"
+          ATTEMPTS=24
+          SLEEP_SECONDS=5
+          SUCCESS=0
+
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            echo "Health check attempt ${attempt}/${ATTEMPTS}"
+
+            if curl -fsS "http://localhost:${API_PORT}/health"; then
+              echo ""
+              echo "Application is healthy."
+              SUCCESS=1
+              break
+            fi
+
+            echo "Health endpoint not ready yet. Current container state:"
+            docker compose -f deploy/docker-compose.prod.yml ps || true
+            docker ps --filter "name=products-api" || true
+            sleep "$SLEEP_SECONDS"
+          done
+
+          if [ "$SUCCESS" -ne 1 ]; then
+            echo "Health check failed after $((ATTEMPTS * SLEEP_SECONDS)) seconds."
+            echo ""
+            echo "Compose status:"
+            docker compose -f deploy/docker-compose.prod.yml ps || true
+            echo ""
+            echo "Container inspect:"
+            docker inspect products-api --format '{{json .State}}' 2>/dev/null || true
+            echo ""
+            echo "Recent container logs:"
+            docker logs --tail 200 products-api 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Show running container
         if: always()
