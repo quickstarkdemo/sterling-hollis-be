@@ -1,4 +1,4 @@
-name: Deploy Product DB
+name: Deploy Product API
 
 on:
   push:
@@ -74,9 +74,24 @@ jobs:
           ATTEMPTS=24
           SLEEP_SECONDS=5
           SUCCESS=0
+          CONTAINER_ID=""
 
           for attempt in $(seq 1 "$ATTEMPTS"); do
             echo "Health check attempt ${attempt}/${ATTEMPTS}"
+
+            CONTAINER_ID="$(docker compose -f deploy/docker-compose.prod.yml ps -q api || true)"
+
+            if [ -n "$CONTAINER_ID" ]; then
+              HEALTH_STATUS="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER_ID" 2>/dev/null || true)"
+              echo "Container health status: ${HEALTH_STATUS:-unknown}"
+
+              if [ "$HEALTH_STATUS" = "healthy" ]; then
+                docker exec "$CONTAINER_ID" python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read().decode())"
+                echo "Application is healthy."
+                SUCCESS=1
+                break
+              fi
+            fi
 
             if curl -fsS "http://localhost:${API_PORT}/health"; then
               echo ""
