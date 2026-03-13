@@ -107,11 +107,10 @@ def customer_recommendations(
         ).all()
         customer_brand_prefs = {row[0] for row in brand_rows}
 
-    context_text = _build_customer_query_context(db, req)
-    query_vector = embedding_service.embed_text(context_text)
-
     vector_candidates: list[tuple[str, float]] = []
     if pinecone.enabled:
+        context_text = _build_customer_query_context(db, req)
+        query_vector = embedding_service.embed_text(context_text)
         matches = pinecone.query(
             namespace=f"store_{req.store_id}",
             vector=query_vector,
@@ -135,20 +134,43 @@ def customer_recommendations(
                 continue
             score, reasons = _rule_rerank(p, req, scores.get(pid, 0.0), customer_brand_prefs)
             ranked.append((score, p, reasons))
-    else:
-        query = select(Product).where(Product.store_id == req.store_id, Product.availability != "out of stock")
-        if req.occasion and req.occasion in OCCASION_TO_CATEGORY:
-            query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))
-        if req.budget_max is not None:
-            query = query.where(Product.price <= req.budget_max)
-        if req.budget_min is not None:
-            query = query.where(Product.price >= req.budget_min)
 
-        products = db.scalars(query.order_by(desc(Product.objective_weight)).limit(req.top_k * 4)).all()
-        ranked = []
-        for p in products:
-            score, reasons = _rule_rerank(p, req, 0.4, customer_brand_prefs)
-            ranked.append((score, p, reasons))
+        # External vector stores can contain ids that are stale relative to the SQL source of truth.
+        # If none of the vector hits resolve locally, fall back to SQL/rules instead of returning nothing.
+        if ranked:
+            ranked.sort(key=lambda x: x[0], reverse=True)
+            output: list[ProductRecommendation] = []
+            for score, p, reasons in ranked[: req.top_k]:
+                output.append(
+                    ProductRecommendation(
+                        product_id=p.id,
+                        title=p.title,
+                        brand=p.brand,
+                        category=p.category,
+                        price=float(p.price),
+                        availability=p.availability,
+                        score=round(score, 4),
+                        reasons=reasons or ["high relevance"],
+                    )
+                )
+
+            return output, strategy
+
+    # SQL fallback path for local mode or when vector hits cannot be resolved against Postgres.
+    strategy = "sql_rules_fallback"
+    query = select(Product).where(Product.store_id == req.store_id, Product.availability != "out of stock")
+    if req.occasion and req.occasion in OCCASION_TO_CATEGORY:
+        query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))
+    if req.budget_max is not None:
+        query = query.where(Product.price <= req.budget_max)
+    if req.budget_min is not None:
+        query = query.where(Product.price >= req.budget_min)
+
+    products = db.scalars(query.order_by(desc(Product.objective_weight)).limit(req.top_k * 4)).all()
+    ranked = []
+    for p in products:
+        score, reasons = _rule_rerank(p, req, 0.4, customer_brand_prefs)
+        ranked.append((score, p, reasons))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
     output: list[ProductRecommendation] = []

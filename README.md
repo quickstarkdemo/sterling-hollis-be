@@ -4,6 +4,8 @@ Synthetic fashion data platform with:
 - Postgres as source of truth
 - Pinecone as vector retrieval layer
 - FastAPI for generation, ingestion, indexing, and recommendation APIs
+- MCP-first operator workflows for store associates and merchandisers
+- ChatGPT Apps SDK-ready widget rendering for high-level operator actions
 
 ## What this implements
 
@@ -14,6 +16,9 @@ Synthetic fashion data platform with:
 - Admin load and finalize endpoints
 - Product embedding/index endpoint (OpenAI + Pinecone when configured, deterministic fallback otherwise)
 - Customer and merchandising recommendation endpoints
+- Human-first MCP tools for store resolution, customer resolution, associate recommendations, and merch workflows
+- Draft-then-send Twilio SMS support using a global test destination number
+- Apps SDK render tools for associate board, SMS review, and merch action board
 - OpenAI-commerce-style product feed endpoint
 
 ## Project structure
@@ -49,11 +54,19 @@ Optional for vector cloud indexing:
 - `PINECONE_CLOUD` / `PINECONE_REGION` if your Pinecone project is not `aws/us-east-1`
 - `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` if you intentionally change embedding models
 
+Optional for Twilio-assisted customer communication:
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_API_KEY_SID`
+- `TWILIO_API_KEY_SECRET`
+- `TWILIO_SENDER_NUMBER`
+- `TWILIO_TEST_TO_NUMBER`
+
 Deployment-related values:
 - `DOCKERHUB_USER`
 - `DOCKERHUB_TOKEN`
 - `DOCKERHUB_IMAGE` such as `quickstark/product-api`
 - `API_PORT` if you do not want to expose the API on `8000`
+- `PUBLIC_BASE_URL` for remote MCP/App widget deployment, for example `https://products-api.quickstark.com`
 
 ### Environment reference
 
@@ -70,6 +83,7 @@ Runtime / database:
 - `STORE_SOURCE_CACHE_PATH`
 - `MCP_ALLOWED_HOSTS`
 - `MCP_ALLOWED_ORIGINS`
+- `PUBLIC_BASE_URL`
 
 Vector / recommendation:
 - `OPENAI_API_KEY`
@@ -79,6 +93,13 @@ Vector / recommendation:
 - `PINECONE_REGION`
 - `EMBEDDING_MODEL`
 - `EMBEDDING_DIMENSION`
+
+Twilio:
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_API_KEY_SID`
+- `TWILIO_API_KEY_SECRET`
+- `TWILIO_SENDER_NUMBER`
+- `TWILIO_TEST_TO_NUMBER`
 
 Deployment:
 - `DOCKERHUB_USER`
@@ -91,6 +112,7 @@ Notes:
 - Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
 - The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
 - FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
+- `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
 
 ### 2) Run with Docker Compose
 
@@ -199,6 +221,7 @@ Key tables:
 - `product_embeddings`
 - `store_daily_metrics`
 - `synthetic_validation_failures`
+- `customer_communications`
 
 If you want SQL instead of running Alembic directly:
 
@@ -242,6 +265,7 @@ This MCP endpoint is intended to be:
 
 ### MCP tools
 
+Low-level/admin tools:
 - `fashion_vector_status`
 - `fashion_latest_run`
 - `fashion_generate_synthetic`
@@ -251,6 +275,22 @@ This MCP endpoint is intended to be:
 - `fashion_customer_recommendations`
 - `fashion_merchandising_recommendations`
 - `fashion_get_product_feed`
+
+Human-first operator tools:
+- `fashion_resolve_store`
+- `fashion_resolve_customer`
+- `fashion_store_associate_recommend`
+- `fashion_prepare_customer_sms`
+- `fashion_send_customer_sms`
+- `fashion_customer_message_history`
+- `fashion_merch_action_recommendations`
+- `fashion_merch_diagnostics`
+- `fashion_merch_trend_summary`
+
+Apps SDK render tools:
+- `fashion_render_associate_board`
+- `fashion_render_sms_review`
+- `fashion_render_merch_board`
 
 ### Local MCP smoke test
 
@@ -305,6 +345,23 @@ Examples:
 - `fashion_index_products(run_id="<RUN_ID>", batch_size=128)`
 - `fashion_load_synthetic(run_id="<RUN_ID>", entities=["stores","customers","products","orders","order_items","store_daily_metrics"])`
 
+Human-first examples:
+
+- `fashion_resolve_store(store_query="Dallas downtown")`
+- `fashion_resolve_customer(email="avery.parker.1@example-fashion.test")`
+- `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
+- `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
+- `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
+- `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
+- `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", lookback_days=90)`
+- `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.")`
+
+Render-tool examples for ChatGPT Apps:
+
+- `fashion_render_associate_board(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
+- `fashion_render_sms_review(message_id="<MESSAGE_ID>")`
+- `fashion_render_merch_board(store_query="Dallas", question="What should this store feature, deprioritize, or promote this week?", top_k=9)`
+
 ### Manual local MCP testing with Inspector
 
 You can also use the official MCP Inspector:
@@ -357,6 +414,33 @@ Cursor `~/.cursor/mcp.json`:
 The MCP server is transport-compatible with ChatGPT Developer Mode, but ChatGPT itself cannot connect to `localhost`.
 
 For ChatGPT, the same MCP endpoint must be exposed on a remote public URL later, for example through Cloudflare. That is the correct next phase after local validation.
+
+### Twilio communication model
+
+The customer-communication flow is intentionally conservative:
+
+- recommendation tools never send SMS automatically
+- `fashion_prepare_customer_sms` creates a persisted draft in `customer_communications`
+- `fashion_send_customer_sms` is the only send action
+- all v1 outbound messages go to `TWILIO_TEST_TO_NUMBER`
+- the outbound sender is `TWILIO_SENDER_NUMBER`
+
+Current message body content is text-only:
+- associate greeting
+- recommended product titles and prices
+- product links
+
+The synthetic dataset includes `image_link`, but those URLs are placeholders and are not used for outbound messaging.
+
+### Apps SDK widgets
+
+The repo now includes Apps SDK-ready render tools layered on top of the human-first MCP tools:
+
+- associate recommendation board
+- SMS draft review/send board
+- merchandising action board
+
+These widgets are mounted as MCP resources and are intended for ChatGPT app usage. They rely on `PUBLIC_BASE_URL` for widget CSP and remote access.
 
 ## Testing
 
@@ -442,6 +526,12 @@ Optional:
 - `PINECONE_REGION`
 - `EMBEDDING_MODEL`
 - `EMBEDDING_DIMENSION`
+- `PUBLIC_BASE_URL`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_API_KEY_SID`
+- `TWILIO_API_KEY_SECRET`
+- `TWILIO_SENDER_NUMBER`
+- `TWILIO_TEST_TO_NUMBER`
 
 Example external Postgres settings:
 
@@ -460,6 +550,17 @@ DOCKERHUB_USER=quickstark
 DOCKERHUB_TOKEN=your-token
 DOCKERHUB_IMAGE=quickstark/product-api
 API_PORT=8000
+```
+
+Example remote MCP/Twilio settings:
+
+```env
+PUBLIC_BASE_URL=https://products-api.quickstark.com
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_API_KEY_SID=SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_API_KEY_SECRET=your-secret
+TWILIO_SENDER_NUMBER=+15555550123
+TWILIO_TEST_TO_NUMBER=+15555550999
 ```
 
 ## Make Targets

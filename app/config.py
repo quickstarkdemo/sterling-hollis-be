@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     store_source_cache_path: str = "data/store_source_snapshot.json"
     mcp_allowed_hosts: str = "127.0.0.1:*,localhost:*,[::1]:*"
     mcp_allowed_origins: str = "http://127.0.0.1:*,http://localhost:*,http://[::1]:*"
+    public_base_url: str = "http://localhost:8000"
 
     openai_api_key: str | None = None
     embedding_model: str = "text-embedding-3-small"
@@ -32,6 +33,12 @@ class Settings(BaseSettings):
     pinecone_cloud: str = "aws"
     pinecone_region: str = "us-east-1"
     pinecone_index_name: str = "fashion-products-v1"
+
+    twilio_account_sid: str | None = None
+    twilio_api_key_sid: str | None = None
+    twilio_api_key_secret: str | None = None
+    twilio_sender_number: str | None = None
+    twilio_test_to_number: str | None = None
 
     vector_top_k: int = 50
 

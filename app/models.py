@@ -200,3 +200,23 @@ class StoreDailyMetric(Base):
     __table_args__ = (
         UniqueConstraint("seed_run_id", "store_id", "metric_date", name="uq_store_daily_metric_run_store_date"),
     )
+
+
+class CustomerCommunication(Base):
+    __tablename__ = "customer_communications"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False, default="sms")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    destination_e164: Mapped[str] = mapped_column(String(32), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    product_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    recommendation_context: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    twilio_message_sid: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -5,29 +5,46 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Product, ProductEmbedding, SyntheticRun
+from app.models import CustomerCommunication, Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    CustomerCommunicationDraftResponse,
+    CustomerCommunicationHistoryResponse,
     CustomerRecommendationRequest,
     CustomerRecommendationResponse,
+    CustomerResolutionResponse,
     IndexProductsRequest,
     IndexProductsResponse,
+    MerchActionRecommendationsResponse,
+    MerchDiagnosticsResponse,
+    MerchTrendSummaryResponse,
     MerchandisingRecommendationRequest,
     MerchandisingRecommendationResponse,
     Objective,
     RunReportResponse,
+    StoreAssociateRecommendationResponse,
+    StoreResolutionResponse,
     SyntheticGenerateRequest,
     SyntheticGenerateResponse,
     SyntheticLoadRequest,
     SyntheticLoadResponse,
     VectorStatusResponse,
 )
+from app.services.apps_ui import get_widget_state, register_widget_state, render_widget_html
+from app.services.communications import customer_message_history, get_customer_message, prepare_customer_sms, send_customer_sms
 from app.services.indexing import index_products_for_run
 from app.services.loader import current_loaded_counts, load_entity_csv, read_generated_counts, reset_synthetic_tables
+from app.services.lookup import resolve_customer, resolve_store
+from app.services.merchandising import (
+    merchandising_action_recommendations,
+    merchandising_diagnostics,
+    merchandising_trend_summary,
+)
 from app.services.recommendations import customer_recommendations, merchandising_recommendations
 from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
@@ -49,6 +66,13 @@ mcp = FastMCP(
         allowed_origins=_split_csv(settings.mcp_allowed_origins),
     ),
 )
+
+
+_WIDGET_RESOURCE_META = {
+    "openai/widgetPrefersBorder": True,
+    "openai/widgetCSP": {"connect_domains": [settings.public_base_url], "resource_domains": []},
+}
+_WIDGET_TOOL_META = {"openai/widgetAccessible": True}
 
 
 class LatestRunResponse(BaseModel):
@@ -73,6 +97,49 @@ def _tool_annotations(read_only: bool, idempotent: bool, open_world: bool = Fals
         "idempotentHint": idempotent,
         "openWorldHint": open_world,
     }
+
+
+def _calltool_result(text: str, payload: dict | None = None, meta: dict | None = None) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structuredContent=payload,
+        _meta=meta,
+        isError=False,
+    )
+
+
+def _associate_recommendation_impl(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+) -> StoreAssociateRecommendationResponse:
+    with SessionLocal() as db:
+        resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+        resolved_customer = resolve_customer(db, email=customer_email, customer_id=customer_id).resolved
+        req = CustomerRecommendationRequest(
+            store_id=resolved_store.id,
+            customer_id=resolved_customer.id,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=top_k,
+        )
+        rows, strategy = customer_recommendations(db, req)
+        recommendation = CustomerRecommendationResponse(
+            store_id=resolved_store.id,
+            strategy=strategy,
+            recommendations=rows,
+        )
+        return StoreAssociateRecommendationResponse(
+            store=resolved_store,
+            customer=resolved_customer,
+            recommendation=recommendation,
+        )
 
 
 def _generate_synthetic_impl(params: SyntheticGenerateRequest) -> SyntheticGenerateResponse:
@@ -162,6 +229,33 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
         db.add(run)
         db.commit()
         return IndexProductsResponse(run_id=params.run_id, **stats)
+
+
+@mcp.resource(
+    "ui://widgets/associate/{token}.html",
+    mime_type="text/html",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate recommendation board."},
+)
+def associate_widget_resource(token: str) -> str:
+    return render_widget_html("Associate Recommendation Board", get_widget_state(token))
+
+
+@mcp.resource(
+    "ui://widgets/sms/{token}.html",
+    mime_type="text/html",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
+)
+def sms_widget_resource(token: str) -> str:
+    return render_widget_html("SMS Draft Review", get_widget_state(token))
+
+
+@mcp.resource(
+    "ui://widgets/merch/{token}.html",
+    mime_type="text/html",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
+)
+def merch_widget_resource(token: str) -> str:
+    return render_widget_html("Merchandising Action Board", get_widget_state(token))
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -317,6 +411,282 @@ def fashion_merchandising_recommendations(
     with SessionLocal() as db:
         rows = merchandising_recommendations(db, params)
         return MerchandisingRecommendationResponse(store_id=params.store_id, objective=params.objective, recommendations=rows)
+
+
+@mcp.tool(
+    name="fashion_resolve_store",
+    annotations=_tool_annotations(read_only=True, idempotent=True),
+)
+def fashion_resolve_store(store_query: str) -> StoreResolutionResponse:
+    """Resolve a fuzzy store query such as a city, store name, or store identifier to a canonical store."""
+    with SessionLocal() as db:
+        match = resolve_store(db, store_query=store_query)
+        return StoreResolutionResponse(query=store_query, resolved=match.resolved, alternatives=match.alternatives)
+
+
+@mcp.tool(
+    name="fashion_resolve_customer",
+    annotations=_tool_annotations(read_only=True, idempotent=True),
+)
+def fashion_resolve_customer(email: str | None = None, customer_id: str | None = None) -> CustomerResolutionResponse:
+    """Resolve a customer by email or customer_id for operator workflows."""
+    with SessionLocal() as db:
+        match = resolve_customer(db, email=email, customer_id=customer_id)
+        query = email or customer_id or ""
+        return CustomerResolutionResponse(query=query, resolved=match.resolved)
+
+
+@mcp.tool(
+    name="fashion_store_associate_recommend",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_store_associate_recommend(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+) -> StoreAssociateRecommendationResponse:
+    """Main store-associate workflow for resolving a customer and store, then returning actionable recommendations."""
+    return _associate_recommendation_impl(
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
+        customer_id=customer_id,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+    )
+
+
+@mcp.tool(
+    name="fashion_prepare_customer_sms",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_prepare_customer_sms(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+) -> CustomerCommunicationDraftResponse:
+    """Create a persisted SMS draft from store-associate recommendations without sending it yet."""
+    with SessionLocal() as db:
+        return prepare_customer_sms(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            customer_email=customer_email,
+            customer_id=customer_id,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=top_k,
+        )
+
+
+@mcp.tool(
+    name="fashion_send_customer_sms",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_send_customer_sms(message_id: str):
+    """Send a previously prepared SMS draft through Twilio to the configured global test number."""
+    with SessionLocal() as db:
+        return send_customer_sms(db, message_id)
+
+
+@mcp.tool(
+    name="fashion_customer_message_history",
+    annotations=_tool_annotations(read_only=True, idempotent=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_customer_message_history(
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    limit: int = 20,
+) -> CustomerCommunicationHistoryResponse:
+    """Return recent SMS drafts and send results for a customer."""
+    with SessionLocal() as db:
+        return customer_message_history(db, customer_email=customer_email, customer_id=customer_id, limit=limit)
+
+
+@mcp.tool(
+    name="fashion_merch_action_recommendations",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_merch_action_recommendations(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.sell_through,
+    lookback_days: int = 90,
+    top_k: int = 9,
+) -> MerchActionRecommendationsResponse:
+    """Recommend what a merchandiser should feature, deprioritize, or promote for a store."""
+    with SessionLocal() as db:
+        return merchandising_action_recommendations(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            question=question,
+            objective=objective,
+            lookback_days=lookback_days,
+            top_k=top_k,
+        )
+
+
+@mcp.tool(
+    name="fashion_merch_diagnostics",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+)
+def fashion_merch_diagnostics(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    lookback_days: int = 90,
+) -> MerchDiagnosticsResponse:
+    """Explain why a store, category, or brand is overperforming or underperforming versus peers."""
+    with SessionLocal() as db:
+        return merchandising_diagnostics(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            question=question,
+            lookback_days=lookback_days,
+        )
+
+
+@mcp.tool(
+    name="fashion_merch_trend_summary",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+)
+def fashion_merch_trend_summary(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    lookback_days: int = 90,
+) -> MerchTrendSummaryResponse:
+    """Summarize store-category revenue trends for a merchandiser over a selected time window."""
+    with SessionLocal() as db:
+        return merchandising_trend_summary(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            question=question,
+            lookback_days=lookback_days,
+        )
+
+
+@mcp.tool(
+    name="fashion_render_associate_board",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta={**_WIDGET_TOOL_META},
+    structured_output=False,
+)
+def fashion_render_associate_board(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+) -> CallToolResult:
+    """Render the associate recommendation board inside ChatGPT using the high-level recommendation workflow."""
+    response = _associate_recommendation_impl(
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
+        customer_id=customer_id,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+    )
+    payload = response.model_dump(mode="json")
+    payload["draftArgs"] = {
+        "store_id": response.store.id,
+        "customer_id": response.customer.id,
+        "occasion": occasion,
+        "budget_min": budget_min,
+        "budget_max": budget_max,
+        "top_k": top_k,
+    }
+    token = register_widget_state("associate", payload)
+    return _calltool_result(
+        text=f"Opened the associate board for {response.customer.first_name} {response.customer.last_name}.",
+        payload=payload,
+        meta={"openai/outputTemplate": f"ui://widgets/associate/{token}.html"},
+    )
+
+
+@mcp.tool(
+    name="fashion_render_sms_review",
+    annotations=_tool_annotations(read_only=True, idempotent=True),
+    meta={**_WIDGET_TOOL_META},
+    structured_output=False,
+)
+def fashion_render_sms_review(message_id: str) -> CallToolResult:
+    """Render the SMS draft review widget for a persisted customer communication draft."""
+    with SessionLocal() as db:
+        draft, customer, store = get_customer_message(db, message_id)
+        payload = {
+            "message": draft.model_dump(mode="json"),
+            "store": store.model_dump(mode="json"),
+            "customer": customer.model_dump(mode="json"),
+        }
+        token = register_widget_state("sms", payload)
+        return _calltool_result(
+            text=f"Opened SMS draft review for message {message_id}.",
+            payload=payload,
+            meta={"openai/outputTemplate": f"ui://widgets/sms/{token}.html"},
+        )
+
+
+@mcp.tool(
+    name="fashion_render_merch_board",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta={**_WIDGET_TOOL_META},
+    structured_output=False,
+)
+def fashion_render_merch_board(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.sell_through,
+    lookback_days: int = 90,
+    top_k: int = 9,
+) -> CallToolResult:
+    """Render the merchandising action board inside ChatGPT from the human-facing merchandising workflow."""
+    with SessionLocal() as db:
+        response = merchandising_action_recommendations(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            question=question,
+            objective=objective,
+            lookback_days=lookback_days,
+            top_k=top_k,
+        )
+        payload = response.model_dump(mode="json")
+        token = register_widget_state("merch", payload)
+        return _calltool_result(
+            text=f"Opened the merchandising board for {response.store.name}.",
+            payload=payload,
+            meta={"openai/outputTemplate": f"ui://widgets/merch/{token}.html"},
+        )
 
 
 @mcp.tool(name="fashion_get_product_feed", annotations=_tool_annotations(read_only=True, idempotent=True))

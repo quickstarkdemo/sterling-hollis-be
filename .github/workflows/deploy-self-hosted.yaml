@@ -62,6 +62,12 @@ jobs:
           STORE_SOURCE_CACHE_PATH=${{ secrets.STORE_SOURCE_CACHE_PATH || '/app/data/store_source_snapshot.json' }}
           MCP_ALLOWED_HOSTS=${{ secrets.MCP_ALLOWED_HOSTS || '127.0.0.1:*,localhost:*,[::1]:*' }}
           MCP_ALLOWED_ORIGINS=${{ secrets.MCP_ALLOWED_ORIGINS || 'http://127.0.0.1:*,http://localhost:*,http://[::1]:*' }}
+          PUBLIC_BASE_URL=${{ secrets.PUBLIC_BASE_URL || 'http://localhost:8000' }}
+          TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_API_KEY_SID=${{ secrets.TWILIO_API_KEY_SID }}
+          TWILIO_API_KEY_SECRET=${{ secrets.TWILIO_API_KEY_SECRET }}
+          TWILIO_SENDER_NUMBER=${{ secrets.TWILIO_SENDER_NUMBER }}
+          TWILIO_TEST_TO_NUMBER=${{ secrets.TWILIO_TEST_TO_NUMBER }}
           UVICORN_RELOAD=false
           EOF
 

@@ -30,7 +30,9 @@ class SyntheticGenerateResponse(BaseModel):
 
 class SyntheticLoadRequest(BaseModel):
     run_id: str
-    entities: list[str] = Field(default_factory=lambda: ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics"])
+    entities: list[str] = Field(
+        default_factory=lambda: ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics"]
+    )
 
 
 class SyntheticLoadResponse(BaseModel):
@@ -138,3 +140,134 @@ class MerchandisingRecommendationResponse(BaseModel):
     store_id: str
     objective: Objective
     recommendations: list[MerchandisingRecommendationRow]
+
+
+class ResolvedStore(BaseModel):
+    id: str
+    name: str
+    city: str
+    state: str
+    profile_type: str
+    match_reason: str
+    match_score: float
+
+
+class StoreResolutionResponse(BaseModel):
+    query: str
+    resolved: ResolvedStore
+    alternatives: list[ResolvedStore] = Field(default_factory=list)
+
+
+class ResolvedCustomer(BaseModel):
+    id: str
+    email: str
+    first_name: str
+    last_name: str
+    home_store_id: str
+    home_store_name: str
+    loyalty_tier: str
+    match_reason: str
+
+
+class CustomerResolutionResponse(BaseModel):
+    query: str
+    resolved: ResolvedCustomer
+
+
+class StoreAssociateRecommendationResponse(BaseModel):
+    store: ResolvedStore
+    customer: ResolvedCustomer
+    recommendation: CustomerRecommendationResponse
+
+
+class CustomerCommunicationStatus(str, Enum):
+    draft = "draft"
+    sent = "sent"
+    failed = "failed"
+
+
+class CustomerCommunicationRecord(BaseModel):
+    id: str
+    customer_id: str
+    customer_email: str
+    store_id: str
+    channel: str
+    status: CustomerCommunicationStatus
+    destination_e164: str
+    body_text: str
+    product_ids: list[str]
+    twilio_message_sid: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    sent_at: datetime | None = None
+
+
+class CustomerCommunicationDraftResponse(BaseModel):
+    message: CustomerCommunicationRecord
+    store: ResolvedStore
+    customer: ResolvedCustomer
+    recommendation: CustomerRecommendationResponse
+
+
+class CustomerCommunicationHistoryResponse(BaseModel):
+    customer: ResolvedCustomer
+    messages: list[CustomerCommunicationRecord]
+
+
+class MerchAction(str, Enum):
+    feature = "feature"
+    deprioritize = "deprioritize"
+    promote = "promote"
+
+
+class MerchActionRecommendationItem(BaseModel):
+    action: MerchAction
+    product_id: str
+    title: str
+    brand: str
+    category: str
+    metric_value: float
+    peer_delta: float
+    rationale: str
+
+
+class MerchActionRecommendationsResponse(BaseModel):
+    store: ResolvedStore
+    objective: Objective
+    lookback_days: int
+    peer_store_ids: list[str]
+    parsed_intent: str
+    recommendations: list[MerchActionRecommendationItem]
+
+
+class MerchDiagnosticInsight(BaseModel):
+    dimension: str
+    subject: str
+    status: str
+    current_value: float
+    peer_value: float
+    delta: float
+    rationale: str
+
+
+class MerchDiagnosticsResponse(BaseModel):
+    store: ResolvedStore
+    lookback_days: int
+    peer_store_ids: list[str]
+    summary: str
+    insights: list[MerchDiagnosticInsight]
+
+
+class MerchTrendHighlight(BaseModel):
+    subject: str
+    current_value: float
+    prior_value: float
+    pct_change: float
+    rationale: str
+
+
+class MerchTrendSummaryResponse(BaseModel):
+    store: ResolvedStore
+    lookback_days: int
+    summary: str
+    highlights: list[MerchTrendHighlight]
