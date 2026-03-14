@@ -3,6 +3,8 @@ const meta = window.__FASHION_WIDGET__ || {};
 const state = { kind: meta.kind || 'unknown', payload: {} };
 const HYDRATION_ATTEMPTS = 12;
 const HYDRATION_DELAY_MS = 250;
+let rpcId = 1;
+const pendingRpc = new Map();
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -44,6 +46,21 @@ function payload(result) {
 }
 
 async function callTool(name, args = {}) {
+  if (window.parent && window.parent !== window) {
+    try {
+      return await rpcRequest('tools/call', {
+        name,
+        arguments: args,
+      });
+    } catch (error) {
+      if (!(window.openai && window.openai.callTool)) {
+        return {
+          __toolError: error instanceof Error ? error.message : 'Tool invocation failed.',
+        };
+      }
+    }
+  }
+
   if (!window.openai || !window.openai.callTool) {
     return { __toolError: 'Tool bridge is unavailable in this environment.' };
   }
@@ -58,6 +75,27 @@ async function callTool(name, args = {}) {
 
 function toolError(result) {
   return result && typeof result === 'object' ? result.__toolError || null : null;
+}
+
+function rpcRequest(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = `rpc_${rpcId++}`;
+    const timer = window.setTimeout(() => {
+      pendingRpc.delete(id);
+      reject(new Error(`Timed out waiting for ${method}.`));
+    }, 15000);
+
+    pendingRpc.set(id, { resolve, reject, timer });
+    window.parent.postMessage(
+      {
+        jsonrpc: '2.0',
+        id,
+        method,
+        params,
+      },
+      '*',
+    );
+  });
 }
 
 function isPlainObject(value) {
@@ -141,6 +179,17 @@ function attachHostListeners() {
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || typeof data !== 'object') return;
+    if (data.jsonrpc === '2.0' && data.id && pendingRpc.has(data.id)) {
+      const pending = pendingRpc.get(data.id);
+      pendingRpc.delete(data.id);
+      window.clearTimeout(pending.timer);
+      if (data.error) {
+        pending.reject(new Error(data.error.message || 'RPC request failed.'));
+      } else {
+        pending.resolve(data.result);
+      }
+      return;
+    }
     const method = data.method || data.type;
     if (method === 'ui/notifications/tool-result' || method === 'tool_result') {
       const params = data.params || data.detail || data.result || data;
