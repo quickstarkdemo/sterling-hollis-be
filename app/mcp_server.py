@@ -154,6 +154,36 @@ def _calltool_result(text: str, payload: dict | None = None, meta: dict | None =
     )
 
 
+def _resolve_associate_context(
+    session,
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+):
+    resolved_customer = None
+    if customer_email or customer_id or customer_phone_e164 or phone_last4:
+        resolved_customer = resolve_customer(
+            session,
+            email=customer_email,
+            customer_id=customer_id,
+            phone_e164=customer_phone_e164,
+            phone_last4=phone_last4,
+        ).resolved
+
+    if store_id or store_query:
+        resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
+    elif resolved_customer is not None:
+        resolved_store = resolve_store(session, store_id=resolved_customer.home_store_id).resolved
+    else:
+        raise ValueError("Provide a store or a uniquely resolved customer.")
+
+    return resolved_store, resolved_customer
+
+
 def _resolve_retrieval_mode(
     retrieval_mode: RetrievalMode,
     customer_resolved: bool,
@@ -182,14 +212,17 @@ def _associate_recommendation_impl(
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> StoreAssociateRecommendationResponse:
     with SessionLocal() as db:
-        resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
-        resolved_customer = resolve_customer(
+        resolved_store, resolved_customer = _resolve_associate_context(
             db,
-            email=customer_email,
+            store_query=store_query,
+            store_id=store_id,
+            customer_email=customer_email,
             customer_id=customer_id,
-            phone_e164=customer_phone_e164,
+            customer_phone_e164=customer_phone_e164,
             phone_last4=phone_last4,
-        ).resolved
+        )
+        if resolved_customer is None:
+            raise ValueError("Customer was not found. Provide a valid email, customer_id, phone_e164, or phone_last4.")
         effective_retrieval_mode = _resolve_retrieval_mode(
             retrieval_mode,
             customer_resolved=True,
@@ -233,18 +266,22 @@ def _associate_workspace_bootstrap_impl(
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> AssociateWorkspaceBootstrapResponse:
     with SessionLocal() as db:
-        resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+        resolved_store, preselected_customer = _resolve_associate_context(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            customer_email=customer_email,
+            customer_id=customer_id,
+            customer_phone_e164=customer_phone_e164,
+            phone_last4=phone_last4,
+        )
         selected_customer = None
         recommendation = None
         selected_product_ids: list[str] = []
-        if customer_email or customer_id or customer_phone_e164 or phone_last4:
+        if preselected_customer is not None:
             recommendation = _associate_recommendation_impl(
-                store_query=store_query,
-                store_id=store_id,
-                customer_email=customer_email,
-                customer_id=customer_id,
-                customer_phone_e164=customer_phone_e164,
-                phone_last4=phone_last4,
+                store_id=resolved_store.id,
+                customer_id=preselected_customer.id,
                 occasion=occasion,
                 budget_min=budget_min,
                 budget_max=budget_max,
@@ -1097,11 +1134,10 @@ def fashion_render_associate_workspace(
     }
     opened_for = bootstrap.selected_customer.full_name if bootstrap.selected_customer else bootstrap.store.name
     token = register_widget_state("associate_workspace", payload)
-    widget_payload = {**payload, "widgetSessionId": token}
     template_uri = f"{_ASSOCIATE_WIDGET_TEMPLATE_BASE}/{token}.html"
     return _calltool_result(
         text=f"Opened the associate workspace for {opened_for}.",
-        payload=widget_payload,
+        payload={"kind": "associate_workspace", "widgetSessionId": token},
         meta={"openai/outputTemplate": template_uri, "openai/widgetSessionId": token},
     )
 
@@ -1126,11 +1162,10 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
         "history": [row.model_dump(mode="json") for row in bootstrap.history],
     }
     token = register_widget_state("sms", payload)
-    widget_payload = {**payload, "widgetSessionId": token}
     template_uri = f"{_SMS_WIDGET_TEMPLATE_BASE}/{token}.html"
     return _calltool_result(
         text=f"Opened SMS draft review for message {message_id}.",
-        payload=widget_payload,
+        payload={"kind": "sms", "widgetSessionId": token},
         meta={"openai/outputTemplate": template_uri, "openai/widgetSessionId": token},
     )
 
@@ -1181,11 +1216,10 @@ def fashion_render_merch_board(
         "lastTool": bootstrap.last_tool,
     }
     token = register_widget_state("merch", payload)
-    widget_payload = {**payload, "widgetSessionId": token}
     template_uri = f"{_MERCH_WIDGET_TEMPLATE_BASE}/{token}.html"
     return _calltool_result(
         text=f"Opened the merchandising board for {bootstrap.store.name}.",
-        payload=widget_payload,
+        payload={"kind": "merch", "widgetSessionId": token},
         meta={"openai/outputTemplate": template_uri, "openai/widgetSessionId": token},
     )
 

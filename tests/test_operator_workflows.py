@@ -412,7 +412,6 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
         result = mcp_server.fashion_render_associate_workspace(
-            store_query="Dallas",
             customer_email="avery.parker.1@example-fashion.test",
             occasion="wedding",
             budget_max=900,
@@ -426,7 +425,9 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
 
         assert template_uri == f"ui://widgets/associate/workspace/{token}.html"
         assert persisted["kind"] == "associate_workspace"
+        assert result.structuredContent == {"kind": "associate_workspace", "widgetSessionId": token}
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
+        assert persisted["payload"]["store"]["id"] == "1001"
         assert persisted["payload"]["widgetSessionId"] == token
         assert persisted["payload"]["selectedProductIds"]
         assert "<style>" in html
@@ -455,8 +456,10 @@ def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
         sms_token = sms_result.meta["openai/widgetSessionId"]
         merch_token = merch_result.meta["openai/widgetSessionId"]
         assert sms_result.meta["openai/outputTemplate"] == f"ui://widgets/sms/review/{sms_token}.html"
+        assert sms_result.structuredContent == {"kind": "sms", "widgetSessionId": sms_token}
         assert sms_token
         assert merch_result.meta["openai/outputTemplate"] == f"ui://widgets/merch/board/{merch_token}.html"
+        assert merch_result.structuredContent == {"kind": "merch", "widgetSessionId": merch_token}
         assert merch_token
 
 
@@ -465,7 +468,6 @@ def test_bootstrap_tools_return_full_payloads(monkeypatch):
         _seed_data(session)
 
         associate = mcp_server.fashion_associate_workspace_bootstrap(
-            store_query="Dallas",
             customer_phone_e164="+12145551234",
             occasion="wedding",
             budget_max=900,
@@ -516,6 +518,22 @@ def test_fast_mode_skips_embedding(monkeypatch):
         assert response.recommendation.strategy == "sql_rules_fast_path"
         assert response.recommendation.recommendations
         assert response.recommendation.recommendations[0].image_url
+
+
+def test_prepare_customer_sms_defaults_to_customer_home_store(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+
+        draft = prepare_customer_sms(
+            session,
+            customer_phone_e164="+12145551234",
+            occasion="wedding",
+            budget_max=900,
+            top_k=3,
+        )
+
+        assert draft.store.id == "1001"
+        assert draft.customer.id == "cust_000001"
 
 
 def test_lookup_customer_returns_candidates_for_ambiguous_last4(monkeypatch):

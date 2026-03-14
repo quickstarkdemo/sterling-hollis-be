@@ -119,8 +119,6 @@ def prepare_customer_sms(
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
     selected_product_ids: list[str] | None = None,
 ) -> CustomerCommunicationDraftResponse:
-    settings = get_settings()
-    resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
     resolved_customer = resolve_customer(
         session,
         email=customer_email,
@@ -128,6 +126,11 @@ def prepare_customer_sms(
         phone_e164=customer_phone_e164,
         phone_last4=phone_last4,
     ).resolved
+    settings = get_settings()
+    if store_id or store_query:
+        resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
+    else:
+        resolved_store = resolve_store(session, store_id=resolved_customer.home_store_id).resolved
 
     req = CustomerRecommendationRequest(
         store_id=resolved_store.id,
