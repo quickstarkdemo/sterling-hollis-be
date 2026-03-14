@@ -18,7 +18,7 @@ class TwilioService:
             ]
         )
 
-    def send_sms(self, body: str) -> dict:
+    def send_sms(self, body: str, to_number: str | None = None) -> dict:
         if not self.enabled:
             raise ValueError(
                 "Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, "
@@ -26,8 +26,9 @@ class TwilioService:
             )
 
         url = f"https://api.twilio.com/2010-04-01/Accounts/{self.settings.twilio_account_sid}/Messages.json"
+        destination = to_number or self.settings.twilio_test_to_number
         payload = {
-            "To": self.settings.twilio_test_to_number,
+            "To": destination,
             "From": self.settings.twilio_sender_number,
             "Body": body,
         }

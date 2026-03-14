@@ -7,15 +7,18 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import CustomerCommunication
+from app.models import CustomerCommunication, Product, TwilioSmokeTest
 from app.schemas import (
     CustomerCommunicationDraftResponse,
     CustomerCommunicationHistoryResponse,
     CustomerCommunicationRecord,
     CustomerCommunicationStatus,
+    CustomerCommunicationUpdateResponse,
     CustomerRecommendationResponse,
     ResolvedCustomer,
     ResolvedStore,
+    TwilioSmokeTestRecord,
+    TwilioSmokeTestResponse,
 )
 from app.services.lookup import resolve_customer, resolve_store
 from app.services.recommendations import customer_recommendations
@@ -23,11 +26,12 @@ from app.services.twilio_service import TwilioService
 from app.schemas import CustomerRecommendationRequest
 
 
-def _record_from_model(record: CustomerCommunication, customer_email: str) -> CustomerCommunicationRecord:
+def _record_from_model(record: CustomerCommunication, customer: ResolvedCustomer) -> CustomerCommunicationRecord:
     return CustomerCommunicationRecord(
         id=record.id,
         customer_id=record.customer_id,
-        customer_email=customer_email,
+        customer_email=customer.email,
+        customer_phone_e164=customer.phone_e164,
         store_id=record.store_id,
         channel=record.channel,
         status=CustomerCommunicationStatus(record.status),
@@ -41,13 +45,34 @@ def _record_from_model(record: CustomerCommunication, customer_email: str) -> Cu
     )
 
 
-def build_sms_body(store: ResolvedStore, customer: ResolvedCustomer, recommendation: CustomerRecommendationResponse) -> str:
+def _product_summary_lines(session: Session, product_ids: list[str]) -> list[str]:
+    if not product_ids:
+        return []
+    products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    by_id = {product.id: product for product in products}
+    lines: list[str] = []
+    for product_id in product_ids[:3]:
+        product = by_id.get(product_id)
+        if not product:
+            continue
+        lines.append(f"- {product.title} (${float(product.price):.2f})")
+        lines.append(f"  {product.link}")
+    return lines
+
+
+def build_sms_body(
+    session: Session,
+    store: ResolvedStore,
+    customer: ResolvedCustomer,
+    recommendation: CustomerRecommendationResponse,
+    selected_product_ids: list[str] | None = None,
+) -> str:
+    product_ids = selected_product_ids or [product.product_id for product in recommendation.recommendations[:3]]
     lines = [
         f"Hi {customer.first_name}, here are a few picks from {store.name}.",
+        *(_product_summary_lines(session, product_ids) or ["- I have a few curated options ready for review."]),
+        "Reply if you'd like me to hold or pull together options.",
     ]
-    for product in recommendation.recommendations[:3]:
-        lines.append(f"- {product.title} (${product.price:.2f})")
-    lines.append("Reply if you'd like me to hold or pull together options.")
     return "\n".join(lines)
 
 
@@ -57,6 +82,8 @@ def prepare_customer_sms(
     store_id: str | None = None,
     customer_email: str | None = None,
     customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
     occasion: str | None = None,
     budget_min: float | None = None,
     budget_max: float | None = None,
@@ -64,7 +91,13 @@ def prepare_customer_sms(
 ) -> CustomerCommunicationDraftResponse:
     settings = get_settings()
     resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
-    resolved_customer = resolve_customer(session, email=customer_email, customer_id=customer_id).resolved
+    resolved_customer = resolve_customer(
+        session,
+        email=customer_email,
+        customer_id=customer_id,
+        phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+    ).resolved
 
     req = CustomerRecommendationRequest(
         store_id=resolved_store.id,
@@ -81,8 +114,9 @@ def prepare_customer_sms(
         recommendations=rows,
     )
 
+    selected_product_ids = [product.product_id for product in recommendation.recommendations[:3]]
     destination = settings.twilio_test_to_number or ""
-    body = build_sms_body(resolved_store, resolved_customer, recommendation)
+    body = build_sms_body(session, resolved_store, resolved_customer, recommendation, selected_product_ids=selected_product_ids)
     record = CustomerCommunication(
         id=f"msg_{uuid.uuid4().hex[:12]}",
         customer_id=resolved_customer.id,
@@ -91,7 +125,7 @@ def prepare_customer_sms(
         status=CustomerCommunicationStatus.draft.value,
         destination_e164=destination,
         body_text=body,
-        product_ids=[product.product_id for product in recommendation.recommendations],
+        product_ids=selected_product_ids,
         recommendation_context={
             "occasion": occasion,
             "budget_min": budget_min,
@@ -104,11 +138,34 @@ def prepare_customer_sms(
     session.commit()
 
     return CustomerCommunicationDraftResponse(
-        message=_record_from_model(record, resolved_customer.email),
+        message=_record_from_model(record, resolved_customer),
         store=resolved_store,
         customer=resolved_customer,
         recommendation=recommendation,
     )
+
+
+def update_customer_sms_draft(
+    session: Session,
+    message_id: str,
+    body_text: str,
+    selected_product_ids: list[str] | None = None,
+) -> CustomerCommunicationUpdateResponse:
+    record = session.get(CustomerCommunication, message_id)
+    if not record:
+        raise ValueError(f"Message {message_id} was not found.")
+    if record.status != CustomerCommunicationStatus.draft.value:
+        raise ValueError("Only draft messages can be edited.")
+
+    customer = resolve_customer(session, customer_id=record.customer_id).resolved
+    store = resolve_store(session, store_id=record.store_id).resolved
+
+    record.body_text = body_text.strip()
+    if selected_product_ids is not None:
+        record.product_ids = selected_product_ids
+    session.add(record)
+    session.commit()
+    return CustomerCommunicationUpdateResponse(message=_record_from_model(record, customer), store=store, customer=customer)
 
 
 def send_customer_sms(session: Session, message_id: str) -> CustomerCommunicationRecord:
@@ -119,7 +176,7 @@ def send_customer_sms(session: Session, message_id: str) -> CustomerCommunicatio
     customer = resolve_customer(session, customer_id=record.customer_id).resolved
     twilio = TwilioService()
     try:
-        payload = twilio.send_sms(record.body_text)
+        payload = twilio.send_sms(record.body_text, to_number=record.destination_e164)
         record.status = CustomerCommunicationStatus.sent.value
         record.twilio_message_sid = payload.get("sid")
         record.error_message = None
@@ -129,30 +186,37 @@ def send_customer_sms(session: Session, message_id: str) -> CustomerCommunicatio
         record.error_message = str(exc)[:2000]
         session.add(record)
         session.commit()
-        return _record_from_model(record, customer.email)
+        return _record_from_model(record, customer)
 
     session.add(record)
     session.commit()
-    return _record_from_model(record, customer.email)
+    return _record_from_model(record, customer)
 
 
 def customer_message_history(
     session: Session,
     customer_email: str | None = None,
     customer_id: str | None = None,
+    phone_e164: str | None = None,
+    phone_last4: str | None = None,
     limit: int = 20,
+    status: CustomerCommunicationStatus | None = None,
 ) -> CustomerCommunicationHistoryResponse:
-    resolved_customer = resolve_customer(session, email=customer_email, customer_id=customer_id).resolved
-    query = (
-        select(CustomerCommunication)
-        .where(CustomerCommunication.customer_id == resolved_customer.id)
-        .order_by(desc(CustomerCommunication.created_at))
-        .limit(limit)
-    )
+    resolved_customer = resolve_customer(
+        session,
+        email=customer_email,
+        customer_id=customer_id,
+        phone_e164=phone_e164,
+        phone_last4=phone_last4,
+    ).resolved
+    query = select(CustomerCommunication).where(CustomerCommunication.customer_id == resolved_customer.id)
+    if status is not None:
+        query = query.where(CustomerCommunication.status == status.value)
+    query = query.order_by(desc(CustomerCommunication.created_at)).limit(limit)
     records = session.scalars(query).all()
     return CustomerCommunicationHistoryResponse(
         customer=resolved_customer,
-        messages=[_record_from_model(record, resolved_customer.email) for record in records],
+        messages=[_record_from_model(record, resolved_customer) for record in records],
     )
 
 
@@ -163,4 +227,43 @@ def get_customer_message(session: Session, message_id: str) -> tuple[CustomerCom
 
     customer = resolve_customer(session, customer_id=record.customer_id).resolved
     store = resolve_store(session, store_id=record.store_id).resolved
-    return _record_from_model(record, customer.email), customer, store
+    return _record_from_model(record, customer), customer, store
+
+
+def twilio_smoke_test(session: Session, body_text: str | None = None) -> TwilioSmokeTestResponse:
+    settings = get_settings()
+    body = (body_text or "Product DB Twilio smoke test from operator workflow.").strip()
+    record = TwilioSmokeTest(
+        id=f"twilio_{uuid.uuid4().hex[:12]}",
+        destination_e164=settings.twilio_test_to_number or "",
+        body_text=body,
+        status=CustomerCommunicationStatus.draft.value,
+    )
+    session.add(record)
+    session.commit()
+
+    twilio = TwilioService()
+    try:
+        payload = twilio.send_sms(body, to_number=record.destination_e164)
+        record.status = CustomerCommunicationStatus.sent.value
+        record.twilio_message_sid = payload.get("sid")
+        record.sent_at = datetime.now(timezone.utc)
+        record.error_message = None
+    except Exception as exc:
+        record.status = CustomerCommunicationStatus.failed.value
+        record.error_message = str(exc)[:2000]
+
+    session.add(record)
+    session.commit()
+    return TwilioSmokeTestResponse(
+        result=TwilioSmokeTestRecord(
+            id=record.id,
+            destination_e164=record.destination_e164,
+            body_text=record.body_text,
+            status=CustomerCommunicationStatus(record.status),
+            twilio_message_sid=record.twilio_message_sid,
+            error_message=record.error_message,
+            created_at=record.created_at,
+            sent_at=record.sent_at,
+        )
+    )

@@ -17,8 +17,11 @@ Synthetic fashion data platform with:
 - Product embedding/index endpoint (OpenAI + Pinecone when configured, deterministic fallback otherwise)
 - Customer and merchandising recommendation endpoints
 - Human-first MCP tools for store resolution, customer resolution, associate recommendations, and merch workflows
+- Customer search by name, email, and synthetic phone number
 - Draft-then-send Twilio SMS support using a global test destination number
-- Apps SDK render tools for associate board, SMS review, and merch action board
+- Editable SMS drafts, history, and Twilio smoke-test support
+- Postgres-backed widget session persistence for Apps SDK render flows
+- Apps SDK render tools for associate workspace, SMS review, and merch board
 - OpenAI-commerce-style product feed endpoint
 
 ## Project structure
@@ -222,6 +225,8 @@ Key tables:
 - `store_daily_metrics`
 - `synthetic_validation_failures`
 - `customer_communications`
+- `ui_sessions`
+- `twilio_smoke_tests`
 
 If you want SQL instead of running Alembic directly:
 
@@ -279,16 +284,20 @@ Low-level/admin tools:
 Human-first operator tools:
 - `fashion_resolve_store`
 - `fashion_resolve_customer`
+- `fashion_find_customers`
 - `fashion_store_associate_recommend`
 - `fashion_prepare_customer_sms`
+- `fashion_update_customer_sms_draft`
 - `fashion_send_customer_sms`
 - `fashion_customer_message_history`
+- `fashion_twilio_smoke_test`
 - `fashion_merch_action_recommendations`
 - `fashion_merch_diagnostics`
 - `fashion_merch_trend_summary`
 
 Apps SDK render tools:
-- `fashion_render_associate_board`
+- `fashion_render_associate_workspace`
+- `fashion_render_associate_board` (backward-compatible alias)
 - `fashion_render_sms_review`
 - `fashion_render_merch_board`
 
@@ -348,19 +357,24 @@ Examples:
 Human-first examples:
 
 - `fashion_resolve_store(store_query="Dallas downtown")`
+- `fashion_find_customers(query="avery 1234", limit=10)`
 - `fashion_resolve_customer(email="avery.parker.1@example-fashion.test")`
+- `fashion_resolve_customer(phone_last4="1234")`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
 - `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
+- `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
 - `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
+- `fashion_customer_message_history(customer_email="avery.parker.1@example-fashion.test", status="sent", limit=10)`
+- `fashion_twilio_smoke_test(body_text="Smoke test from product-db")`
 - `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
-- `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", lookback_days=90)`
-- `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.")`
+- `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", category="shoes", compare_mode="peer_and_prior_period", lookback_days=90)`
+- `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.", category="handbags", compare_mode="peer_and_prior_period")`
 
 Render-tool examples for ChatGPT Apps:
 
-- `fashion_render_associate_board(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
+- `fashion_render_associate_workspace(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
 - `fashion_render_sms_review(message_id="<MESSAGE_ID>")`
-- `fashion_render_merch_board(store_query="Dallas", question="What should this store feature, deprioritize, or promote this week?", top_k=9)`
+- `fashion_render_merch_board(store_query="Dallas", question="What should this store feature, deprioritize, or promote this week?", category="handbags", price_band="500_1000", compare_mode="peer_and_prior_period", top_k=9)`
 
 ### Manual local MCP testing with Inspector
 
@@ -421,9 +435,12 @@ The customer-communication flow is intentionally conservative:
 
 - recommendation tools never send SMS automatically
 - `fashion_prepare_customer_sms` creates a persisted draft in `customer_communications`
+- `fashion_update_customer_sms_draft` lets an associate edit message copy and selected products before send
 - `fashion_send_customer_sms` is the only send action
+- `fashion_twilio_smoke_test` validates the live Twilio path with no customer context
 - all v1 outbound messages go to `TWILIO_TEST_TO_NUMBER`
 - the outbound sender is `TWILIO_SENDER_NUMBER`
+- synthetic customer `phone_e164` values are used for search and UI realism only; they are not the live delivery target
 
 Current message body content is text-only:
 - associate greeting
@@ -436,11 +453,11 @@ The synthetic dataset includes `image_link`, but those URLs are placeholders and
 
 The repo now includes Apps SDK-ready render tools layered on top of the human-first MCP tools:
 
-- associate recommendation board
+- associate workspace
 - SMS draft review/send board
-- merchandising action board
+- merchandising board with slice filters
 
-These widgets are mounted as MCP resources and are intended for ChatGPT app usage. They rely on `PUBLIC_BASE_URL` for widget CSP and remote access.
+These widgets are mounted as MCP resources and are intended for ChatGPT app usage. Widget state is persisted in Postgres through `ui_sessions`, so a rendered workspace survives process restarts until its TTL expires. They rely on `PUBLIC_BASE_URL` for widget CSP and remote access.
 
 ## Testing
 

@@ -89,6 +89,25 @@ class Objective(str, Enum):
     revenue = "revenue"
 
 
+class CompareMode(str, Enum):
+    peer = "peer"
+    prior_period = "prior_period"
+    peer_and_prior_period = "peer_and_prior_period"
+
+
+class PeerMode(str, Enum):
+    profile_type = "profile_type"
+    state_and_profile = "state_and_profile"
+    all_profile_matches = "all_profile_matches"
+
+
+class PriceBand(str, Enum):
+    under_250 = "under_250"
+    band_250_500 = "250_500"
+    band_500_1000 = "500_1000"
+    band_1000_plus = "1000_plus"
+
+
 class CustomerRecommendationRequest(BaseModel):
     store_id: str
     customer_id: str | None = None
@@ -161,12 +180,24 @@ class StoreResolutionResponse(BaseModel):
 class ResolvedCustomer(BaseModel):
     id: str
     email: str
+    phone_e164: str
+    full_name: str
     first_name: str
     last_name: str
     home_store_id: str
     home_store_name: str
     loyalty_tier: str
     match_reason: str
+
+
+class CustomerSearchResult(ResolvedCustomer):
+    masked_phone: str
+    match_score: float
+
+
+class CustomerSearchResponse(BaseModel):
+    query: str
+    results: list[CustomerSearchResult]
 
 
 class CustomerResolutionResponse(BaseModel):
@@ -190,6 +221,7 @@ class CustomerCommunicationRecord(BaseModel):
     id: str
     customer_id: str
     customer_email: str
+    customer_phone_e164: str
     store_id: str
     channel: str
     status: CustomerCommunicationStatus
@@ -209,9 +241,30 @@ class CustomerCommunicationDraftResponse(BaseModel):
     recommendation: CustomerRecommendationResponse
 
 
+class CustomerCommunicationUpdateResponse(BaseModel):
+    message: CustomerCommunicationRecord
+    store: ResolvedStore
+    customer: ResolvedCustomer
+
+
 class CustomerCommunicationHistoryResponse(BaseModel):
     customer: ResolvedCustomer
     messages: list[CustomerCommunicationRecord]
+
+
+class TwilioSmokeTestRecord(BaseModel):
+    id: str
+    destination_e164: str
+    body_text: str
+    status: CustomerCommunicationStatus
+    twilio_message_sid: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    sent_at: datetime | None = None
+
+
+class TwilioSmokeTestResponse(BaseModel):
+    result: TwilioSmokeTestRecord
 
 
 class MerchAction(str, Enum):
@@ -226,15 +279,24 @@ class MerchActionRecommendationItem(BaseModel):
     title: str
     brand: str
     category: str
+    price_band: PriceBand | None = None
+    occasion: str | None = None
     metric_value: float
     peer_delta: float
+    prior_period_delta: float | None = None
     rationale: str
 
 
 class MerchActionRecommendationsResponse(BaseModel):
     store: ResolvedStore
     objective: Objective
+    compare_mode: CompareMode
+    peer_mode: PeerMode
     lookback_days: int
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
     peer_store_ids: list[str]
     parsed_intent: str
     recommendations: list[MerchActionRecommendationItem]
@@ -245,14 +307,21 @@ class MerchDiagnosticInsight(BaseModel):
     subject: str
     status: str
     current_value: float
-    peer_value: float
+    peer_value: float | None = None
+    prior_value: float | None = None
     delta: float
     rationale: str
 
 
 class MerchDiagnosticsResponse(BaseModel):
     store: ResolvedStore
+    compare_mode: CompareMode
+    peer_mode: PeerMode
     lookback_days: int
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
     peer_store_ids: list[str]
     summary: str
     insights: list[MerchDiagnosticInsight]
@@ -261,13 +330,20 @@ class MerchDiagnosticsResponse(BaseModel):
 class MerchTrendHighlight(BaseModel):
     subject: str
     current_value: float
-    prior_value: float
+    peer_value: float | None = None
+    prior_value: float | None = None
     pct_change: float
     rationale: str
 
 
 class MerchTrendSummaryResponse(BaseModel):
     store: ResolvedStore
+    compare_mode: CompareMode
+    peer_mode: PeerMode
     lookback_days: int
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
     summary: str
     highlights: list[MerchTrendHighlight]

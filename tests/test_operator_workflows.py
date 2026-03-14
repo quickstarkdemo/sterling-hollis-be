@@ -10,30 +10,49 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import Customer, Order, OrderItem, Product, Store, SyntheticRun
-from app.schemas import Objective
-from app.services.communications import customer_message_history, prepare_customer_sms, send_customer_sms
-from app.services.lookup import resolve_customer, resolve_store
+from app.schemas import CompareMode, Objective, PeerMode, PriceBand
+from app.services.apps_ui import get_widget_state
+from app.services.communications import (
+    customer_message_history,
+    prepare_customer_sms,
+    send_customer_sms,
+    twilio_smoke_test,
+    update_customer_sms_draft,
+)
+from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.merchandising import merchandising_action_recommendations, merchandising_diagnostics, merchandising_trend_summary
 
 
+class _DummyPineconeService:
+    enabled = False
+
+
 @contextmanager
-def _patched_sessionlocal(monkeypatch, module):
+def _patched_runtime(monkeypatch):
+    import app.mcp_server as mcp_server
+    import app.services.apps_ui as apps_ui
+    import app.services.recommendations as recommendations
+
     engine = create_engine(
         "sqlite+pysqlite:///:memory:", future=True, connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     Base.metadata.create_all(engine)
+
+    monkeypatch.setattr(mcp_server, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(apps_ui, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(recommendations, "PineconeService", lambda: _DummyPineconeService())
+
     session = TestingSessionLocal()
-    monkeypatch.setattr(module, "SessionLocal", TestingSessionLocal)
     try:
-        yield session
+        yield session, mcp_server
     finally:
         session.close()
         engine.dispose()
 
 
 def _seed_data(session):
-    now = datetime(2026, 3, 13, tzinfo=timezone.utc)
+    now = datetime(2026, 3, 14, tzinfo=timezone.utc)
     session.add(SyntheticRun(id="run_test", seed=42, status="indexed", started_at=now, config={}))
     stores = [
         Store(
@@ -78,6 +97,7 @@ def _seed_data(session):
         first_name="Avery",
         last_name="Parker",
         email="avery.parker.1@example-fashion.test",
+        phone_e164="+12145551234",
         city="Dallas",
         state="TX",
         joined_at=now - timedelta(days=365),
@@ -89,7 +109,26 @@ def _seed_data(session):
         channel_preference="hybrid",
         pii_token="token-1",
     )
-    session.add(customer)
+    customer_two = Customer(
+        id="cust_000002",
+        seed_run_id="run_test",
+        home_store_id="1002",
+        first_name="Avery",
+        last_name="Coleman",
+        email="avery.coleman.2@example-fashion.test",
+        phone_e164="+13035557654",
+        city="Austin",
+        state="TX",
+        joined_at=now - timedelta(days=210),
+        loyalty_tier="silver",
+        price_sensitivity=Decimal("0.5100"),
+        occasion_affinity={"wedding": 0.5},
+        style_vector={"womens_apparel": 0.6, "handbags": 0.7},
+        size_preferences={"top": "S", "bottom": "6", "shoe": "7"},
+        channel_preference="in_store",
+        pii_token="token-2",
+    )
+    session.add_all([customer, customer_two])
 
     products = [
         Product(
@@ -238,7 +277,7 @@ def _seed_data(session):
     peer_order = Order(
         id="order_3",
         seed_run_id="run_test",
-        customer_id="cust_000001",
+        customer_id="cust_000002",
         store_id="1002",
         ordered_at=now - timedelta(days=18),
         status="completed",
@@ -264,74 +303,106 @@ def _seed_data(session):
     session.commit()
 
 
-def test_lookup_resolves_store_and_customer(monkeypatch):
-    import app.mcp_server as mcp_server
-
-    with _patched_sessionlocal(monkeypatch, mcp_server) as session:
+def test_customer_lookup_supports_name_email_and_phone(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
         _seed_data(session)
-        store_match = resolve_store(session, store_query="Dallas")
-        customer_match = resolve_customer(session, email="avery.parker.1@example-fashion.test")
 
-        assert store_match.resolved.id == "1001"
-        assert customer_match.resolved.id == "cust_000001"
-        assert customer_match.resolved.home_store_id == "1001"
+        search = find_customers(session, query="Avery", limit=10)
+        assert len(search.results) == 2
+        assert search.results[0].full_name.startswith("Avery")
+
+        resolved_by_email = resolve_customer(session, email="avery.parker.1@example-fashion.test").resolved
+        resolved_by_phone = resolve_customer(session, phone_e164="+12145551234").resolved
+        resolved_by_last4 = resolve_customer(session, phone_last4="1234").resolved
+        store = resolve_store(session, store_query="Dallas").resolved
+
+        assert resolved_by_email.id == "cust_000001"
+        assert resolved_by_phone.id == "cust_000001"
+        assert resolved_by_last4.phone_e164 == "+12145551234"
+        assert store.id == "1001"
 
 
-def test_prepare_send_and_history_sms(monkeypatch):
-    import app.mcp_server as mcp_server
+def test_prepare_update_send_history_and_smoke(monkeypatch):
     import app.services.communications as communications
 
-    with _patched_sessionlocal(monkeypatch, mcp_server) as session:
+    with _patched_runtime(monkeypatch) as (session, _):
         _seed_data(session)
-        monkeypatch.setattr(communications.TwilioService, "send_sms", lambda self, body: {"sid": "SM123"})
+        monkeypatch.setattr(communications.TwilioService, "send_sms", lambda self, body, to_number=None: {"sid": "SM123"})
 
         draft = prepare_customer_sms(
             session,
             store_id="1001",
-            customer_email="avery.parker.1@example-fashion.test",
+            customer_phone_e164="+12145551234",
             occasion="wedding",
             budget_max=900,
             top_k=3,
         )
+        updated = update_customer_sms_draft(
+            session,
+            message_id=draft.message.id,
+            body_text="Curated picks just for you.",
+            selected_product_ids=["prod_1", "prod_2"],
+        )
         sent = send_customer_sms(session, draft.message.id)
-        history = customer_message_history(session, customer_id="cust_000001")
+        history = customer_message_history(session, customer_id="cust_000001", status=sent.status)
+        smoke = twilio_smoke_test(session, body_text="Smoke test")
 
-        assert draft.message.status == "draft"
-        assert "Valentino Rose Dress" in draft.message.body_text
-        assert sent.status == "sent"
+        assert "https://fashion.example/products/prod_1" in draft.message.body_text
+        assert updated.message.product_ids == ["prod_1", "prod_2"]
+        assert updated.message.body_text == "Curated picks just for you."
+        assert sent.status.value == "sent"
         assert sent.twilio_message_sid == "SM123"
-        assert history.messages[0].id == draft.message.id
+        assert len(history.messages) == 1
+        assert smoke.result.status.value == "sent"
 
 
-def test_merchandising_human_workflows(monkeypatch):
-    import app.mcp_server as mcp_server
-
-    with _patched_sessionlocal(monkeypatch, mcp_server) as session:
+def test_merchandising_supports_expanded_slices(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
         _seed_data(session)
+
         actions = merchandising_action_recommendations(
             session,
             store_query="Dallas",
-            question="What should we feature and promote this week for margin?",
+            question="What should we feature for wedding shoppers under $1000?",
             objective=Objective.margin,
+            category="womens_apparel",
+            price_band=PriceBand.band_500_1000,
+            occasion="wedding",
+            compare_mode=CompareMode.peer_and_prior_period,
+            peer_mode=PeerMode.profile_type,
             top_k=6,
         )
-        diagnostics = merchandising_diagnostics(session, store_id="1001", lookback_days=90)
-        trend = merchandising_trend_summary(session, store_id="1001", lookback_days=90)
+        diagnostics = merchandising_diagnostics(
+            session,
+            store_query="Dallas",
+            question="Why is womens apparel moving here?",
+            category="womens_apparel",
+            compare_mode=CompareMode.peer_and_prior_period,
+            peer_mode=PeerMode.profile_type,
+        )
+        trends = merchandising_trend_summary(
+            session,
+            store_query="Dallas",
+            question="Summarize recent womens apparel trends",
+            category="womens_apparel",
+            compare_mode=CompareMode.peer_and_prior_period,
+            peer_mode=PeerMode.profile_type,
+        )
 
-        returned_actions = {item.action.value for item in actions.recommendations}
-        assert actions.store.id == "1001"
-        assert actions.peer_store_ids == ["1002"]
-        assert "feature" in returned_actions or "promote" in returned_actions
+        assert actions.category == "womens_apparel"
+        assert actions.price_band == PriceBand.band_500_1000
+        assert actions.compare_mode == CompareMode.peer_and_prior_period
+        assert actions.peer_mode == PeerMode.profile_type
+        assert actions.recommendations
+        assert all(item.category == "womens_apparel" for item in actions.recommendations)
         assert diagnostics.insights
-        assert trend.highlights
+        assert trends.highlights
 
 
-def test_render_associate_board_returns_widget_metadata(monkeypatch):
-    import app.mcp_server as mcp_server
-
-    with _patched_sessionlocal(monkeypatch, mcp_server) as session:
+def test_render_associate_workspace_persists_widget_state(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
-        result = mcp_server.fashion_render_associate_board(
+        result = mcp_server.fashion_render_associate_workspace(
             store_query="Dallas",
             customer_email="avery.parker.1@example-fashion.test",
             occasion="wedding",
@@ -341,8 +412,33 @@ def test_render_associate_board_returns_widget_metadata(monkeypatch):
 
         template_uri = result.meta["openai/outputTemplate"]
         token = template_uri.split("/")[-1].replace(".html", "")
+        persisted = get_widget_state(token)
         html = mcp_server.associate_widget_resource(token)
 
         assert template_uri.startswith("ui://widgets/associate/")
-        assert result.structuredContent["customer"]["id"] == "cust_000001"
-        assert "Avery Parker" in html
+        assert persisted["kind"] == "associate_workspace"
+        assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
+        assert "Search Customers" in html
+        assert "Associate Workspace" in html
+
+
+def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
+    import app.services.communications as communications
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        monkeypatch.setattr(communications.TwilioService, "send_sms", lambda self, body, to_number=None: {"sid": "SM456"})
+        draft = prepare_customer_sms(session, store_id="1001", customer_id="cust_000001", occasion="wedding", budget_max=900)
+
+        sms_result = mcp_server.fashion_render_sms_review(draft.message.id)
+        merch_result = mcp_server.fashion_render_merch_board(
+            store_query="Dallas",
+            question="What should this store feature this week if we care about margin?",
+            category="womens_apparel",
+            compare_mode=CompareMode.peer_and_prior_period,
+            peer_mode=PeerMode.profile_type,
+            top_k=6,
+        )
+
+        assert sms_result.meta["openai/outputTemplate"].startswith("ui://widgets/sms/")
+        assert merch_result.meta["openai/outputTemplate"].startswith("ui://widgets/merch/")

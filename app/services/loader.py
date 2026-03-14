@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Customer,
+    CustomerCommunication,
     Order,
     OrderItem,
     Product,
@@ -101,6 +102,7 @@ def reset_synthetic_tables(db: Session) -> None:
     # FK-safe delete order.
     db.execute(delete(OrderItem))
     db.execute(delete(Order))
+    db.execute(delete(CustomerCommunication))
     db.execute(delete(ProductEmbedding))
     db.execute(delete(StoreDailyMetric))
     db.execute(delete(Product))

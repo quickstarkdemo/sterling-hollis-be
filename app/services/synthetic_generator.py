@@ -33,6 +33,17 @@ LAST_NAMES = [
 LOYALTY_TIERS = ["standard", "silver", "gold", "platinum"]
 CHANNELS = ["in_store", "online", "hybrid"]
 OCCASIONS = ["wedding", "vacation", "workwear", "holiday_party", "everyday_luxury"]
+STATE_AREA_CODES = {
+    "TX": ["214", "469", "713", "832"],
+    "CO": ["303", "720"],
+    "CA": ["310", "415", "628"],
+    "FL": ["305", "786"],
+    "NY": ["212", "646"],
+    "IL": ["312", "773"],
+    "MA": ["617", "857"],
+    "NV": ["702", "725"],
+    "HI": ["808"],
+}
 
 
 @dataclass
@@ -75,6 +86,14 @@ def _iso(dt: datetime) -> str:
 
 def _json(value: dict | list) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+
+def _synthetic_phone_e164(idx: int, state: str) -> str:
+    area_codes = STATE_AREA_CODES.get(state.upper(), ["214", "303", "415"])
+    area = area_codes[idx % len(area_codes)]
+    exchange = 200 + ((idx // len(area_codes)) % 700)
+    subscriber = 1000 + (idx % 9000)
+    return f"+1{area}{exchange:03d}{subscriber:04d}"
 
 
 def _pick_category_for_profile(rng: random.Random, profile_type: str) -> str:
@@ -131,6 +150,7 @@ def generate_customers(
         channel_pref = _weighted_choice(rng, [("in_store", 0.35), ("online", 0.30), ("hybrid", 0.35)])
 
         email = f"{first.lower()}.{last.lower()}.{idx + 1}@example-fashion.test"
+        phone_e164 = _synthetic_phone_e164(idx + 1, store["state"])
 
         customers.append(
             {
@@ -140,6 +160,7 @@ def generate_customers(
                 "first_name": first,
                 "last_name": last,
                 "email": email,
+                "phone_e164": phone_e164,
                 "city": store["city"],
                 "state": store["state"],
                 "joined_at": _iso(joined_at),

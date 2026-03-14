@@ -11,13 +11,17 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import CustomerCommunication, Product, ProductEmbedding, SyntheticRun
+from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    CompareMode,
     CustomerCommunicationDraftResponse,
     CustomerCommunicationHistoryResponse,
+    CustomerCommunicationStatus,
+    CustomerCommunicationUpdateResponse,
     CustomerRecommendationRequest,
     CustomerRecommendationResponse,
     CustomerResolutionResponse,
+    CustomerSearchResponse,
     IndexProductsRequest,
     IndexProductsResponse,
     MerchActionRecommendationsResponse,
@@ -26,6 +30,8 @@ from app.schemas import (
     MerchandisingRecommendationRequest,
     MerchandisingRecommendationResponse,
     Objective,
+    PeerMode,
+    PriceBand,
     RunReportResponse,
     StoreAssociateRecommendationResponse,
     StoreResolutionResponse,
@@ -33,13 +39,21 @@ from app.schemas import (
     SyntheticGenerateResponse,
     SyntheticLoadRequest,
     SyntheticLoadResponse,
+    TwilioSmokeTestResponse,
     VectorStatusResponse,
 )
 from app.services.apps_ui import get_widget_state, register_widget_state, render_widget_html
-from app.services.communications import customer_message_history, get_customer_message, prepare_customer_sms, send_customer_sms
+from app.services.communications import (
+    customer_message_history,
+    get_customer_message,
+    prepare_customer_sms,
+    send_customer_sms,
+    twilio_smoke_test,
+    update_customer_sms_draft,
+)
 from app.services.indexing import index_products_for_run
 from app.services.loader import current_loaded_counts, load_entity_csv, read_generated_counts, reset_synthetic_tables
-from app.services.lookup import resolve_customer, resolve_store
+from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.merchandising import (
     merchandising_action_recommendations,
     merchandising_diagnostics,
@@ -113,6 +127,8 @@ def _associate_recommendation_impl(
     store_id: str | None = None,
     customer_email: str | None = None,
     customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
     occasion: str | None = None,
     budget_min: float | None = None,
     budget_max: float | None = None,
@@ -120,7 +136,13 @@ def _associate_recommendation_impl(
 ) -> StoreAssociateRecommendationResponse:
     with SessionLocal() as db:
         resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
-        resolved_customer = resolve_customer(db, email=customer_email, customer_id=customer_id).resolved
+        resolved_customer = resolve_customer(
+            db,
+            email=customer_email,
+            customer_id=customer_id,
+            phone_e164=customer_phone_e164,
+            phone_last4=phone_last4,
+        ).resolved
         req = CustomerRecommendationRequest(
             store_id=resolved_store.id,
             customer_id=resolved_customer.id,
@@ -234,10 +256,10 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
 @mcp.resource(
     "ui://widgets/associate/{token}.html",
     mime_type="text/html",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate recommendation board."},
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate workspace for customer search, recommendations, and SMS drafting."},
 )
 def associate_widget_resource(token: str) -> str:
-    return render_widget_html("Associate Recommendation Board", get_widget_state(token))
+    return render_widget_html("Associate Workspace", get_widget_state(token))
 
 
 @mcp.resource(
@@ -428,12 +450,34 @@ def fashion_resolve_store(store_query: str) -> StoreResolutionResponse:
     name="fashion_resolve_customer",
     annotations=_tool_annotations(read_only=True, idempotent=True),
 )
-def fashion_resolve_customer(email: str | None = None, customer_id: str | None = None) -> CustomerResolutionResponse:
-    """Resolve a customer by email or customer_id for operator workflows."""
+def fashion_resolve_customer(
+    email: str | None = None,
+    customer_id: str | None = None,
+    phone_e164: str | None = None,
+    phone_last4: str | None = None,
+) -> CustomerResolutionResponse:
+    """Resolve a customer by email, customer_id, or synthetic phone for operator workflows."""
     with SessionLocal() as db:
-        match = resolve_customer(db, email=email, customer_id=customer_id)
-        query = email or customer_id or ""
+        match = resolve_customer(
+            db,
+            email=email,
+            customer_id=customer_id,
+            phone_e164=phone_e164,
+            phone_last4=phone_last4,
+        )
+        query = email or customer_id or phone_e164 or phone_last4 or ""
         return CustomerResolutionResponse(query=query, resolved=match.resolved)
+
+
+@mcp.tool(
+    name="fashion_find_customers",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_find_customers(query: str, limit: int = 10) -> CustomerSearchResponse:
+    """Search customers by name, email, full phone, or phone last4 for associate workflows."""
+    with SessionLocal() as db:
+        return find_customers(db, query=query, limit=limit)
 
 
 @mcp.tool(
@@ -446,6 +490,8 @@ def fashion_store_associate_recommend(
     store_id: str | None = None,
     customer_email: str | None = None,
     customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
     occasion: str | None = None,
     budget_min: float | None = None,
     budget_max: float | None = None,
@@ -457,6 +503,8 @@ def fashion_store_associate_recommend(
         store_id=store_id,
         customer_email=customer_email,
         customer_id=customer_id,
+        customer_phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
         occasion=occasion,
         budget_min=budget_min,
         budget_max=budget_max,
@@ -474,6 +522,8 @@ def fashion_prepare_customer_sms(
     store_id: str | None = None,
     customer_email: str | None = None,
     customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
     occasion: str | None = None,
     budget_min: float | None = None,
     budget_max: float | None = None,
@@ -487,6 +537,8 @@ def fashion_prepare_customer_sms(
             store_id=store_id,
             customer_email=customer_email,
             customer_id=customer_id,
+            customer_phone_e164=customer_phone_e164,
+            phone_last4=phone_last4,
             occasion=occasion,
             budget_min=budget_min,
             budget_max=budget_max,
@@ -506,6 +558,26 @@ def fashion_send_customer_sms(message_id: str):
 
 
 @mcp.tool(
+    name="fashion_update_customer_sms_draft",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_update_customer_sms_draft(
+    message_id: str,
+    body_text: str,
+    selected_product_ids: list[str] | None = None,
+) -> CustomerCommunicationUpdateResponse:
+    """Update a draft SMS body or selected products before sending."""
+    with SessionLocal() as db:
+        return update_customer_sms_draft(
+            db,
+            message_id=message_id,
+            body_text=body_text,
+            selected_product_ids=selected_product_ids,
+        )
+
+
+@mcp.tool(
     name="fashion_customer_message_history",
     annotations=_tool_annotations(read_only=True, idempotent=True),
     meta=_WIDGET_TOOL_META,
@@ -513,11 +585,35 @@ def fashion_send_customer_sms(message_id: str):
 def fashion_customer_message_history(
     customer_email: str | None = None,
     customer_id: str | None = None,
+    phone_e164: str | None = None,
+    phone_last4: str | None = None,
     limit: int = 20,
+    status: str | None = None,
 ) -> CustomerCommunicationHistoryResponse:
     """Return recent SMS drafts and send results for a customer."""
     with SessionLocal() as db:
-        return customer_message_history(db, customer_email=customer_email, customer_id=customer_id, limit=limit)
+        status_enum = None
+        if status:
+            status_enum = CustomerCommunicationStatus(status)
+        return customer_message_history(
+            db,
+            customer_email=customer_email,
+            customer_id=customer_id,
+            phone_e164=phone_e164,
+            phone_last4=phone_last4,
+            limit=limit,
+            status=status_enum,
+        )
+
+
+@mcp.tool(
+    name="fashion_twilio_smoke_test",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+)
+def fashion_twilio_smoke_test(body_text: str | None = None) -> TwilioSmokeTestResponse:
+    """Send a safe smoke-test SMS to the configured global test number."""
+    with SessionLocal() as db:
+        return twilio_smoke_test(db, body_text=body_text)
 
 
 @mcp.tool(
@@ -532,6 +628,12 @@ def fashion_merch_action_recommendations(
     objective: Objective = Objective.sell_through,
     lookback_days: int = 90,
     top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> MerchActionRecommendationsResponse:
     """Recommend what a merchandiser should feature, deprioritize, or promote for a store."""
     with SessionLocal() as db:
@@ -543,6 +645,12 @@ def fashion_merch_action_recommendations(
             objective=objective,
             lookback_days=lookback_days,
             top_k=top_k,
+            category=category,
+            brand=brand,
+            price_band=price_band,
+            occasion=occasion,
+            compare_mode=compare_mode,
+            peer_mode=peer_mode,
         )
 
 
@@ -555,6 +663,12 @@ def fashion_merch_diagnostics(
     store_id: str | None = None,
     question: str | None = None,
     lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> MerchDiagnosticsResponse:
     """Explain why a store, category, or brand is overperforming or underperforming versus peers."""
     with SessionLocal() as db:
@@ -564,6 +678,12 @@ def fashion_merch_diagnostics(
             store_id=store_id,
             question=question,
             lookback_days=lookback_days,
+            category=category,
+            brand=brand,
+            price_band=price_band,
+            occasion=occasion,
+            compare_mode=compare_mode,
+            peer_mode=peer_mode,
         )
 
 
@@ -576,6 +696,12 @@ def fashion_merch_trend_summary(
     store_id: str | None = None,
     question: str | None = None,
     lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> MerchTrendSummaryResponse:
     """Summarize store-category revenue trends for a merchandiser over a selected time window."""
     with SessionLocal() as db:
@@ -585,48 +711,70 @@ def fashion_merch_trend_summary(
             store_id=store_id,
             question=question,
             lookback_days=lookback_days,
+            category=category,
+            brand=brand,
+            price_band=price_band,
+            occasion=occasion,
+            compare_mode=compare_mode,
+            peer_mode=peer_mode,
         )
 
 
 @mcp.tool(
-    name="fashion_render_associate_board",
+    name="fashion_render_associate_workspace",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta={**_WIDGET_TOOL_META},
     structured_output=False,
 )
-def fashion_render_associate_board(
+def fashion_render_associate_workspace(
     store_query: str | None = None,
     store_id: str | None = None,
     customer_email: str | None = None,
     customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
     occasion: str | None = None,
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
 ) -> CallToolResult:
-    """Render the associate recommendation board inside ChatGPT using the high-level recommendation workflow."""
-    response = _associate_recommendation_impl(
-        store_query=store_query,
-        store_id=store_id,
-        customer_email=customer_email,
-        customer_id=customer_id,
-        occasion=occasion,
-        budget_min=budget_min,
-        budget_max=budget_max,
-        top_k=top_k,
-    )
-    payload = response.model_dump(mode="json")
-    payload["draftArgs"] = {
-        "store_id": response.store.id,
-        "customer_id": response.customer.id,
-        "occasion": occasion,
-        "budget_min": budget_min,
-        "budget_max": budget_max,
-        "top_k": top_k,
-    }
-    token = register_widget_state("associate", payload)
+    """Render the associate workspace inside ChatGPT with customer search, recommendations, and SMS drafting."""
+    with SessionLocal() as db:
+        resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+        payload = {
+            "store": resolved_store.model_dump(mode="json"),
+            "filters": {
+                "occasion": occasion,
+                "budget_min": budget_min,
+                "budget_max": budget_max,
+                "top_k": top_k,
+            },
+            "customerQuery": "",
+            "customerResults": [],
+            "selectedCustomer": None,
+            "recommendation": None,
+            "lastDraft": None,
+        }
+        opened_for = resolved_store.name
+        if customer_email or customer_id or customer_phone_e164 or phone_last4:
+            response = _associate_recommendation_impl(
+                store_query=store_query,
+                store_id=store_id,
+                customer_email=customer_email,
+                customer_id=customer_id,
+                customer_phone_e164=customer_phone_e164,
+                phone_last4=phone_last4,
+                occasion=occasion,
+                budget_min=budget_min,
+                budget_max=budget_max,
+                top_k=top_k,
+            )
+            payload["selectedCustomer"] = response.customer.model_dump(mode="json")
+            payload["recommendation"] = response.model_dump(mode="json")
+            opened_for = f"{response.customer.first_name} {response.customer.last_name}"
+    token = register_widget_state("associate_workspace", payload)
     return _calltool_result(
-        text=f"Opened the associate board for {response.customer.first_name} {response.customer.last_name}.",
+        text=f"Opened the associate workspace for {opened_for}.",
         payload=payload,
         meta={"openai/outputTemplate": f"ui://widgets/associate/{token}.html"},
     )
@@ -646,6 +794,7 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
             "message": draft.model_dump(mode="json"),
             "store": store.model_dump(mode="json"),
             "customer": customer.model_dump(mode="json"),
+            "history": [],
         }
         token = register_widget_state("sms", payload)
         return _calltool_result(
@@ -668,6 +817,12 @@ def fashion_render_merch_board(
     objective: Objective = Objective.sell_through,
     lookback_days: int = 90,
     top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> CallToolResult:
     """Render the merchandising action board inside ChatGPT from the human-facing merchandising workflow."""
     with SessionLocal() as db:
@@ -679,14 +834,69 @@ def fashion_render_merch_board(
             objective=objective,
             lookback_days=lookback_days,
             top_k=top_k,
+            category=category,
+            brand=brand,
+            price_band=price_band,
+            occasion=occasion,
+            compare_mode=compare_mode,
+            peer_mode=peer_mode,
         )
-        payload = response.model_dump(mode="json")
+        payload = {
+            "store": response.store.model_dump(mode="json"),
+            "filters": {
+                "question": question,
+                "category": category,
+                "brand": brand,
+                "price_band": price_band.value if price_band else None,
+                "occasion": occasion,
+                "lookback_days": lookback_days,
+                "compare_mode": compare_mode.value,
+                "peer_mode": peer_mode.value,
+                "top_k": top_k,
+            },
+            "initialResult": response.model_dump(mode="json"),
+            "lastResult": None,
+            "lastTool": None,
+        }
         token = register_widget_state("merch", payload)
         return _calltool_result(
             text=f"Opened the merchandising board for {response.store.name}.",
             payload=payload,
             meta={"openai/outputTemplate": f"ui://widgets/merch/{token}.html"},
         )
+
+
+@mcp.tool(
+    name="fashion_render_associate_board",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta={**_WIDGET_TOOL_META},
+    structured_output=False,
+)
+def fashion_render_associate_board(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+) -> CallToolResult:
+    """Backward-compatible alias for the associate workspace render tool."""
+    return fashion_render_associate_workspace(
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
+        customer_id=customer_id,
+        customer_phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+    )
 
 
 @mcp.tool(name="fashion_get_product_feed", annotations=_tool_annotations(read_only=True, idempotent=True))

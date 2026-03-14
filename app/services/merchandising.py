@@ -4,11 +4,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Order, OrderItem, Product, Store
 from app.schemas import (
+    CompareMode,
     MerchAction,
     MerchActionRecommendationItem,
     MerchActionRecommendationsResponse,
@@ -17,6 +18,8 @@ from app.schemas import (
     MerchTrendHighlight,
     MerchTrendSummaryResponse,
     Objective,
+    PeerMode,
+    PriceBand,
     ResolvedStore,
 )
 from app.services.lookup import resolve_store
@@ -29,6 +32,8 @@ class MerchQuery:
     action_hint: MerchAction | None
     category: str | None
     brand: str | None
+    price_band: PriceBand | None
+    occasion: str | None
     lookback_days: int
     intent: str
 
@@ -45,6 +50,8 @@ _OBJECTIVE_TERMS = {
     Objective.sell_through: ["sell through", "sell-through", "velocity", "units"],
 }
 
+_OCCASION_TERMS = ["wedding", "vacation", "workwear", "holiday party", "holiday_party", "everyday luxury", "everyday_luxury"]
+
 
 def _normalize(text: str | None) -> str:
     if not text:
@@ -52,12 +59,44 @@ def _normalize(text: str | None) -> str:
     return " ".join(text.lower().replace("-", " ").replace(",", " ").split())
 
 
-def parse_merch_query(question: str | None, objective: Objective = Objective.sell_through, lookback_days: int = 90) -> MerchQuery:
+def _price_band_bounds(price_band: PriceBand | None) -> tuple[float | None, float | None]:
+    if price_band == PriceBand.under_250:
+        return None, 250.0
+    if price_band == PriceBand.band_250_500:
+        return 250.0, 500.0
+    if price_band == PriceBand.band_500_1000:
+        return 500.0, 1000.0
+    if price_band == PriceBand.band_1000_plus:
+        return 1000.0, None
+    return None, None
+
+
+def _price_band_for_value(price: float) -> PriceBand:
+    if price < 250:
+        return PriceBand.under_250
+    if price < 500:
+        return PriceBand.band_250_500
+    if price < 1000:
+        return PriceBand.band_500_1000
+    return PriceBand.band_1000_plus
+
+
+def parse_merch_query(
+    question: str | None,
+    objective: Objective = Objective.sell_through,
+    lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+) -> MerchQuery:
     normalized = _normalize(question)
     parsed_objective = objective
     parsed_action: MerchAction | None = None
-    category: str | None = None
-    brand: str | None = None
+    parsed_category = category
+    parsed_brand = brand
+    parsed_price_band = price_band
+    parsed_occasion = occasion
 
     for candidate, terms in _OBJECTIVE_TERMS.items():
         if any(term in normalized for term in terms):
@@ -69,14 +108,31 @@ def parse_merch_query(question: str | None, objective: Objective = Objective.sel
             parsed_action = candidate
             break
 
-    for category_key, cfg in CATEGORY_TAXONOMY.items():
-        if category_key.replace("_", " ") in normalized or cfg["label"].lower() in normalized:
-            category = category_key
-            break
+    if parsed_category is None:
+        for category_key, cfg in CATEGORY_TAXONOMY.items():
+            if category_key.replace("_", " ") in normalized or cfg["label"].lower() in normalized:
+                parsed_category = category_key
+                break
 
-    if "brand " in normalized:
+    if parsed_brand is None and "brand " in normalized:
         after = normalized.split("brand ", 1)[1].strip()
-        brand = after[:80] if after else None
+        parsed_brand = after[:80] if after else None
+
+    if parsed_price_band is None:
+        if "under 250" in normalized or "under $250" in normalized:
+            parsed_price_band = PriceBand.under_250
+        elif "250 to 500" in normalized or "$250 to $500" in normalized or "250-500" in normalized:
+            parsed_price_band = PriceBand.band_250_500
+        elif "500 to 1000" in normalized or "$500 to $1000" in normalized or "500-1000" in normalized:
+            parsed_price_band = PriceBand.band_500_1000
+        elif "over 1000" in normalized or "over $1000" in normalized or "1000 plus" in normalized:
+            parsed_price_band = PriceBand.band_1000_plus
+
+    if parsed_occasion is None:
+        for occasion_term in _OCCASION_TERMS:
+            if occasion_term in normalized:
+                parsed_occasion = occasion_term.replace(" ", "_")
+                break
 
     if "last " in normalized and " days" in normalized:
         try:
@@ -98,8 +154,10 @@ def parse_merch_query(question: str | None, objective: Objective = Objective.sel
     return MerchQuery(
         objective=parsed_objective,
         action_hint=parsed_action,
-        category=category,
-        brand=brand,
+        category=parsed_category,
+        brand=parsed_brand,
+        price_band=parsed_price_band,
+        occasion=parsed_occasion,
         lookback_days=max(7, min(lookback_days, 730)),
         intent=intent,
     )
@@ -109,26 +167,40 @@ def _resolved_store(session: Session, store_query: str | None = None, store_id: 
     return resolve_store(session, store_query=store_query, store_id=store_id).resolved
 
 
-def peer_store_ids(session: Session, store_id: str) -> list[str]:
+def peer_store_ids(session: Session, store_id: str, peer_mode: PeerMode = PeerMode.state_and_profile) -> list[str]:
     store = session.get(Store, store_id)
     if not store:
         raise ValueError(f"Store {store_id} was not found.")
 
-    peers = session.scalars(
-        select(Store).where(Store.id != store.id, Store.profile_type == store.profile_type).order_by(Store.id)
-    ).all()
+    if peer_mode == PeerMode.state_and_profile:
+        peers = session.scalars(
+            select(Store)
+            .where(Store.id != store.id, Store.profile_type == store.profile_type, Store.state == store.state)
+            .order_by(Store.id)
+        ).all()
+        if peers:
+            return [peer.id for peer in peers[:5]]
 
-    same_state = [peer.id for peer in peers if peer.state == store.state]
-    if same_state:
-        return same_state[:5]
-    if peers:
-        return [peer.id for peer in peers[:5]]
+    if peer_mode in {PeerMode.state_and_profile, PeerMode.profile_type}:
+        peers = session.scalars(
+            select(Store).where(Store.id != store.id, Store.profile_type == store.profile_type).order_by(Store.id)
+        ).all()
+        if peers:
+            return [peer.id for peer in peers[:5]]
 
-    fallback = session.scalars(select(Store).where(Store.id != store.id).order_by(Store.id)).all()
-    return [peer.id for peer in fallback[:5]]
+    peers = session.scalars(select(Store).where(Store.id != store.id).order_by(Store.id)).all()
+    return [peer.id for peer in peers[:5]]
 
 
-def _product_metrics(session: Session, store_ids: list[str], since: datetime, category: str | None = None, brand: str | None = None):
+def _base_query(
+    store_ids: list[str],
+    since: datetime,
+    until: datetime,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+):
     query = (
         select(
             Product.id,
@@ -136,6 +208,7 @@ def _product_metrics(session: Session, store_ids: list[str], since: datetime, ca
             Product.title,
             Product.brand,
             Product.category,
+            Product.price,
             Product.inventory_qty,
             Product.margin_pct,
             Product.objective_weight,
@@ -144,13 +217,18 @@ def _product_metrics(session: Session, store_ids: list[str], since: datetime, ca
         )
         .join(OrderItem, OrderItem.product_id == Product.id)
         .join(Order, Order.id == OrderItem.order_id)
-        .where(Order.store_id.in_(store_ids), Order.ordered_at >= since)
+        .where(
+            Order.store_id.in_(store_ids),
+            Order.ordered_at >= since,
+            Order.ordered_at < until,
+        )
         .group_by(
             Product.id,
             Product.store_id,
             Product.title,
             Product.brand,
             Product.category,
+            Product.price,
             Product.inventory_qty,
             Product.margin_pct,
             Product.objective_weight,
@@ -160,27 +238,98 @@ def _product_metrics(session: Session, store_ids: list[str], since: datetime, ca
         query = query.where(Product.category == category)
     if brand:
         query = query.where(func.lower(Product.brand) == brand.lower())
-    return session.execute(query).all()
+    if occasion:
+        query = query.where(Order.occasion == occasion)
+    floor, ceiling = _price_band_bounds(price_band)
+    if floor is not None:
+        query = query.where(Product.price >= floor)
+    if ceiling is not None:
+        query = query.where(Product.price < ceiling)
+    return query
 
 
-def _peer_category_baseline(peer_rows) -> dict[str, dict[str, float]]:
-    grouped: dict[str, dict[str, float]] = defaultdict(lambda: {"units": 0.0, "revenue": 0.0, "margin": 0.0, "count": 0.0})
-    for row in peer_rows:
-        bucket = grouped[row.category]
-        bucket["units"] += float(row.units or 0)
-        bucket["revenue"] += float(row.revenue or 0)
-        bucket["margin"] += float(row.margin_pct or 0)
-        bucket["count"] += 1
+def _product_metrics(
+    session: Session,
+    store_ids: list[str],
+    since: datetime,
+    until: datetime,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+):
+    return session.execute(_base_query(store_ids, since, until, category, brand, price_band, occasion)).all()
 
-    baselines: dict[str, dict[str, float]] = {}
-    for category, bucket in grouped.items():
-        count = max(bucket["count"], 1)
-        baselines[category] = {
-            "avg_units": bucket["units"] / count,
-            "avg_revenue": bucket["revenue"] / count,
-            "avg_margin": bucket["margin"] / count,
-        }
-    return baselines
+
+def _dimension_aggregate_query(
+    store_ids: list[str],
+    since: datetime,
+    until: datetime,
+    dimension: str,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+):
+    if dimension == "brand":
+        dim_col = Product.brand.label("subject")
+    else:
+        dim_col = Product.category.label("subject")
+    query = (
+        select(
+            dim_col,
+            func.sum(OrderItem.quantity).label("units"),
+            func.sum(OrderItem.line_total).label("revenue"),
+            func.avg(Product.margin_pct).label("margin_pct"),
+        )
+        .join(OrderItem, OrderItem.product_id == Product.id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.store_id.in_(store_ids), Order.ordered_at >= since, Order.ordered_at < until)
+        .group_by(dim_col)
+    )
+    if category:
+        query = query.where(Product.category == category)
+    if brand:
+        query = query.where(func.lower(Product.brand) == brand.lower())
+    if occasion:
+        query = query.where(Order.occasion == occasion)
+    floor, ceiling = _price_band_bounds(price_band)
+    if floor is not None:
+        query = query.where(Product.price >= floor)
+    if ceiling is not None:
+        query = query.where(Product.price < ceiling)
+    return query
+
+
+def _dimension_aggregates(
+    session: Session,
+    store_ids: list[str],
+    since: datetime,
+    until: datetime,
+    dimension: str,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+):
+    return session.execute(
+        _dimension_aggregate_query(store_ids, since, until, dimension, category, brand, price_band, occasion)
+    ).all()
+
+
+def _by_key(rows, key_fn, value_fn):
+    mapped = {}
+    for row in rows:
+        mapped[key_fn(row)] = value_fn(row)
+    return mapped
+
+
+def _select_metric_value(units: float, revenue: float, margin: float, objective_weight: float, objective: Objective) -> float:
+    if objective == Objective.margin:
+        return revenue * margin + objective_weight * 100
+    if objective == Objective.revenue:
+        return revenue + objective_weight * 25
+    return units * 12 + objective_weight * 100
 
 
 def merchandising_action_recommendations(
@@ -191,34 +340,64 @@ def merchandising_action_recommendations(
     objective: Objective = Objective.sell_through,
     lookback_days: int = 90,
     top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> MerchActionRecommendationsResponse:
     resolved_store = _resolved_store(session, store_query=store_query, store_id=store_id)
-    parsed = parse_merch_query(question, objective=objective, lookback_days=lookback_days)
-    since = datetime.now(timezone.utc) - timedelta(days=parsed.lookback_days)
-    peers = peer_store_ids(session, resolved_store.id)
+    parsed = parse_merch_query(
+        question,
+        objective=objective,
+        lookback_days=lookback_days,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+    )
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=parsed.lookback_days)
+    prior_since = since - timedelta(days=parsed.lookback_days)
+    peers = peer_store_ids(session, resolved_store.id, peer_mode=peer_mode)
 
-    store_rows = _product_metrics(session, [resolved_store.id], since, category=parsed.category, brand=parsed.brand)
-    peer_rows = _product_metrics(session, peers, since, category=parsed.category, brand=parsed.brand)
-    peer_baselines = _peer_category_baseline(peer_rows)
+    store_rows = _product_metrics(session, [resolved_store.id], since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    peer_rows = _product_metrics(session, peers, since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    prior_rows = _product_metrics(session, [resolved_store.id], prior_since, since, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+
+    peer_baselines = defaultdict(lambda: {"revenue": 0.0, "units": 0.0, "count": 0})
+    for row in peer_rows:
+        key = (row.category, row.brand)
+        peer_baselines[key]["revenue"] += float(row.revenue or 0.0)
+        peer_baselines[key]["units"] += float(row.units or 0.0)
+        peer_baselines[key]["count"] += 1
+
+    prior_by_product = _by_key(prior_rows, lambda row: row.id, lambda row: float(row.revenue or 0.0))
 
     recs: list[MerchActionRecommendationItem] = []
     for row in store_rows:
-        units = float(row.units or 0)
-        revenue = float(row.revenue or 0)
-        margin = float(row.margin_pct or 0)
-        inventory = float(row.inventory_qty or 0)
-        objective_weight = float(row.objective_weight or 0)
-        baseline = peer_baselines.get(row.category, {"avg_units": 0.0, "avg_revenue": 0.0, "avg_margin": 0.0})
-        peer_delta = revenue - float(baseline["avg_revenue"])
+        units = float(row.units or 0.0)
+        revenue = float(row.revenue or 0.0)
+        margin = float(row.margin_pct or 0.0)
+        inventory = float(row.inventory_qty or 0.0)
+        objective_weight = float(row.objective_weight or 0.0)
+        peer_group = peer_baselines[(row.category, row.brand)]
+        peer_avg_revenue = (
+            peer_group["revenue"] / peer_group["count"] if peer_group["count"] else 0.0
+        )
+        peer_delta = revenue - peer_avg_revenue if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} else 0.0
+        prior_delta = revenue - prior_by_product.get(row.id, 0.0) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else 0.0
 
-        feature_score = revenue * (0.25 + margin) + units * 10 + objective_weight * 100 + max(peer_delta, 0)
-        deprioritize_score = inventory * 4 + max(-peer_delta, 0) + max(0, baseline["avg_units"] - units) * 8
-        promote_score = inventory * 3 + margin * 80 + max(0, baseline["avg_revenue"] - revenue)
+        metric_value = _select_metric_value(units, revenue, margin, objective_weight, parsed.objective)
+        feature_score = metric_value + max(peer_delta, 0.0) + max(prior_delta, 0.0)
+        deprioritize_score = inventory * 4 + max(-peer_delta, 0.0) + max(-prior_delta, 0.0)
+        promote_score = (margin * 100) + inventory * 2 + max(-peer_delta, 0.0) * 0.5
 
         action_scores = {
-            MerchAction.feature: (feature_score, "strong contribution with supportive peer context"),
-            MerchAction.deprioritize: (deprioritize_score, "low productivity relative to inventory and peers"),
-            MerchAction.promote: (promote_score, "good margin headroom with room to stimulate demand"),
+            MerchAction.feature: (feature_score, "strong current performance with supportive comparison signals"),
+            MerchAction.deprioritize: (deprioritize_score, "inventory and comparison signals suggest a lower priority"),
+            MerchAction.promote: (promote_score, "good margin or inventory headroom suggests promotional potential"),
         }
 
         selected_actions = [parsed.action_hint] if parsed.action_hint else list(MerchAction)
@@ -231,8 +410,11 @@ def merchandising_action_recommendations(
                     title=row.title,
                     brand=row.brand,
                     category=row.category,
+                    price_band=_price_band_for_value(float(row.price or 0.0)),
+                    occasion=parsed.occasion,
                     metric_value=round(score, 4),
                     peer_delta=round(peer_delta, 4),
+                    prior_period_delta=round(prior_delta, 4),
                     rationale=rationale,
                 )
             )
@@ -242,15 +424,22 @@ def merchandising_action_recommendations(
         limited = recs[:top_k]
     else:
         grouped: dict[MerchAction, list[MerchActionRecommendationItem]] = defaultdict(list)
+        target_per_group = max(2, top_k // 3)
         for item in recs:
-            if len(grouped[item.action]) < max(2, top_k // 3):
+            if len(grouped[item.action]) < target_per_group:
                 grouped[item.action].append(item)
         limited = grouped[MerchAction.feature] + grouped[MerchAction.deprioritize] + grouped[MerchAction.promote]
 
     return MerchActionRecommendationsResponse(
         store=resolved_store,
         objective=parsed.objective,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
         lookback_days=parsed.lookback_days,
+        category=parsed.category,
+        brand=parsed.brand,
+        price_band=parsed.price_band,
+        occasion=parsed.occasion,
         peer_store_ids=peers,
         parsed_intent=parsed.intent,
         recommendations=limited,
@@ -263,71 +452,79 @@ def merchandising_diagnostics(
     store_id: str | None = None,
     question: str | None = None,
     lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> MerchDiagnosticsResponse:
     resolved_store = _resolved_store(session, store_query=store_query, store_id=store_id)
-    parsed = parse_merch_query(question, lookback_days=lookback_days)
-    since = datetime.now(timezone.utc) - timedelta(days=parsed.lookback_days)
-    peers = peer_store_ids(session, resolved_store.id)
+    parsed = parse_merch_query(
+        question,
+        objective=Objective.sell_through,
+        lookback_days=lookback_days,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+    )
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=parsed.lookback_days)
+    prior_since = since - timedelta(days=parsed.lookback_days)
+    peers = peer_store_ids(session, resolved_store.id, peer_mode=peer_mode)
 
-    store_rows = _product_metrics(session, [resolved_store.id], since)
-    peer_rows = _product_metrics(session, peers, since)
+    dimension = "brand" if parsed.brand else "category"
+    current_rows = _dimension_aggregates(session, [resolved_store.id], since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    peer_rows = _dimension_aggregates(session, peers, since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    prior_rows = _dimension_aggregates(session, [resolved_store.id], prior_since, since, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
 
-    store_category: dict[str, dict[str, float]] = defaultdict(lambda: {"units": 0.0, "revenue": 0.0})
-    peer_category: dict[str, dict[str, float]] = defaultdict(lambda: {"units": 0.0, "revenue": 0.0, "count": 0.0})
-    store_brand: dict[str, float] = defaultdict(float)
-    peer_brand: dict[str, dict[str, float]] = defaultdict(lambda: {"revenue": 0.0, "count": 0.0})
-
-    for row in store_rows:
-        store_category[row.category]["units"] += float(row.units or 0)
-        store_category[row.category]["revenue"] += float(row.revenue or 0)
-        store_brand[row.brand] += float(row.revenue or 0)
-    for row in peer_rows:
-        peer_category[row.category]["units"] += float(row.units or 0)
-        peer_category[row.category]["revenue"] += float(row.revenue or 0)
-        peer_category[row.category]["count"] += 1
-        peer_brand[row.brand]["revenue"] += float(row.revenue or 0)
-        peer_brand[row.brand]["count"] += 1
+    peer_by_subject = _by_key(peer_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
+    prior_by_subject = _by_key(prior_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
 
     insights: list[MerchDiagnosticInsight] = []
-    for category, values in store_category.items():
-        peer_values = peer_category.get(category, {"units": 0.0, "revenue": 0.0, "count": 1.0})
-        peer_avg = peer_values["revenue"] / max(peer_values["count"], 1.0)
-        delta = values["revenue"] - peer_avg
-        status = "outperforming" if delta >= 0 else "underperforming"
+    for row in current_rows:
+        current_value = float(row.revenue or 0.0)
+        peer_value = peer_by_subject.get(row.subject) if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} else None
+        prior_value = prior_by_subject.get(row.subject) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else None
+        if peer_value is not None:
+            delta = current_value - peer_value
+            status = "overperforming" if delta >= 0 else "underperforming"
+            rationale = f"Current revenue is {'above' if delta >= 0 else 'below'} peer average."
+        elif prior_value is not None:
+            delta = current_value - prior_value
+            status = "improving" if delta >= 0 else "declining"
+            rationale = f"Current revenue is {'above' if delta >= 0 else 'below'} the prior period."
+        else:
+            delta = current_value
+            status = "observed"
+            rationale = "Current period observation."
         insights.append(
             MerchDiagnosticInsight(
-                dimension="category",
-                subject=category,
+                dimension=dimension,
+                subject=row.subject,
                 status=status,
-                current_value=round(values["revenue"], 4),
-                peer_value=round(peer_avg, 4),
+                current_value=round(current_value, 4),
+                peer_value=round(peer_value, 4) if peer_value is not None else None,
+                prior_value=round(prior_value, 4) if prior_value is not None else None,
                 delta=round(delta, 4),
-                rationale=f"{category} is {status} peer revenue averages over the selected lookback window.",
+                rationale=rationale,
             )
         )
 
-    for brand, revenue in sorted(store_brand.items(), key=lambda item: item[1], reverse=True)[:5]:
-        peer_values = peer_brand.get(brand, {"revenue": 0.0, "count": 1.0})
-        peer_avg = peer_values["revenue"] / max(peer_values["count"], 1.0)
-        delta = revenue - peer_avg
-        status = "outperforming" if delta >= 0 else "underperforming"
-        insights.append(
-            MerchDiagnosticInsight(
-                dimension="brand",
-                subject=brand,
-                status=status,
-                current_value=round(revenue, 4),
-                peer_value=round(peer_avg, 4),
-                delta=round(delta, 4),
-                rationale=f"{brand} is {status} peer brand revenue averages in comparable stores.",
-            )
-        )
-
-    insights.sort(key=lambda insight: abs(insight.delta), reverse=True)
-    summary = f"Diagnostics for {resolved_store.name} over the last {parsed.lookback_days} days with {len(peers)} peer stores."
+    insights.sort(key=lambda item: abs(item.delta), reverse=True)
+    summary = (
+        f"Diagnostics for {resolved_store.name} over the last {parsed.lookback_days} days with {dimension}-level comparison."
+    )
     return MerchDiagnosticsResponse(
         store=resolved_store,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
         lookback_days=parsed.lookback_days,
+        category=parsed.category,
+        brand=parsed.brand,
+        price_band=parsed.price_band,
+        occasion=parsed.occasion,
         peer_store_ids=peers,
         summary=summary,
         insights=insights[:10],
@@ -340,51 +537,66 @@ def merchandising_trend_summary(
     store_id: str | None = None,
     question: str | None = None,
     lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> MerchTrendSummaryResponse:
     resolved_store = _resolved_store(session, store_query=store_query, store_id=store_id)
-    parsed = parse_merch_query(question, lookback_days=lookback_days)
-
+    parsed = parse_merch_query(
+        question,
+        objective=Objective.sell_through,
+        lookback_days=lookback_days,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+    )
     now = datetime.now(timezone.utc)
-    current_since = now - timedelta(days=parsed.lookback_days)
-    prior_since = current_since - timedelta(days=parsed.lookback_days)
+    since = now - timedelta(days=parsed.lookback_days)
+    prior_since = since - timedelta(days=parsed.lookback_days)
+    peers = peer_store_ids(session, resolved_store.id, peer_mode=peer_mode)
 
-    def _window_rows(start: datetime, end: datetime):
-        query = (
-            select(Product.category, func.sum(OrderItem.line_total).label("revenue"))
-            .join(OrderItem, OrderItem.product_id == Product.id)
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(Order.store_id == resolved_store.id, Order.ordered_at >= start, Order.ordered_at < end)
-            .group_by(Product.category)
-        )
-        return session.execute(query).all()
+    dimension = "brand" if parsed.brand else "category"
+    current_rows = _dimension_aggregates(session, [resolved_store.id], since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    peer_rows = _dimension_aggregates(session, peers, since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    prior_rows = _dimension_aggregates(session, [resolved_store.id], prior_since, since, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
 
-    current = {row.category: float(row.revenue or 0) for row in _window_rows(current_since, now)}
-    prior = {row.category: float(row.revenue or 0) for row in _window_rows(prior_since, current_since)}
+    peer_by_subject = _by_key(peer_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
+    prior_by_subject = _by_key(prior_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
 
     highlights: list[MerchTrendHighlight] = []
-    for category in sorted(set(current) | set(prior)):
-        current_value = current.get(category, 0.0)
-        prior_value = prior.get(category, 0.0)
-        if prior_value <= 0:
-            pct_change = 100.0 if current_value > 0 else 0.0
-        else:
-            pct_change = ((current_value - prior_value) / prior_value) * 100.0
-        direction = "up" if pct_change >= 0 else "down"
+    for row in current_rows:
+        current_value = float(row.revenue or 0.0)
+        prior_value = prior_by_subject.get(row.subject) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else None
+        peer_value = peer_by_subject.get(row.subject) if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} else None
+        baseline = prior_value if prior_value is not None else peer_value if peer_value is not None else 0.0
+        pct_change = ((current_value - baseline) / baseline * 100.0) if baseline else 0.0
+        rationale = "Change versus peer baseline." if prior_value is None else "Change versus prior period."
         highlights.append(
             MerchTrendHighlight(
-                subject=category,
+                subject=row.subject,
                 current_value=round(current_value, 4),
-                prior_value=round(prior_value, 4),
-                pct_change=round(pct_change, 2),
-                rationale=f"{category} revenue is {direction} versus the prior comparable period.",
+                peer_value=round(peer_value, 4) if peer_value is not None else None,
+                prior_value=round(prior_value, 4) if prior_value is not None else None,
+                pct_change=round(pct_change, 4),
+                rationale=rationale,
             )
         )
 
     highlights.sort(key=lambda item: abs(item.pct_change), reverse=True)
-    summary = f"Trend summary for {resolved_store.name} covering the last {parsed.lookback_days} days versus the prior period."
+    summary = f"Trend summary for {resolved_store.name} over the last {parsed.lookback_days} days."
     return MerchTrendSummaryResponse(
         store=resolved_store,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
         lookback_days=parsed.lookback_days,
+        category=parsed.category,
+        brand=parsed.brand,
+        price_band=parsed.price_band,
+        occasion=parsed.occasion,
         summary=summary,
-        highlights=highlights[:8],
+        highlights=highlights[:10],
     )
