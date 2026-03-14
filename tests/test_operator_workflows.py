@@ -422,15 +422,16 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
         template_uri = result.meta["openai/outputTemplate"]
         token = result.meta["openai/widgetSessionId"]
         persisted = get_widget_state(token)
-        html = mcp_server.associate_widget_resource()
+        html = mcp_server.associate_widget_resource(token)
 
-        assert template_uri == "ui://widgets/associate/workspace.html"
+        assert template_uri == f"ui://widgets/associate/workspace/{token}.html"
         assert persisted["kind"] == "associate_workspace"
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
         assert persisted["payload"]["widgetSessionId"] == token
         assert persisted["payload"]["selectedProductIds"]
         assert "<style>" in html
         assert "attachHostListeners();" in html
+        assert f'widgetSessionId: "{token}"' in html
 
 
 def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
@@ -451,10 +452,12 @@ def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
             top_k=6,
         )
 
-        assert sms_result.meta["openai/outputTemplate"] == "ui://widgets/sms/review.html"
-        assert sms_result.meta["openai/widgetSessionId"]
-        assert merch_result.meta["openai/outputTemplate"] == "ui://widgets/merch/board.html"
-        assert merch_result.meta["openai/widgetSessionId"]
+        sms_token = sms_result.meta["openai/widgetSessionId"]
+        merch_token = merch_result.meta["openai/widgetSessionId"]
+        assert sms_result.meta["openai/outputTemplate"] == f"ui://widgets/sms/review/{sms_token}.html"
+        assert sms_token
+        assert merch_result.meta["openai/outputTemplate"] == f"ui://widgets/merch/board/{merch_token}.html"
+        assert merch_token
 
 
 def test_bootstrap_tools_return_full_payloads(monkeypatch):

@@ -66,7 +66,12 @@ def _widget_js() -> str:
     return (_STATIC_DIR / "widget.js").read_text(encoding="utf-8")
 
 
-def render_widget_html(title: str, kind: str, summary: str | None = None) -> str:
+def render_widget_html(
+    title: str,
+    kind: str,
+    summary: str | None = None,
+    widget_session_id: str | None = None,
+) -> str:
     settings = get_settings()
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
     widget_summary = summary or {
@@ -93,6 +98,7 @@ def render_widget_html(title: str, kind: str, summary: str | None = None) -> str
         title: {json.dumps(title)},
         kind: {json.dumps(kind)},
         summary: {json.dumps(widget_summary)},
+        widgetSessionId: {json.dumps(widget_session_id)},
         assetBaseUrl: {json.dumps(asset_base)},
         publicBaseUrl: {json.dumps(settings.public_base_url.rstrip("/"))},
         sessionEndpointBase: {json.dumps(settings.public_base_url.rstrip("/") + "/ui-assets/session")},
