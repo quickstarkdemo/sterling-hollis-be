@@ -420,13 +420,14 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
         )
 
         template_uri = result.meta["openai/outputTemplate"]
-        token = template_uri.split("/")[-1].replace(".html", "")
+        token = result.meta["openai/widgetSessionId"]
         persisted = get_widget_state(token)
-        html = mcp_server.associate_widget_resource(token)
+        html = mcp_server.associate_widget_resource()
 
-        assert template_uri.startswith("ui://widgets/associate/")
+        assert template_uri == "ui://widgets/associate/workspace.html"
         assert persisted["kind"] == "associate_workspace"
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
+        assert persisted["payload"]["widgetSessionId"] == token
         assert persisted["payload"]["selectedProductIds"]
         assert "/ui-assets/widget.css" in html
         assert "/ui-assets/widget.js" in html
@@ -450,8 +451,10 @@ def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
             top_k=6,
         )
 
-        assert sms_result.meta["openai/outputTemplate"].startswith("ui://widgets/sms/")
-        assert merch_result.meta["openai/outputTemplate"].startswith("ui://widgets/merch/")
+        assert sms_result.meta["openai/outputTemplate"] == "ui://widgets/sms/review.html"
+        assert sms_result.meta["openai/widgetSessionId"]
+        assert merch_result.meta["openai/outputTemplate"] == "ui://widgets/merch/board.html"
+        assert merch_result.meta["openai/widgetSessionId"]
 
 
 def test_bootstrap_tools_return_full_payloads(monkeypatch):

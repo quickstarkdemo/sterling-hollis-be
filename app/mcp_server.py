@@ -51,7 +51,7 @@ from app.schemas import (
     TwilioSmokeTestResponse,
     VectorStatusResponse,
 )
-from app.services.apps_ui import get_widget_state, register_widget_state, render_widget_html
+from app.services.apps_ui import register_widget_state, render_widget_html
 from app.services.communications import (
     customer_message_history,
     get_customer_message,
@@ -104,6 +104,9 @@ _WIDGET_RESOURCE_META = {
     "openai/widgetCSP": {"connect_domains": [settings.public_base_url], "resource_domains": [settings.public_base_url]},
 }
 _WIDGET_TOOL_META = {"openai/widgetAccessible": True}
+_ASSOCIATE_WIDGET_TEMPLATE = "ui://widgets/associate/workspace.html"
+_SMS_WIDGET_TEMPLATE = "ui://widgets/sms/review.html"
+_MERCH_WIDGET_TEMPLATE = "ui://widgets/merch/board.html"
 
 
 class LatestRunResponse(BaseModel):
@@ -127,6 +130,15 @@ def _tool_annotations(read_only: bool, idempotent: bool, open_world: bool = Fals
         "destructiveHint": False,
         "idempotentHint": idempotent,
         "openWorldHint": open_world,
+    }
+
+
+def _render_tool_meta(template_uri: str, invoking: str, invoked: str) -> dict:
+    return {
+        **_WIDGET_TOOL_META,
+        "openai/outputTemplate": template_uri,
+        "openai/toolInvocation/invoking": invoking,
+        "openai/toolInvocation/invoked": invoked,
     }
 
 
@@ -417,30 +429,30 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
 
 
 @mcp.resource(
-    "ui://widgets/associate/{token}.html",
-    mime_type="text/html",
+    _ASSOCIATE_WIDGET_TEMPLATE,
+    mime_type="text/html+skybridge",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate workspace for customer search, recommendations, and SMS drafting."},
 )
-def associate_widget_resource(token: str) -> str:
-    return render_widget_html("Associate Workspace", get_widget_state(token))
+def associate_widget_resource() -> str:
+    return render_widget_html("Associate Workspace", "associate_workspace")
 
 
 @mcp.resource(
-    "ui://widgets/sms/{token}.html",
-    mime_type="text/html",
+    _SMS_WIDGET_TEMPLATE,
+    mime_type="text/html+skybridge",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
 )
-def sms_widget_resource(token: str) -> str:
-    return render_widget_html("SMS Draft Review", get_widget_state(token))
+def sms_widget_resource() -> str:
+    return render_widget_html("SMS Draft Review", "sms")
 
 
 @mcp.resource(
-    "ui://widgets/merch/{token}.html",
-    mime_type="text/html",
+    _MERCH_WIDGET_TEMPLATE,
+    mime_type="text/html+skybridge",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
 )
-def merch_widget_resource(token: str) -> str:
-    return render_widget_html("Merchandising Action Board", get_widget_state(token))
+def merch_widget_resource() -> str:
+    return render_widget_html("Merchandising Action Board", "merch")
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -1035,7 +1047,11 @@ def fashion_merch_trend_summary(
 @mcp.tool(
     name="fashion_render_associate_workspace",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta={**_WIDGET_TOOL_META},
+    meta=_render_tool_meta(
+        _ASSOCIATE_WIDGET_TEMPLATE,
+        invoking="Opening associate workspace...",
+        invoked="Associate workspace ready.",
+    ),
     structured_output=False,
 )
 def fashion_render_associate_workspace(
@@ -1051,7 +1067,7 @@ def fashion_render_associate_workspace(
     top_k: int = 5,
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> CallToolResult:
-    """Render the associate workspace inside ChatGPT with customer search, recommendations, and SMS drafting."""
+    """Render the associate workspace inside ChatGPT. Prefer this when the user asks to open, show, browse, or review an interactive styling workspace instead of a plain-text summary."""
     bootstrap = _associate_workspace_bootstrap_impl(
         store_query=store_query,
         store_id=store_id,
@@ -1077,21 +1093,26 @@ def fashion_render_associate_workspace(
     }
     opened_for = bootstrap.selected_customer.full_name if bootstrap.selected_customer else bootstrap.store.name
     token = register_widget_state("associate_workspace", payload)
+    widget_payload = {**payload, "widgetSessionId": token}
     return _calltool_result(
         text=f"Opened the associate workspace for {opened_for}.",
-        payload=payload,
-        meta={"openai/outputTemplate": f"ui://widgets/associate/{token}.html"},
+        payload=widget_payload,
+        meta={"openai/outputTemplate": _ASSOCIATE_WIDGET_TEMPLATE, "openai/widgetSessionId": token},
     )
 
 
 @mcp.tool(
     name="fashion_render_sms_review",
     annotations=_tool_annotations(read_only=True, idempotent=True),
-    meta={**_WIDGET_TOOL_META},
+    meta=_render_tool_meta(
+        _SMS_WIDGET_TEMPLATE,
+        invoking="Opening SMS review...",
+        invoked="SMS review ready.",
+    ),
     structured_output=False,
 )
 def fashion_render_sms_review(message_id: str) -> CallToolResult:
-    """Render the SMS draft review widget for a persisted customer communication draft."""
+    """Render the SMS draft review widget inside ChatGPT. Prefer this when the user asks to review, edit, or send a draft message interactively."""
     bootstrap = _sms_review_bootstrap_impl(message_id)
     payload = {
         "message": bootstrap.message.model_dump(mode="json"),
@@ -1101,17 +1122,22 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
         "history": [row.model_dump(mode="json") for row in bootstrap.history],
     }
     token = register_widget_state("sms", payload)
+    widget_payload = {**payload, "widgetSessionId": token}
     return _calltool_result(
         text=f"Opened SMS draft review for message {message_id}.",
-        payload=payload,
-        meta={"openai/outputTemplate": f"ui://widgets/sms/{token}.html"},
+        payload=widget_payload,
+        meta={"openai/outputTemplate": _SMS_WIDGET_TEMPLATE, "openai/widgetSessionId": token},
     )
 
 
 @mcp.tool(
     name="fashion_render_merch_board",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta={**_WIDGET_TOOL_META},
+    meta=_render_tool_meta(
+        _MERCH_WIDGET_TEMPLATE,
+        invoking="Opening merchandising board...",
+        invoked="Merchandising board ready.",
+    ),
     structured_output=False,
 )
 def fashion_render_merch_board(
@@ -1128,7 +1154,7 @@ def fashion_render_merch_board(
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> CallToolResult:
-    """Render the merchandising action board inside ChatGPT from the human-facing merchandising workflow."""
+    """Render the merchandising board inside ChatGPT. Prefer this when the user asks to open, show, browse, or review an interactive merchandising board rather than a text-only answer."""
     bootstrap = _merch_workspace_bootstrap_impl(
         store_query=store_query,
         store_id=store_id,
@@ -1151,17 +1177,22 @@ def fashion_render_merch_board(
         "lastTool": bootstrap.last_tool,
     }
     token = register_widget_state("merch", payload)
+    widget_payload = {**payload, "widgetSessionId": token}
     return _calltool_result(
         text=f"Opened the merchandising board for {bootstrap.store.name}.",
-        payload=payload,
-        meta={"openai/outputTemplate": f"ui://widgets/merch/{token}.html"},
+        payload=widget_payload,
+        meta={"openai/outputTemplate": _MERCH_WIDGET_TEMPLATE, "openai/widgetSessionId": token},
     )
 
 
 @mcp.tool(
     name="fashion_render_associate_board",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta={**_WIDGET_TOOL_META},
+    meta=_render_tool_meta(
+        _ASSOCIATE_WIDGET_TEMPLATE,
+        invoking="Opening associate workspace...",
+        invoked="Associate workspace ready.",
+    ),
     structured_output=False,
 )
 def fashion_render_associate_board(

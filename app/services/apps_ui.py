@@ -23,13 +23,14 @@ def _prune_widget_state(db) -> None:
 def register_widget_state(kind: str, payload: dict) -> str:
     token = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
+    stored_payload = {**payload, "widgetSessionId": token}
     with SessionLocal() as db:
         _prune_widget_state(db)
         db.add(
             UiSession(
                 id=token,
                 kind=kind,
-                state_json=payload,
+                state_json=stored_payload,
                 created_at=now,
                 expires_at=now + _WIDGET_TTL,
             )
@@ -52,32 +53,14 @@ def get_widget_state(token: str) -> dict:
         }
 
 
-def _summary_text(state: dict) -> str:
-    payload = state.get("payload", {})
-    kind = state.get("kind")
-    if kind == "associate_workspace":
-        store = payload.get("store", {})
-        customer = payload.get("selectedCustomer")
-        if customer:
-            return f"{store.get('name', 'Store')} • {customer.get('full_name', 'Customer')} • styling workspace"
-        return f"{store.get('name', 'Store')} • associate styling workspace"
-    if kind == "sms":
-        customer = payload.get("customer", {})
-        message = payload.get("message", {})
-        return f"{customer.get('full_name', 'Customer')} • draft {message.get('status', 'unknown')}"
-    if kind == "merch":
-        store = payload.get("store", {})
-        filters = payload.get("filters", {})
-        question = filters.get("question")
-        if question:
-            return f"{store.get('name', 'Store')} • {question}"
-        return f"{store.get('name', 'Store')} • merchandising board"
-    return "Operator workspace"
-
-
-def render_widget_html(title: str, state: dict) -> str:
+def render_widget_html(title: str, kind: str, summary: str | None = None) -> str:
     settings = get_settings()
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
+    widget_summary = summary or {
+        "associate_workspace": "Interactive associate workspace for customer search, recommendations, and SMS drafting.",
+        "sms": "Editable SMS review and test-send board.",
+        "merch": "Interactive merchandising board with actions, diagnostics, and trends.",
+    }.get(kind, "Operator workspace")
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -88,13 +71,14 @@ def render_widget_html(title: str, state: dict) -> str:
   </head>
   <body>
     <div id="fashion-widget-root" class="fashion-widget-shell"></div>
-    <script type="application/json" id="fashion-widget-state">{html.escape(json.dumps(state))}</script>
     <script>
       window.__FASHION_WIDGET__ = {{
         title: {json.dumps(title)},
-        summary: {json.dumps(_summary_text(state))},
+        kind: {json.dumps(kind)},
+        summary: {json.dumps(widget_summary)},
         assetBaseUrl: {json.dumps(asset_base)},
         publicBaseUrl: {json.dumps(settings.public_base_url.rstrip("/"))},
+        sessionEndpointBase: {json.dumps(settings.public_base_url.rstrip("/") + "/ui-assets/session")},
       }};
     </script>
     <script type="module" src="{html.escape(asset_base)}/widget.js"></script>

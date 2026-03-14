@@ -1,7 +1,6 @@
 const root = document.getElementById('fashion-widget-root');
-const rawState = document.getElementById('fashion-widget-state');
 const meta = window.__FASHION_WIDGET__ || {};
-const state = rawState ? JSON.parse(rawState.textContent || '{}') : { kind: 'unknown', payload: {} };
+const state = { kind: meta.kind || 'unknown', payload: {} };
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -46,6 +45,54 @@ async function callTool(name, args = {}) {
   return await window.openai.callTool(name, args);
 }
 
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeHydratedState(raw) {
+  if (!isPlainObject(raw)) return null;
+  const candidate = isPlainObject(raw.structuredContent) ? raw.structuredContent : raw;
+  if (!isPlainObject(candidate)) return null;
+  if (candidate.kind && isPlainObject(candidate.payload)) return candidate;
+  if (candidate.payload && isPlainObject(candidate.payload)) {
+    return { kind: meta.kind || 'unknown', payload: candidate.payload };
+  }
+  if (candidate.result && isPlainObject(candidate.result)) {
+    return normalizeHydratedState(candidate.result);
+  }
+  if (candidate.content && Array.isArray(candidate.content) && candidate.structuredContent) {
+    return normalizeHydratedState(candidate.structuredContent);
+  }
+  return { kind: meta.kind || 'unknown', payload: candidate };
+}
+
+async function hydrateState() {
+  const bridge = window.openai || {};
+  let hydrated = normalizeHydratedState(bridge.toolOutput) || normalizeHydratedState(bridge.widgetState);
+  let sessionId = hydrated?.payload?.widgetSessionId || hydrated?.widgetSessionId || meta.widgetSessionId;
+
+  if (!hydrated && sessionId && meta.sessionEndpointBase) {
+    try {
+      const response = await fetch(`${meta.sessionEndpointBase}/${encodeURIComponent(sessionId)}.json`, {
+        credentials: 'omit',
+      });
+      if (response.ok) hydrated = normalizeHydratedState(await response.json());
+    } catch {
+      // Best-effort rehydration only.
+    }
+  }
+
+  if (hydrated) {
+    state.kind = hydrated.kind || state.kind;
+    state.payload = hydrated.payload || {};
+    sessionId = state.payload.widgetSessionId || sessionId;
+  }
+
+  if (sessionId && !state.payload.widgetSessionId) {
+    state.payload.widgetSessionId = sessionId;
+  }
+}
+
 async function syncWidgetState() {
   if (window.openai && window.openai.setWidgetState) {
     try {
@@ -80,8 +127,24 @@ function hero() {
   return el('section', { className: 'fw-hero' },
     el('div', { className: 'fw-kicker', text: state.kind.replaceAll('_', ' ') }),
     el('h1', { className: 'fw-title', text: meta.title || 'Operator Workspace' }),
-    el('p', { className: 'fw-subtitle', text: meta.summary || '' }),
+    el('p', { className: 'fw-subtitle', text: meta.summary || defaultSummary() }),
   );
+}
+
+function defaultSummary() {
+  if (state.kind === 'associate_workspace') {
+    const customer = state.payload.selectedCustomer;
+    return customer ? `${customer.full_name} • associate styling workspace` : 'Associate styling workspace';
+  }
+  if (state.kind === 'sms') {
+    const customer = state.payload.customer;
+    return customer ? `${customer.full_name} • SMS review` : 'SMS review workspace';
+  }
+  if (state.kind === 'merch') {
+    const store = state.payload.store;
+    return store ? `${store.name} • merchandising board` : 'Merchandising board';
+  }
+  return 'Operator workspace';
 }
 
 function productCard(product, selectedIds = [], onToggle = null) {
@@ -618,7 +681,8 @@ async function renderMerchBoard() {
   );
 }
 
-function boot() {
+async function boot() {
+  await hydrateState();
   if (state.kind === 'associate_workspace') return renderAssociateWorkspace();
   if (state.kind === 'sms') return renderSmsReview();
   if (state.kind === 'merch') return renderMerchBoard();

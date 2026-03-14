@@ -3,13 +3,14 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.mcp_server import mcp as fashion_mcp
 from app.routers.admin_synthetic import router as admin_router
 from app.routers.recommendations import router as rec_router
+from app.services.apps_ui import get_widget_state
 
 
 def create_app() -> FastAPI:
@@ -26,6 +27,13 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/ui-assets/session/{token}.json")
+    def widget_session(token: str) -> dict:
+        try:
+            return get_widget_state(token)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     app.include_router(admin_router)
     app.include_router(rec_router)
