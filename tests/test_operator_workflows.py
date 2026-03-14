@@ -425,7 +425,7 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
 
         assert template_uri == f"ui://widgets/associate/workspace/{token}.html"
         assert persisted["kind"] == "associate_workspace"
-        assert result.structuredContent is None
+        assert result.structuredContent == {"kind": "associate_workspace", "widgetSessionId": token}
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
         assert persisted["payload"]["store"]["id"] == "1001"
         assert persisted["payload"]["widgetSessionId"] == token
@@ -456,10 +456,10 @@ def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
         sms_token = sms_result.meta["openai/widgetSessionId"]
         merch_token = merch_result.meta["openai/widgetSessionId"]
         assert sms_result.meta["openai/outputTemplate"] == f"ui://widgets/sms/review/{sms_token}.html"
-        assert sms_result.structuredContent is None
+        assert sms_result.structuredContent == {"kind": "sms", "widgetSessionId": sms_token}
         assert sms_token
         assert merch_result.meta["openai/outputTemplate"] == f"ui://widgets/merch/board/{merch_token}.html"
-        assert merch_result.structuredContent is None
+        assert merch_result.structuredContent == {"kind": "merch", "widgetSessionId": merch_token}
         assert merch_token
 
 
