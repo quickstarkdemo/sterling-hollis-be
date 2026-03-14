@@ -132,13 +132,21 @@ function normalizeHydratedState(raw) {
   return { kind: meta.kind || 'unknown', payload };
 }
 
+function needsSessionFetch(hydrated) {
+  if (!hydrated || !isPlainObject(hydrated.payload)) return false;
+  const keys = Object.keys(hydrated.payload);
+  if (!keys.length) return true;
+  if (keys.length === 1 && keys[0] === 'widgetSessionId') return true;
+  return keys.every((key) => key === 'widgetSessionId' || key === 'kind');
+}
+
 async function hydrateState() {
   const bridge = window.openai || {};
   let hydrated = normalizeHydratedState(bridge.toolOutput) || normalizeHydratedState(bridge.widgetState);
   let sessionId = hydrated?.payload?.widgetSessionId || hydrated?.widgetSessionId || meta.widgetSessionId;
 
   for (let attempt = 0; attempt < HYDRATION_ATTEMPTS; attempt += 1) {
-    if (!hydrated && sessionId && meta.sessionEndpointBase) {
+    if ((needsSessionFetch(hydrated) || !hydrated) && sessionId && meta.sessionEndpointBase) {
       try {
         const response = await fetch(`${meta.sessionEndpointBase}/${encodeURIComponent(sessionId)}.json`, {
           credentials: 'omit',
@@ -173,6 +181,11 @@ async function hydrateState() {
 function applyHydratedState(raw) {
   const hydrated = normalizeHydratedState(raw);
   if (!hydrated) return false;
+  if (needsSessionFetch(hydrated)) {
+    state.kind = hydrated.kind || state.kind;
+    state.payload.widgetSessionId = hydrated.payload?.widgetSessionId || state.payload.widgetSessionId;
+    return false;
+  }
   state.kind = hydrated.kind || state.kind;
   state.payload = hydrated.payload || {};
   if (state.payload.widgetSessionId || hydrated.widgetSessionId) {
