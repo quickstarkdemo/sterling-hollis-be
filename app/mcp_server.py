@@ -103,7 +103,11 @@ _WIDGET_RESOURCE_META = {
     "openai/widgetPrefersBorder": True,
     "openai/widgetCSP": {"connect_domains": [settings.public_base_url], "resource_domains": [settings.public_base_url]},
 }
-_WIDGET_TOOL_META = {"openai/widgetAccessible": True}
+_WIDGET_TOOL_META = {
+    "openai/widgetAccessible": True,
+    "openai/visibility": "public",
+    "ui": {"visibility": "public"},
+}
 _ASSOCIATE_WIDGET_TEMPLATE = "ui://widgets/associate/workspace.html"
 _SMS_WIDGET_TEMPLATE = "ui://widgets/sms/review.html"
 _MERCH_WIDGET_TEMPLATE = "ui://widgets/merch/board.html"
@@ -981,6 +985,7 @@ def fashion_merch_workspace_bootstrap(
 @mcp.tool(
     name="fashion_merch_diagnostics",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
 )
 def fashion_merch_diagnostics(
     store_query: str | None = None,
@@ -1014,6 +1019,7 @@ def fashion_merch_diagnostics(
 @mcp.tool(
     name="fashion_merch_trend_summary",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
 )
 def fashion_merch_trend_summary(
     store_query: str | None = None,

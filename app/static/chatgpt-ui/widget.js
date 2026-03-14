@@ -45,10 +45,19 @@ function payload(result) {
 
 async function callTool(name, args = {}) {
   if (!window.openai || !window.openai.callTool) {
-    alert('Tool bridge is unavailable in this environment.');
-    return null;
+    return { __toolError: 'Tool bridge is unavailable in this environment.' };
   }
-  return await window.openai.callTool(name, args);
+  try {
+    return await window.openai.callTool(name, args);
+  } catch (error) {
+    return {
+      __toolError: error instanceof Error ? error.message : 'Tool invocation failed.',
+    };
+  }
+}
+
+function toolError(result) {
+  return result && typeof result === 'object' ? result.__toolError || null : null;
 }
 
 function isPlainObject(value) {
@@ -162,6 +171,44 @@ function money(value) {
   return `$${Number(value).toFixed(2)}`;
 }
 
+function compactNumber(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: Math.abs(numeric) >= 1000 ? 0 : 2,
+  }).format(numeric);
+}
+
+function humanizeToken(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const raw = String(value).trim();
+  const aliases = {
+    womens_apparel: "Women's Apparel",
+    mens_apparel: "Men's Apparel",
+    under_250: 'Under $250',
+    '250_500': '$250-$500',
+    '500_1000': '$500-$1000',
+    '1000_plus': '$1000+',
+    peer_and_prior_period: 'Peer + Prior Period',
+    prior_period: 'Prior Period',
+    state_and_profile: 'State + Profile',
+    profile_type: 'Profile Only',
+    all_profile_matches: 'All Profile Matches',
+  };
+  if (aliases[raw]) return aliases[raw];
+  return raw
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function kpi(label, value) {
+  return el('div', { className: 'fw-kpi' },
+    el('span', { className: 'fw-kpi-label', text: label }),
+    el('strong', { className: 'fw-kpi-value', text: value }),
+  );
+}
+
 function sectionTitle(eyebrow, title, subtitle) {
   return el('div', { className: 'fw-section-head' },
     el('div', {},
@@ -174,7 +221,7 @@ function sectionTitle(eyebrow, title, subtitle) {
 
 function hero() {
   return el('section', { className: 'fw-hero' },
-    el('div', { className: 'fw-kicker', text: state.kind.replaceAll('_', ' ') }),
+    el('div', { className: 'fw-kicker', text: humanizeToken(state.kind) }),
     el('h1', { className: 'fw-title', text: meta.title || 'Operator Workspace' }),
     el('p', { className: 'fw-subtitle', text: meta.summary || defaultSummary() }),
   );
@@ -206,6 +253,16 @@ function renderFailure(message, detail = '') {
   );
 }
 
+function setUiNotice(payloadState, message, tone = 'info') {
+  payloadState.uiNotice = message ? { message, tone } : null;
+}
+
+function noticeBanner(payloadState) {
+  if (!payloadState.uiNotice?.message) return null;
+  const tone = payloadState.uiNotice.tone === 'error' ? 'error' : 'info';
+  return el('div', { className: `fw-banner ${tone === 'error' ? 'error' : ''}`, text: payloadState.uiNotice.message });
+}
+
 function productCard(product, selectedIds = [], onToggle = null) {
   const selected = selectedIds.includes(product.product_id);
   const actions = [];
@@ -228,7 +285,7 @@ function productCard(product, selectedIds = [], onToggle = null) {
       el('img', { src: product.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`, alt: product.title })
     ),
     el('div', { className: 'fw-chip-row' },
-      el('span', { className: 'fw-chip subtle', text: (product.category || '').replaceAll('_', ' ') || 'curated edit' }),
+      el('span', { className: 'fw-chip subtle', text: humanizeToken(product.category || 'curated edit') }),
       product.availability ? el('span', { className: 'fw-chip subtle', text: product.availability }) : null,
     ),
     el('h3', { className: 'fw-card-title', text: product.title }),
@@ -241,7 +298,7 @@ function productCard(product, selectedIds = [], onToggle = null) {
 function selectedCard(product, onRemove = null) {
   return el('article', { className: 'fw-selected-card' },
     el('img', { src: product.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`, alt: product.title }),
-    el('div', { className: 'fw-kicker', text: (product.category || '').replaceAll('_', ' ') }),
+    el('div', { className: 'fw-kicker', text: humanizeToken(product.category) }),
     el('h3', { className: 'fw-card-title', text: product.title }),
     el('div', { className: 'fw-meta', text: `${product.brand} • ${money(product.price)}` }),
     onRemove ? el('div', { className: 'fw-card-actions' },
@@ -254,16 +311,28 @@ function customerCandidateCard(customer, onSelect) {
   return el('article', { className: 'fw-result fw-customer-card' },
     el('div', { className: 'fw-customer-top' },
       el('div', {},
-        el('div', { className: 'fw-kicker', text: customer.match_reason }),
+        el('div', { className: 'fw-kicker', text: humanizeToken(customer.match_reason) }),
         el('div', { className: 'fw-customer-name', text: customer.full_name }),
       ),
-      el('div', { className: 'fw-score', text: `score ${Number(customer.match_score || 0).toFixed(1)}` }),
+      el('div', { className: 'fw-score', text: `match ${Number(customer.match_score || 0).toFixed(1)}` }),
     ),
     el('div', { className: 'fw-meta', text: `${customer.email} • ${customer.masked_phone || maskPhone(customer.phone_e164)}` }),
-    el('div', { className: 'fw-meta', text: `${customer.home_store_name} • ${customer.loyalty_tier}` }),
+    el('div', { className: 'fw-meta', text: `${customer.home_store_name} • ${humanizeToken(customer.loyalty_tier)}` }),
     el('div', { className: 'fw-card-actions' },
       el('button', { className: 'fw-button', text: 'Open Styling Session', onclick: () => onSelect(customer), type: 'button' })
     ),
+  );
+}
+
+function associateSummaryKpis(payloadState, filters, recommendations) {
+  const selectedCustomer = payloadState.selectedCustomer;
+  if (!selectedCustomer) return null;
+  const budget = filters.budget_max ? `Up to ${money(filters.budget_max)}` : 'Open budget';
+  return el('div', { className: 'fw-kpi-strip associate' },
+    kpi('Loyalty tier', humanizeToken(selectedCustomer.loyalty_tier)),
+    kpi('Retrieval mode', humanizeToken(filters.retrieval_mode || 'auto')),
+    kpi('Budget', budget),
+    kpi('Recommended', String(recommendations.length || 0)),
   );
 }
 
@@ -303,22 +372,41 @@ async function renderAssociateWorkspace() {
     return selectedProductIds.map((id) => byId.get(id)).filter(Boolean);
   }
 
-  function toggleProduct(productId) {
+  async function toggleProduct(productId) {
     const next = new Set(payloadState.selectedProductIds || []);
     if (next.has(productId)) next.delete(productId);
     else next.add(productId);
     payloadState.selectedProductIds = [...next];
-    syncWidgetState();
-    renderAssociateWorkspace();
+    setUiNotice(payloadState, `${payloadState.selectedProductIds.length} products selected for the draft.`);
+    await syncWidgetState();
+    await renderAssociateWorkspace();
   }
 
   async function searchCustomers() {
     const query = searchInput.value.trim();
-    if (!query) return;
+    if (!query) {
+      setUiNotice(payloadState, 'Enter a name, email, or phone number to search.', 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
     payloadState.customerQuery = query;
+    setUiNotice(payloadState, `Searching for ${query}…`);
+    await syncWidgetState();
     const result = await callTool('fashion_lookup_customer', { query, limit: 10 });
+    if (toolError(result)) {
+      setUiNotice(payloadState, toolError(result), 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
     const resolved = payload(result);
-    if (!resolved) return;
+    if (!resolved) {
+      setUiNotice(payloadState, 'Search returned no usable payload.', 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
     if (resolved.mode === 'resolved' && resolved.resolved) {
       const bootstrapResult = await callTool('fashion_associate_workspace_bootstrap', {
         store_id: payloadState.store.id,
@@ -337,6 +425,7 @@ async function renderAssociateWorkspace() {
           recommendation: bootstrap.recommendation,
           lastDraft: bootstrap.last_draft,
           selectedProductIds: bootstrap.selected_product_ids || [],
+          uiNotice: { message: `Opened styling session for ${bootstrap.selected_customer?.full_name || query}.`, tone: 'info' },
         };
         await syncWidgetState();
         await renderAssociateWorkspace();
@@ -347,6 +436,7 @@ async function renderAssociateWorkspace() {
     payloadState.selectedCustomer = null;
     payloadState.recommendation = null;
     payloadState.selectedProductIds = [];
+    setUiNotice(payloadState, `${payloadState.customerResults.length} customer matches found. Choose one to continue.`);
     await syncWidgetState();
     await renderAssociateWorkspace();
   }
@@ -368,18 +458,32 @@ async function renderAssociateWorkspace() {
       recommendation: bootstrap.recommendation,
       lastDraft: bootstrap.last_draft,
       selectedProductIds: bootstrap.selected_product_ids || [],
+      uiNotice: { message: `Loaded recommendations for ${bootstrap.selected_customer?.full_name || candidate.full_name}.`, tone: 'info' },
     };
     await syncWidgetState();
     await renderAssociateWorkspace();
   }
 
   async function refreshRecommendations() {
-    if (!payloadState.selectedCustomer) return;
+    if (!payloadState.selectedCustomer) {
+      setUiNotice(payloadState, 'Select a customer before refreshing recommendations.', 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
+    setUiNotice(payloadState, 'Refreshing recommendations…');
+    await syncWidgetState();
     const bootstrapResult = await callTool('fashion_associate_workspace_bootstrap', {
       store_id: payloadState.store.id,
       customer_id: payloadState.selectedCustomer.id,
       ...currentFilterArgs(),
     });
+    if (toolError(bootstrapResult)) {
+      setUiNotice(payloadState, toolError(bootstrapResult), 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
     const bootstrap = payload(bootstrapResult);
     if (!bootstrap) return;
     state.payload = {
@@ -390,29 +494,59 @@ async function renderAssociateWorkspace() {
       recommendation: bootstrap.recommendation,
       lastDraft: bootstrap.last_draft,
       selectedProductIds: bootstrap.selected_product_ids || [],
+      uiNotice: { message: `Recommendations refreshed for ${bootstrap.selected_customer?.full_name || payloadState.selectedCustomer.full_name}.`, tone: 'info' },
     };
     await syncWidgetState();
     await renderAssociateWorkspace();
   }
 
   async function draftSms() {
-    if (!payloadState.selectedCustomer) return;
+    if (!payloadState.selectedCustomer) {
+      setUiNotice(payloadState, 'Select a customer before drafting SMS.', 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
+    setUiNotice(payloadState, 'Creating draft…');
+    await syncWidgetState();
     const result = await callTool('fashion_prepare_customer_sms', {
       store_id: payloadState.store.id,
       customer_id: payloadState.selectedCustomer.id,
       ...currentFilterArgs(),
       selected_product_ids: payloadState.selectedProductIds,
     });
+    if (toolError(result)) {
+      setUiNotice(payloadState, toolError(result), 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
     const draft = payload(result);
-    if (!draft) return;
+    if (!draft) {
+      setUiNotice(payloadState, 'Draft creation returned no usable payload.', 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
     payloadState.lastDraft = draft;
+    setUiNotice(payloadState, `Draft ${draft.message.id} is ready for review.`);
     await syncWidgetState();
     await renderAssociateWorkspace();
   }
 
   async function openDraftReview() {
-    if (!payloadState.lastDraft?.message?.id) return;
-    await callTool('fashion_render_sms_review', { message_id: payloadState.lastDraft.message.id });
+    if (!payloadState.lastDraft?.message?.id) {
+      setUiNotice(payloadState, 'Create a draft before opening SMS review.', 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+      return;
+    }
+    const result = await callTool('fashion_render_sms_review', { message_id: payloadState.lastDraft.message.id });
+    if (toolError(result)) {
+      setUiNotice(payloadState, toolError(result), 'error');
+      await syncWidgetState();
+      await renderAssociateWorkspace();
+    }
   }
 
   const selectedCustomer = payloadState.selectedCustomer;
@@ -432,7 +566,8 @@ async function renderAssociateWorkspace() {
     ),
     el('section', { className: 'fw-panel' },
       sectionTitle('session controls', 'Styling Filters', 'Structured requests stay fast by default and skip vector retrieval when they already have enough context.'),
-      el('div', { className: 'fw-grid two' },
+      noticeBanner(payloadState),
+      el('div', { className: 'fw-grid associate-filters' },
         el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Occasion' }), occasionInput),
         el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Top picks' }), topKInput),
         el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Budget min' }), budgetMinInput),
@@ -447,16 +582,17 @@ async function renderAssociateWorkspace() {
     el('section', { className: 'fw-panel' },
       sectionTitle('current client', selectedCustomer ? selectedCustomer.full_name : 'No customer selected', selectedCustomer ? `${selectedCustomer.email} • ${maskPhone(selectedCustomer.phone_e164)} • ${selectedCustomer.home_store_name}` : 'Select a customer to start a styling session.'),
       selectedCustomer ? el('div', { className: 'fw-chip-row' },
-        el('span', { className: 'fw-chip', text: selectedCustomer.loyalty_tier }),
+        el('span', { className: 'fw-chip', text: humanizeToken(selectedCustomer.loyalty_tier) }),
         el('span', { className: 'fw-chip subtle', text: `Store ${payloadState.store.name}` }),
-        el('span', { className: 'fw-chip subtle', text: `Mode ${filters.retrieval_mode || 'auto'}` }),
+        el('span', { className: 'fw-chip subtle', text: `${humanizeToken(filters.retrieval_mode || 'auto')} retrieval` }),
       ) : el('div', { className: 'fw-empty', text: 'The associate workspace stays empty until a customer is selected.' }),
+      selectedCustomer ? associateSummaryKpis(payloadState, filters, recommendations) : null,
       payloadState.lastDraft ? el('div', { className: 'fw-banner', text: `Draft ${payloadState.lastDraft.message.id} is ready. Live sends still go only to the configured test number.` }) : null,
     ),
   );
 
   const recommendationCards = recommendations.length
-    ? recommendations.map((product) => productCard(product, payloadState.selectedProductIds || [], toggleProduct))
+    ? recommendations.map((product) => productCard(product, payloadState.selectedProductIds || [], (productId) => { void toggleProduct(productId); }))
     : [el('div', { className: 'fw-empty', text: 'Recommendations appear after selecting a customer or resolving an exact lookup.' })];
 
   const selectedCards = selectedProductsFromRecommendations();
@@ -468,7 +604,7 @@ async function renderAssociateWorkspace() {
     el('section', { className: 'fw-panel' },
       sectionTitle('selected products', 'Client Tray', selectedCards.length ? `${selectedCards.length} products selected for draft handoff` : 'Select products from the recommendation cards.'),
       el('div', { className: 'fw-selected-tray' },
-        ...(selectedCards.length ? selectedCards.map((product) => selectedCard(product, toggleProduct)) : [el('div', { className: 'fw-empty', text: 'No products selected yet.' })])
+        ...(selectedCards.length ? selectedCards.map((product) => selectedCard(product, (productId) => { void toggleProduct(productId); })) : [el('div', { className: 'fw-empty', text: 'No products selected yet.' })])
       ),
     ),
   );
@@ -487,11 +623,12 @@ async function renderSmsReview() {
   const textarea = el('textarea', { className: 'fw-textarea' });
   textarea.value = message.body_text || '';
 
-  function removeProduct(productId) {
+  async function removeProduct(productId) {
     payloadState.selectedProducts = selectedProducts.filter((item) => item.product_id !== productId);
     payloadState.message.product_ids = payloadState.selectedProducts.map((item) => item.product_id);
-    syncWidgetState();
-    renderSmsReview();
+    setUiNotice(payloadState, `${payloadState.selectedProducts.length} products remain in this draft.`);
+    await syncWidgetState();
+    await renderSmsReview();
   }
 
   async function saveDraft() {
@@ -500,18 +637,42 @@ async function renderSmsReview() {
       body_text: textarea.value,
       selected_product_ids: (payloadState.selectedProducts || []).map((item) => item.product_id),
     });
+    if (toolError(result)) {
+      setUiNotice(payloadState, toolError(result), 'error');
+      await syncWidgetState();
+      await renderSmsReview();
+      return;
+    }
     const updated = payload(result);
-    if (!updated) return;
+    if (!updated) {
+      setUiNotice(payloadState, 'Draft update returned no usable payload.', 'error');
+      await syncWidgetState();
+      await renderSmsReview();
+      return;
+    }
     payloadState.message = updated.message;
+    setUiNotice(payloadState, `Draft ${updated.message.id} saved.`);
     await syncWidgetState();
     await renderSmsReview();
   }
 
   async function sendDraft() {
     const result = await callTool('fashion_send_customer_sms', { message_id: message.id });
+    if (toolError(result)) {
+      setUiNotice(payloadState, toolError(result), 'error');
+      await syncWidgetState();
+      await renderSmsReview();
+      return;
+    }
     const updated = payload(result);
-    if (!updated) return;
+    if (!updated) {
+      setUiNotice(payloadState, 'Send returned no usable payload.', 'error');
+      await syncWidgetState();
+      await renderSmsReview();
+      return;
+    }
     payloadState.message = updated;
+    setUiNotice(payloadState, `Message ${updated.id} sent to the configured test number.`);
     await loadHistory();
   }
 
@@ -529,6 +690,7 @@ async function renderSmsReview() {
         el('section', { className: 'fw-panel' },
           sectionTitle('draft review', 'SMS Review', `${payloadState.customer.full_name} • ${payloadState.customer.email} • ${maskPhone(payloadState.customer.phone_e164)}`),
           el('div', { className: 'fw-banner', text: `This flow is operating in test mode. The live destination is ${message.destination_e164}, not the customer record.` }),
+          noticeBanner(payloadState),
           el('div', { className: 'fw-chip-row' },
             el('span', { className: 'fw-chip', text: `Status ${message.status}` }),
             message.twilio_message_sid ? el('span', { className: 'fw-chip subtle', text: `SID ${message.twilio_message_sid}` }) : null,
@@ -546,7 +708,7 @@ async function renderSmsReview() {
         el('section', { className: 'fw-panel' },
           sectionTitle('selected products', 'Included Products', selectedProducts.length ? `${selectedProducts.length} products in this message` : 'No selected products'),
           el('div', { className: 'fw-selected-tray' },
-            ...(selectedProducts.length ? selectedProducts.map((product) => selectedCard(product, removeProduct)) : [el('div', { className: 'fw-empty', text: 'No products selected for this draft.' })])
+            ...(selectedProducts.length ? selectedProducts.map((product) => selectedCard(product, (productId) => { void removeProduct(productId); })) : [el('div', { className: 'fw-empty', text: 'No products selected for this draft.' })])
           ),
         ),
         el('section', { className: 'fw-panel' },
@@ -577,7 +739,7 @@ async function renderMerchBoard() {
   }
   const filters = payloadState.filters || {};
   const questionInput = el('input', { className: 'fw-input', placeholder: 'What should this store feature, promote, or deprioritize?', value: filters.question || '' });
-  const categoryInput = el('input', { className: 'fw-input', placeholder: 'womens_apparel, handbags...', value: filters.category || '' });
+  const categoryInput = el('input', { className: 'fw-input', placeholder: "Women's apparel, handbags...", value: filters.category || '' });
   const brandInput = el('input', { className: 'fw-input', placeholder: 'Brand', value: filters.brand || '' });
   const occasionInput = el('input', { className: 'fw-input', placeholder: 'wedding, vacation, workwear', value: filters.occasion || '' });
   const lookbackInput = el('input', { className: 'fw-input', type: 'number', min: '7', max: '730', value: filters.lookback_days ?? 90 });
@@ -627,11 +789,25 @@ async function renderMerchBoard() {
 
   async function refresh(toolName) {
     payloadState.filters = nextFilterState();
+    setUiNotice(payloadState, `Loading ${toolName.replace('fashion_', '').replaceAll('_', ' ')}…`);
+    await syncWidgetState();
     const result = await callTool(toolName, { store_id: payloadState.store.id, ...payloadState.filters });
+    if (toolError(result)) {
+      setUiNotice(payloadState, toolError(result), 'error');
+      await syncWidgetState();
+      await renderMerchBoard();
+      return;
+    }
     const data = payload(result);
-    if (!data) return;
+    if (!data) {
+      setUiNotice(payloadState, `The ${toolName.replace('fashion_', '').replaceAll('_', ' ')} tool returned no usable payload.`, 'error');
+      await syncWidgetState();
+      await renderMerchBoard();
+      return;
+    }
     payloadState.lastTool = toolName;
     payloadState.lastResult = data;
+    setUiNotice(payloadState, `${humanizeToken(toolName.replace('fashion_merch_', '').replace('_summary', ''))} loaded.`);
     await syncWidgetState();
     await renderMerchBoard();
   }
@@ -658,10 +834,16 @@ async function renderMerchBoard() {
                       brand: item.brand,
                       category: item.category,
                       price: item.price,
-                      availability: item.price_band ? item.price_band.replaceAll('_', ' ') : null,
+                      availability: item.price_band ? humanizeToken(item.price_band) : null,
                       link: item.link,
                       image_url: item.image_url,
-                      reasons: [item.rationale, `Peer delta ${item.peer_delta}`, item.prior_period_delta !== null && item.prior_period_delta !== undefined ? `Prior-period delta ${item.prior_period_delta}` : null].filter(Boolean),
+                      reasons: [
+                        item.rationale,
+                        `Peer delta ${compactNumber(item.peer_delta)}`,
+                        item.prior_period_delta !== null && item.prior_period_delta !== undefined
+                          ? `Prior-period delta ${compactNumber(item.prior_period_delta)}`
+                          : null,
+                      ].filter(Boolean),
                     }))
                   : [el('div', { className: 'fw-empty', text: 'No products in this action group for the current filters.' })]
                 ),
@@ -683,9 +865,9 @@ async function renderMerchBoard() {
             el('h3', { className: 'fw-card-title', text: item.subject }),
             el('p', { className: 'fw-meta', text: item.rationale }),
             el('div', { className: 'fw-kpi-strip' },
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Current' }), el('strong', { text: String(item.current_value) })),
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Peer' }), el('strong', { text: item.peer_value ?? '—' })),
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Prior' }), el('strong', { text: item.prior_value ?? '—' })),
+              kpi('Current', compactNumber(item.current_value)),
+              kpi('Peer', compactNumber(item.peer_value)),
+              kpi('Prior', compactNumber(item.prior_value)),
             ),
           )
         ))
@@ -698,14 +880,14 @@ async function renderMerchBoard() {
           el('article', { className: 'fw-result' },
             el('div', { className: 'fw-chip-row' },
               el('span', { className: 'fw-chip', text: `Δ ${item.pct_change}%` }),
-              el('span', { className: 'fw-chip subtle', text: activeResult.compare_mode || 'comparison' }),
+              el('span', { className: 'fw-chip subtle', text: humanizeToken(activeResult.compare_mode || 'comparison') }),
             ),
             el('h3', { className: 'fw-card-title', text: item.subject }),
             el('p', { className: 'fw-meta', text: item.rationale }),
             el('div', { className: 'fw-kpi-strip' },
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Current' }), el('strong', { text: String(item.current_value) })),
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Peer' }), el('strong', { text: item.peer_value ?? '—' })),
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Prior' }), el('strong', { text: item.prior_value ?? '—' })),
+              kpi('Current', compactNumber(item.current_value)),
+              kpi('Peer', compactNumber(item.peer_value)),
+              kpi('Prior', compactNumber(item.prior_value)),
             ),
           )
         ))
@@ -718,8 +900,9 @@ async function renderMerchBoard() {
         el('div', { className: 'fw-column' },
           el('section', { className: 'fw-panel' },
             sectionTitle('filters', 'Merchandising Board', `Store ${payloadState.store.name} • peer-aware and prior-period aware analysis`),
-            el('div', { className: 'fw-grid two' },
-              el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Question' }), questionInput),
+            noticeBanner(payloadState),
+            el('div', { className: 'fw-grid merch-filters' },
+              el('div', { className: 'fw-field fw-span-full' }, el('label', { className: 'fw-label', text: 'Question' }), questionInput),
               el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Category' }), categoryInput),
               el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Brand' }), brandInput),
               el('div', { className: 'fw-field' }, el('label', { className: 'fw-label', text: 'Price band' }), priceBandSelect),
@@ -738,9 +921,9 @@ async function renderMerchBoard() {
           activeResult ? el('section', { className: 'fw-panel' },
             sectionTitle('context', 'Current Frame', activeResult.summary || activeResult.parsed_intent || 'Commercial context'),
             el('div', { className: 'fw-kpi-strip' },
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Compare mode' }), el('strong', { text: activeResult.compare_mode || filters.compare_mode || '—' })),
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Peer stores' }), el('strong', { text: String((activeResult.peer_store_ids || []).length || 0) })),
-              el('div', { className: 'fw-kpi' }, el('span', { className: 'fw-small', text: 'Window' }), el('strong', { text: `${activeResult.lookback_days || filters.lookback_days || 90}d` })),
+              kpi('Compare mode', humanizeToken(activeResult.compare_mode || filters.compare_mode || '—')),
+              kpi('Peer stores', String((activeResult.peer_store_ids || []).length || 0)),
+              kpi('Window', `${activeResult.lookback_days || filters.lookback_days || 90}d`),
             ),
           ) : null,
         ),
