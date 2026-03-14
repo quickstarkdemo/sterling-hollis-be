@@ -25,6 +25,8 @@ Synthetic fashion data platform with:
 - Editable SMS drafts, history, and Twilio smoke-test support
 - Postgres-backed widget session persistence for Apps SDK render flows
 - Apps SDK render tools for associate workspace, SMS review, and merch board
+- External ChatGPT UI bundle served from `/ui-assets` instead of inline widget HTML
+- Local original demo image assets for recommendation and merchandising cards
 - Associate/SMS/merch bootstrap tools to reduce initial MCP round-trips
 - Automatic fast-path recommendation mode for structured associate requests
 - OpenAI-commerce-style product feed endpoint
@@ -542,6 +544,12 @@ The repo now includes Apps SDK-ready render tools layered on top of the human-fi
 - merchandising board with slice filters
 
 These widgets are mounted as MCP resources and are intended for ChatGPT app usage. Widget state is persisted in Postgres through `ui_sessions`, so a rendered workspace survives process restarts until its TTL expires. They rely on `PUBLIC_BASE_URL` for widget CSP and remote access.
+
+Implementation notes:
+- widget HTML is now a thin shell that loads a bundled JS/CSS UI from `/ui-assets`
+- recommendation and merchandising cards are enriched with local demo imagery
+- associate workspace supports explicit product selection before SMS draft creation
+- SMS review shows selected product cards and keeps live sending pinned to `TWILIO_TEST_TO_NUMBER`
 
 ## Testing
 

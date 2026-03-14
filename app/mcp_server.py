@@ -55,6 +55,7 @@ from app.services.apps_ui import get_widget_state, register_widget_state, render
 from app.services.communications import (
     customer_message_history,
     get_customer_message,
+    get_selected_products_for_message,
     prepare_customer_sms,
     send_customer_sms,
     twilio_smoke_test,
@@ -100,7 +101,7 @@ mcp = FastMCP(
 
 _WIDGET_RESOURCE_META = {
     "openai/widgetPrefersBorder": True,
-    "openai/widgetCSP": {"connect_domains": [settings.public_base_url], "resource_domains": []},
+    "openai/widgetCSP": {"connect_domains": [settings.public_base_url], "resource_domains": [settings.public_base_url]},
 }
 _WIDGET_TOOL_META = {"openai/widgetAccessible": True}
 
@@ -220,6 +221,7 @@ def _associate_workspace_bootstrap_impl(
         resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
         selected_customer = None
         recommendation = None
+        selected_product_ids: list[str] = []
         if customer_email or customer_id or customer_phone_e164 or phone_last4:
             recommendation = _associate_recommendation_impl(
                 store_query=store_query,
@@ -236,6 +238,7 @@ def _associate_workspace_bootstrap_impl(
             )
             selected_customer = recommendation.customer
             effective_retrieval_mode = recommendation.retrieval_mode
+            selected_product_ids = [item.product_id for item in recommendation.recommendation.recommendations[:3]]
         else:
             effective_retrieval_mode = _resolve_retrieval_mode(
                 retrieval_mode,
@@ -256,14 +259,22 @@ def _associate_workspace_bootstrap_impl(
             ),
             selected_customer=selected_customer,
             recommendation=recommendation,
+            selected_product_ids=selected_product_ids,
         )
 
 
 def _sms_review_bootstrap_impl(message_id: str) -> SmsReviewBootstrapResponse:
     with SessionLocal() as db:
         message, customer, store = get_customer_message(db, message_id)
+        selected_products = get_selected_products_for_message(db, message_id)
         history = customer_message_history(db, customer_id=customer.id, limit=10).messages
-        return SmsReviewBootstrapResponse(message=message, store=store, customer=customer, history=history)
+        return SmsReviewBootstrapResponse(
+            message=message,
+            store=store,
+            customer=customer,
+            selected_products=selected_products,
+            history=history,
+        )
 
 
 def _merch_workspace_bootstrap_impl(
@@ -773,6 +784,7 @@ def fashion_prepare_customer_sms(
     budget_max: float | None = None,
     top_k: int = 5,
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    selected_product_ids: list[str] | None = None,
 ) -> CustomerCommunicationDraftResponse:
     """Create a persisted SMS draft from store-associate recommendations without sending it yet."""
     effective_retrieval_mode = _resolve_retrieval_mode(
@@ -796,6 +808,7 @@ def fashion_prepare_customer_sms(
             budget_max=budget_max,
             top_k=top_k,
             retrieval_mode=effective_retrieval_mode,
+            selected_product_ids=selected_product_ids,
         )
 
 
@@ -1060,6 +1073,7 @@ def fashion_render_associate_workspace(
         "selectedCustomer": bootstrap.selected_customer.model_dump(mode="json") if bootstrap.selected_customer else None,
         "recommendation": bootstrap.recommendation.model_dump(mode="json") if bootstrap.recommendation else None,
         "lastDraft": bootstrap.last_draft.model_dump(mode="json") if bootstrap.last_draft else None,
+        "selectedProductIds": bootstrap.selected_product_ids,
     }
     opened_for = bootstrap.selected_customer.full_name if bootstrap.selected_customer else bootstrap.store.name
     token = register_widget_state("associate_workspace", payload)
@@ -1083,6 +1097,7 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
         "message": bootstrap.message.model_dump(mode="json"),
         "store": bootstrap.store.model_dump(mode="json"),
         "customer": bootstrap.customer.model_dump(mode="json"),
+        "selectedProducts": [row.model_dump(mode="json") for row in bootstrap.selected_products],
         "history": [row.model_dump(mode="json") for row in bootstrap.history],
     }
     token = register_widget_state("sms", payload)

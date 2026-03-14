@@ -143,6 +143,8 @@ class ProductRecommendation(BaseModel):
     category: str
     price: float
     availability: str
+    link: str | None = None
+    image_url: str | None = None
     score: float
     reasons: list[str]
 
@@ -255,6 +257,18 @@ class CustomerCommunicationRecord(BaseModel):
     sent_at: datetime | None = None
 
 
+class UiProductCard(BaseModel):
+    product_id: str
+    title: str
+    brand: str
+    category: str
+    price: float | None = None
+    availability: str | None = None
+    link: str | None = None
+    image_url: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
 class CustomerCommunicationDraftResponse(BaseModel):
     message: CustomerCommunicationRecord
     store: ResolvedStore
@@ -324,12 +338,14 @@ class AssociateWorkspaceBootstrapResponse(BaseModel):
     selected_customer: ResolvedCustomer | None = None
     recommendation: StoreAssociateRecommendationResponse | None = None
     last_draft: CustomerCommunicationDraftResponse | None = None
+    selected_product_ids: list[str] = Field(default_factory=list)
 
 
 class SmsReviewBootstrapResponse(BaseModel):
     message: CustomerCommunicationRecord
     store: ResolvedStore
     customer: ResolvedCustomer
+    selected_products: list[UiProductCard] = Field(default_factory=list)
     history: list[CustomerCommunicationRecord] = Field(default_factory=list)
 
 
@@ -357,6 +373,9 @@ class MerchActionRecommendationItem(BaseModel):
     title: str
     brand: str
     category: str
+    price: float | None = None
+    link: str | None = None
+    image_url: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
     metric_value: float

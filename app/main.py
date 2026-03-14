@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.mcp_server import mcp as fashion_mcp
@@ -19,6 +21,7 @@ def create_app() -> FastAPI:
             yield
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    static_dir = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
 
     @app.get("/health")
     def health() -> dict:
@@ -26,6 +29,7 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
     app.include_router(rec_router)
+    app.mount("/ui-assets", StaticFiles(directory=static_dir), name="ui-assets")
     app.mount("/mcp", fashion_mcp.streamable_http_app())
     return app
 

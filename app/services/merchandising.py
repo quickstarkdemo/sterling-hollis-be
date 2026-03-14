@@ -22,6 +22,7 @@ from app.schemas import (
     PriceBand,
     ResolvedStore,
 )
+from app.services.demo_assets import demo_image_url
 from app.services.lookup import resolve_store
 from app.services.operator_cache import peer_store_cache
 from app.services.taxonomy import CATEGORY_TAXONOMY
@@ -220,6 +221,7 @@ def _base_query(
             Product.title,
             Product.brand,
             Product.category,
+            Product.link,
             Product.price,
             Product.inventory_qty,
             Product.margin_pct,
@@ -240,6 +242,7 @@ def _base_query(
             Product.title,
             Product.brand,
             Product.category,
+            Product.link,
             Product.price,
             Product.inventory_qty,
             Product.margin_pct,
@@ -422,6 +425,9 @@ def merchandising_action_recommendations(
                     title=row.title,
                     brand=row.brand,
                     category=row.category,
+                    price=round(float(row.price or 0.0), 2),
+                    link=row.link,
+                    image_url=demo_image_url(row.category, row.id, variant_hint=row.brand),
                     price_band=_price_band_for_value(float(row.price or 0.0)),
                     occasion=parsed.occasion,
                     metric_value=round(score, 4),

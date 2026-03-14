@@ -342,6 +342,7 @@ def test_prepare_update_send_history_and_smoke(monkeypatch):
             occasion="wedding",
             budget_max=900,
             top_k=3,
+            selected_product_ids=["prod_2", "prod_1"],
         )
         updated = update_customer_sms_draft(
             session,
@@ -353,7 +354,8 @@ def test_prepare_update_send_history_and_smoke(monkeypatch):
         history = customer_message_history(session, customer_id="cust_000001", status=sent.status)
         smoke = twilio_smoke_test(session, body_text="Smoke test")
 
-        assert "https://fashion.example/products/prod_1" in draft.message.body_text
+        assert "https://fashion.example/products/prod_2" in draft.message.body_text
+        assert draft.message.product_ids == ["prod_2", "prod_1"]
         assert updated.message.product_ids == ["prod_1", "prod_2"]
         assert updated.message.body_text == "Curated picks just for you."
         assert sent.status.value == "sent"
@@ -401,6 +403,7 @@ def test_merchandising_supports_expanded_slices(monkeypatch):
         assert actions.peer_mode == PeerMode.profile_type
         assert actions.recommendations
         assert all(item.category == "womens_apparel" for item in actions.recommendations)
+        assert all(item.image_url for item in actions.recommendations)
         assert diagnostics.insights
         assert trends.highlights
 
@@ -424,8 +427,9 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
         assert template_uri.startswith("ui://widgets/associate/")
         assert persisted["kind"] == "associate_workspace"
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
-        assert "Search Customers" in html
-        assert "Associate Workspace" in html
+        assert persisted["payload"]["selectedProductIds"]
+        assert "/ui-assets/widget.css" in html
+        assert "/ui-assets/widget.js" in html
 
 
 def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
@@ -479,7 +483,9 @@ def test_bootstrap_tools_return_full_payloads(monkeypatch):
         assert associate.store.id == "1001"
         assert associate.selected_customer.id == "cust_000001"
         assert associate.recommendation is not None
+        assert associate.selected_product_ids
         assert sms.message.id == sms_draft.message.id
+        assert sms.selected_products
         assert sms.history
         assert merch.store.id == "1001"
         assert merch.initial_result.recommendations
@@ -503,6 +509,7 @@ def test_fast_mode_skips_embedding(monkeypatch):
         assert response.retrieval_mode == RetrievalMode.fast
         assert response.recommendation.strategy == "sql_rules_fast_path"
         assert response.recommendation.recommendations
+        assert response.recommendation.recommendations[0].image_url
 
 
 def test_lookup_customer_returns_candidates_for_ambiguous_last4(monkeypatch):

@@ -20,7 +20,9 @@ from app.schemas import (
     ResolvedStore,
     TwilioSmokeTestRecord,
     TwilioSmokeTestResponse,
+    UiProductCard,
 )
+from app.services.demo_assets import demo_image_url
 from app.services.lookup import resolve_customer, resolve_store
 from app.services.recommendations import customer_recommendations
 from app.services.twilio_service import TwilioService
@@ -61,6 +63,31 @@ def _product_summary_lines(session: Session, product_ids: list[str]) -> list[str
     return lines
 
 
+def _selected_product_cards(session: Session, product_ids: list[str]) -> list[UiProductCard]:
+    if not product_ids:
+        return []
+    products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    by_id = {product.id: product for product in products}
+    cards: list[UiProductCard] = []
+    for product_id in product_ids:
+        product = by_id.get(product_id)
+        if not product:
+            continue
+        cards.append(
+            UiProductCard(
+                product_id=product.id,
+                title=product.title,
+                brand=product.brand,
+                category=product.category,
+                price=float(product.price),
+                availability=product.availability,
+                link=product.link,
+                image_url=demo_image_url(product.category, product.id, variant_hint=product.brand),
+            )
+        )
+    return cards
+
+
 def build_sms_body(
     session: Session,
     store: ResolvedStore,
@@ -90,6 +117,7 @@ def prepare_customer_sms(
     budget_max: float | None = None,
     top_k: int = 5,
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    selected_product_ids: list[str] | None = None,
 ) -> CustomerCommunicationDraftResponse:
     settings = get_settings()
     resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
@@ -116,7 +144,7 @@ def prepare_customer_sms(
         recommendations=rows,
     )
 
-    selected_product_ids = [product.product_id for product in recommendation.recommendations[:3]]
+    selected_product_ids = selected_product_ids or [product.product_id for product in recommendation.recommendations[:3]]
     destination = settings.twilio_test_to_number or ""
     body = build_sms_body(session, resolved_store, resolved_customer, recommendation, selected_product_ids=selected_product_ids)
     record = CustomerCommunication(
@@ -231,6 +259,13 @@ def get_customer_message(session: Session, message_id: str) -> tuple[CustomerCom
     customer = resolve_customer(session, customer_id=record.customer_id).resolved
     store = resolve_store(session, store_id=record.store_id).resolved
     return _record_from_model(record, customer), customer, store
+
+
+def get_selected_products_for_message(session: Session, message_id: str) -> list[UiProductCard]:
+    record = session.get(CustomerCommunication, message_id)
+    if not record:
+        raise ValueError(f"Message {message_id} was not found.")
+    return _selected_product_cards(session, list(record.product_ids or []))
 
 
 def twilio_smoke_test(session: Session, body_text: str | None = None) -> TwilioSmokeTestResponse:

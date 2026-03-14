@@ -15,6 +15,7 @@ from app.schemas import (
     RetrievalMode,
 )
 from app.services.embeddings import EmbeddingService
+from app.services.demo_assets import demo_image_url
 from app.services.pinecone_service import PineconeService
 from app.services.taxonomy import OCCASION_TO_CATEGORY
 
@@ -157,6 +158,8 @@ def customer_recommendations(
                         category=p.category,
                         price=float(p.price),
                         availability=p.availability,
+                        link=p.link,
+                        image_url=demo_image_url(p.category, p.id, variant_hint=p.brand),
                         score=round(score, 4),
                         reasons=reasons or ["high relevance"],
                     )
@@ -191,6 +194,8 @@ def customer_recommendations(
                 category=p.category,
                 price=float(p.price),
                 availability=p.availability,
+                link=p.link,
+                image_url=demo_image_url(p.category, p.id, variant_hint=p.brand),
                 score=round(score, 4),
                 reasons=reasons or ["high relevance"],
             )

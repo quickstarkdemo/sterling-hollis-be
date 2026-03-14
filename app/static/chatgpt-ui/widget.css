@@ -1,0 +1,293 @@
+:root {
+  color-scheme: light;
+  --bg: #f2ebdf;
+  --paper: #fbf7f1;
+  --panel: rgba(255, 252, 247, 0.94);
+  --ink: #13212d;
+  --muted: #5d6a75;
+  --line: rgba(28, 43, 55, 0.12);
+  --accent: #92381c;
+  --accent-soft: rgba(146, 56, 28, 0.1);
+  --accent-ink: #5f1f09;
+  --gold: #bf8d2c;
+  --shadow: 0 18px 46px rgba(19, 33, 45, 0.12);
+  --radius-xl: 26px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255,255,255,0.8), transparent 28%),
+    linear-gradient(180deg, #f5efe4 0%, #ede2d1 100%);
+  color: var(--ink);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+a { color: inherit; }
+
+.fashion-widget-shell {
+  min-height: 100vh;
+  padding: 22px;
+}
+
+.fw-root {
+  display: grid;
+  gap: 18px;
+}
+
+.fw-hero,
+.fw-panel,
+.fw-card,
+.fw-result {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+}
+
+.fw-hero {
+  border-radius: 30px;
+  padding: 24px 24px 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+.fw-hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -40px -60px auto;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, rgba(191,141,44,0.24), transparent 68%);
+  pointer-events: none;
+}
+
+.fw-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(19, 33, 45, 0.06);
+  color: var(--accent-ink);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.fw-title {
+  margin: 14px 0 6px;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+}
+
+.fw-subtitle {
+  margin: 0;
+  max-width: 70ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.fw-split {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(300px, 0.92fr) minmax(360px, 1.4fr);
+}
+
+.fw-column { display: grid; gap: 18px; }
+.fw-panel { border-radius: var(--radius-xl); padding: 18px; }
+.fw-panel h2,
+.fw-panel h3,
+.fw-card h3,
+.fw-result h3 {
+  margin: 0;
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  letter-spacing: -0.02em;
+}
+
+.fw-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.fw-meta,
+.fw-note,
+.fw-label,
+.fw-empty,
+.fw-small {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.fw-grid { display: grid; gap: 14px; }
+.fw-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fw-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fw-grid.cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+.fw-field { display: grid; gap: 6px; }
+.fw-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; }
+.fw-input,
+.fw-textarea,
+.fw-select {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid rgba(19, 33, 45, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 14px;
+  color: var(--ink);
+}
+.fw-input:focus,
+.fw-textarea:focus,
+.fw-select:focus { outline: 2px solid rgba(146, 56, 28, 0.16); border-color: rgba(146, 56, 28, 0.3); }
+.fw-textarea { min-height: 200px; resize: vertical; }
+
+.fw-toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
+.fw-button {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #172734 0%, #24394c 100%);
+  color: white;
+  font-weight: 700;
+}
+.fw-button.alt {
+  background: linear-gradient(135deg, #a14522 0%, #c6673e 100%);
+}
+.fw-button.ghost {
+  background: transparent;
+  color: var(--accent-ink);
+  border: 1px solid rgba(146, 56, 28, 0.2);
+}
+.fw-button.muted {
+  background: rgba(19, 33, 45, 0.06);
+  color: var(--ink);
+}
+
+.fw-chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.fw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12px;
+}
+.fw-chip.subtle {
+  background: rgba(19, 33, 45, 0.06);
+  color: var(--ink);
+}
+.fw-chip.active {
+  background: linear-gradient(135deg, #b85732 0%, #92381c 100%);
+  color: white;
+}
+
+.fw-search-results,
+.fw-history,
+.fw-merch-groups { display: grid; gap: 12px; }
+.fw-result,
+.fw-card {
+  border-radius: 20px;
+  padding: 14px;
+}
+.fw-result:hover,
+.fw-card:hover { transform: translateY(-1px); transition: transform 140ms ease; }
+
+.fw-customer-card { display: grid; gap: 10px; }
+.fw-customer-top { display: flex; justify-content: space-between; gap: 10px; align-items: start; }
+.fw-customer-name { font-size: 21px; font-family: "Iowan Old Style", Georgia, serif; }
+.fw-score { color: var(--gold); font-weight: 700; font-size: 12px; }
+
+.fw-product-card {
+  overflow: hidden;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.fw-product-visual {
+  aspect-ratio: 4 / 5;
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(237,226,209,0.65));
+  border: 1px solid rgba(19, 33, 45, 0.08);
+}
+.fw-product-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.fw-card-title {
+  font-size: 21px;
+  line-height: 1.02;
+}
+.fw-price { font-weight: 800; color: var(--accent-ink); }
+.fw-list { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+.fw-list li { margin: 4px 0; }
+.fw-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.fw-selected-tray {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.fw-selected-card {
+  border-radius: 18px;
+  padding: 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(245,236,225,0.94));
+  border: 1px solid rgba(19, 33, 45, 0.1);
+}
+.fw-selected-card img { width: 100%; aspect-ratio: 4 / 5; object-fit: cover; border-radius: 14px; margin-bottom: 10px; }
+
+.fw-kpi-strip {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.fw-kpi {
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(19, 33, 45, 0.04);
+  border: 1px solid rgba(19, 33, 45, 0.08);
+}
+.fw-kpi strong { display: block; font-size: 22px; font-family: "Iowan Old Style", Georgia, serif; }
+
+.fw-merch-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.fw-tab { padding: 8px 12px; border-radius: 999px; border: 1px solid rgba(19,33,45,0.1); background: rgba(255,255,255,0.75); }
+.fw-tab.active { background: #13212d; color: white; }
+
+.fw-history-item {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(19, 33, 45, 0.04);
+  border: 1px solid rgba(19, 33, 45, 0.08);
+}
+
+.fw-banner {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(191, 141, 44, 0.12);
+  border: 1px solid rgba(191, 141, 44, 0.24);
+  color: #6b4b09;
+  font-size: 13px;
+}
+
+@media (max-width: 980px) {
+  .fashion-widget-shell { padding: 14px; }
+  .fw-split { grid-template-columns: 1fr; }
+  .fw-grid.two, .fw-grid.three { grid-template-columns: 1fr; }
+}
