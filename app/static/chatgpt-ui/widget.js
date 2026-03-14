@@ -1,6 +1,8 @@
 const root = document.getElementById('fashion-widget-root');
 const meta = window.__FASHION_WIDGET__ || {};
 const state = { kind: meta.kind || 'unknown', payload: {} };
+const HYDRATION_ATTEMPTS = 12;
+const HYDRATION_DELAY_MS = 250;
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -24,6 +26,10 @@ function el(tag, props = {}, ...children) {
 function clear(node) {
   node.innerHTML = '';
   return node;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function payload(result) {
@@ -71,14 +77,25 @@ async function hydrateState() {
   let hydrated = normalizeHydratedState(bridge.toolOutput) || normalizeHydratedState(bridge.widgetState);
   let sessionId = hydrated?.payload?.widgetSessionId || hydrated?.widgetSessionId || meta.widgetSessionId;
 
-  if (!hydrated && sessionId && meta.sessionEndpointBase) {
-    try {
-      const response = await fetch(`${meta.sessionEndpointBase}/${encodeURIComponent(sessionId)}.json`, {
-        credentials: 'omit',
-      });
-      if (response.ok) hydrated = normalizeHydratedState(await response.json());
-    } catch {
-      // Best-effort rehydration only.
+  for (let attempt = 0; attempt < HYDRATION_ATTEMPTS; attempt += 1) {
+    if (!hydrated && sessionId && meta.sessionEndpointBase) {
+      try {
+        const response = await fetch(`${meta.sessionEndpointBase}/${encodeURIComponent(sessionId)}.json`, {
+          credentials: 'omit',
+        });
+        if (response.ok) hydrated = normalizeHydratedState(await response.json());
+      } catch {
+        // Best-effort rehydration only.
+      }
+    }
+
+    if (hydrated) break;
+
+    if (attempt < HYDRATION_ATTEMPTS - 1) {
+      await sleep(HYDRATION_DELAY_MS);
+      const nextBridge = window.openai || {};
+      hydrated = normalizeHydratedState(nextBridge.toolOutput) || normalizeHydratedState(nextBridge.widgetState);
+      sessionId = hydrated?.payload?.widgetSessionId || hydrated?.widgetSessionId || sessionId || meta.widgetSessionId;
     }
   }
 
@@ -145,6 +162,16 @@ function defaultSummary() {
     return store ? `${store.name} • merchandising board` : 'Merchandising board';
   }
   return 'Operator workspace';
+}
+
+function renderFailure(message, detail = '') {
+  renderShell(
+    el('section', { className: 'fw-panel' },
+      sectionTitle('widget state', meta.title || 'Workspace', message),
+      el('div', { className: 'fw-empty', text: detail || 'The workspace mounted, but no renderable state reached the component.' }),
+      state.payload.widgetSessionId ? el('div', { className: 'fw-meta', text: `session ${state.payload.widgetSessionId}` }) : null,
+    ),
+  );
 }
 
 function productCard(product, selectedIds = [], onToggle = null) {
@@ -215,6 +242,10 @@ function renderShell(...sections) {
 
 async function renderAssociateWorkspace() {
   const payloadState = state.payload;
+  if (!payloadState.store) {
+    renderFailure('Associate workspace data did not hydrate.', 'Retry the tool call in a fresh message. If this persists, the host is not passing initial widget state to the component.');
+    return;
+  }
   const filters = payloadState.filters || {};
   const selectedProductIds = payloadState.selectedProductIds || [];
 
@@ -415,6 +446,10 @@ async function renderAssociateWorkspace() {
 
 async function renderSmsReview() {
   const payloadState = state.payload;
+  if (!payloadState.message || !payloadState.customer || !payloadState.store) {
+    renderFailure('SMS review data did not hydrate.', 'The draft exists, but the widget did not receive the initial review payload.');
+    return;
+  }
   const message = payloadState.message;
   const selectedProducts = payloadState.selectedProducts || [];
   const textarea = el('textarea', { className: 'fw-textarea' });
@@ -504,6 +539,10 @@ async function renderSmsReview() {
 
 async function renderMerchBoard() {
   const payloadState = state.payload;
+  if (!payloadState.store || !payloadState.filters) {
+    renderFailure('Merchandising board data did not hydrate.', 'The board mounted, but the initial merchandising payload is missing.');
+    return;
+  }
   const filters = payloadState.filters || {};
   const questionInput = el('input', { className: 'fw-input', placeholder: 'What should this store feature, promote, or deprioritize?', value: filters.question || '' });
   const categoryInput = el('input', { className: 'fw-input', placeholder: 'womens_apparel, handbags...', value: filters.category || '' });
@@ -683,6 +722,10 @@ async function renderMerchBoard() {
 
 async function boot() {
   await hydrateState();
+  if (!Object.keys(state.payload || {}).length) {
+    renderFailure('Workspace mounted without initial state.', 'This usually means the host did not pass tool output or session state to the widget.');
+    return;
+  }
   if (state.kind === 'associate_workspace') return renderAssociateWorkspace();
   if (state.kind === 'sms') return renderSmsReview();
   if (state.kind === 'merch') return renderMerchBoard();

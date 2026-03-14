@@ -70,7 +70,11 @@ def render_widget_html(title: str, kind: str, summary: str | None = None) -> str
     <link rel="stylesheet" href="{html.escape(asset_base)}/widget.css" />
   </head>
   <body>
-    <div id="fashion-widget-root" class="fashion-widget-shell"></div>
+    <div id="fashion-widget-root" class="fashion-widget-shell">
+      <div style="padding:24px;font:15px/1.5 system-ui,sans-serif;color:#5c4a1e;">
+        Loading {html.escape(title)}…
+      </div>
+    </div>
     <script>
       window.__FASHION_WIDGET__ = {{
         title: {json.dumps(title)},
