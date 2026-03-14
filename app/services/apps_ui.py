@@ -3,6 +3,8 @@ from __future__ import annotations
 import html
 import json
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete
@@ -12,6 +14,7 @@ from app.database import SessionLocal
 from app.models import UiSession
 
 _WIDGET_TTL = timedelta(hours=2)
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static" / "chatgpt-ui"
 
 
 def _prune_widget_state(db) -> None:
@@ -53,6 +56,16 @@ def get_widget_state(token: str) -> dict:
         }
 
 
+@lru_cache(maxsize=1)
+def _widget_css() -> str:
+    return (_STATIC_DIR / "widget.css").read_text(encoding="utf-8")
+
+
+@lru_cache(maxsize=1)
+def _widget_js() -> str:
+    return (_STATIC_DIR / "widget.js").read_text(encoding="utf-8")
+
+
 def render_widget_html(title: str, kind: str, summary: str | None = None) -> str:
     settings = get_settings()
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
@@ -67,7 +80,7 @@ def render_widget_html(title: str, kind: str, summary: str | None = None) -> str
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{html.escape(title)}</title>
-    <link rel="stylesheet" href="{html.escape(asset_base)}/widget.css" />
+    <style>{_widget_css()}</style>
   </head>
   <body>
     <div id="fashion-widget-root" class="fashion-widget-shell">
@@ -85,6 +98,8 @@ def render_widget_html(title: str, kind: str, summary: str | None = None) -> str
         sessionEndpointBase: {json.dumps(settings.public_base_url.rstrip("/") + "/ui-assets/session")},
       }};
     </script>
-    <script type="module" src="{html.escape(asset_base)}/widget.js"></script>
+    <script type="module">
+{_widget_js()}
+    </script>
   </body>
 </html>"""

@@ -429,8 +429,8 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
         assert persisted["payload"]["widgetSessionId"] == token
         assert persisted["payload"]["selectedProductIds"]
-        assert "/ui-assets/widget.css" in html
-        assert "/ui-assets/widget.js" in html
+        assert "<style>" in html
+        assert "attachHostListeners();" in html
 
 
 def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):

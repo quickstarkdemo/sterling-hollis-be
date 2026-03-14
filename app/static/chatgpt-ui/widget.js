@@ -110,6 +110,38 @@ async function hydrateState() {
   }
 }
 
+function applyHydratedState(raw) {
+  const hydrated = normalizeHydratedState(raw);
+  if (!hydrated) return false;
+  state.kind = hydrated.kind || state.kind;
+  state.payload = hydrated.payload || {};
+  if (state.payload.widgetSessionId || hydrated.widgetSessionId) {
+    state.payload.widgetSessionId = state.payload.widgetSessionId || hydrated.widgetSessionId;
+  }
+  return true;
+}
+
+function attachHostListeners() {
+  window.addEventListener('openai:set_globals', (event) => {
+    const globals = event.detail?.globals || event.detail || {};
+    if (applyHydratedState(globals.toolOutput) || applyHydratedState(globals.widgetState) || applyHydratedState(globals)) {
+      boot();
+    }
+  });
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+    const method = data.method || data.type;
+    if (method === 'ui/notifications/tool-result' || method === 'tool_result') {
+      const params = data.params || data.detail || data.result || data;
+      if (applyHydratedState(params)) {
+        boot();
+      }
+    }
+  });
+}
+
 async function syncWidgetState() {
   if (window.openai && window.openai.setWidgetState) {
     try {
@@ -720,16 +752,31 @@ async function renderMerchBoard() {
   );
 }
 
+let booting = false;
 async function boot() {
+  if (booting) return;
+  booting = true;
   await hydrateState();
   if (!Object.keys(state.payload || {}).length) {
     renderFailure('Workspace mounted without initial state.', 'This usually means the host did not pass tool output or session state to the widget.');
+    booting = false;
     return;
   }
-  if (state.kind === 'associate_workspace') return renderAssociateWorkspace();
-  if (state.kind === 'sms') return renderSmsReview();
-  if (state.kind === 'merch') return renderMerchBoard();
+  if (state.kind === 'associate_workspace') {
+    booting = false;
+    return renderAssociateWorkspace();
+  }
+  if (state.kind === 'sms') {
+    booting = false;
+    return renderSmsReview();
+  }
+  if (state.kind === 'merch') {
+    booting = false;
+    return renderMerchBoard();
+  }
   renderShell(el('section', { className: 'fw-panel' }, el('div', { className: 'fw-empty', text: 'Unknown widget state.' })));
+  booting = false;
 }
 
+attachHostListeners();
 boot();
