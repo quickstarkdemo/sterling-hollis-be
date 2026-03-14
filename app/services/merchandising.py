@@ -23,6 +23,7 @@ from app.schemas import (
     ResolvedStore,
 )
 from app.services.lookup import resolve_store
+from app.services.operator_cache import peer_store_cache
 from app.services.taxonomy import CATEGORY_TAXONOMY
 
 
@@ -168,6 +169,11 @@ def _resolved_store(session: Session, store_query: str | None = None, store_id: 
 
 
 def peer_store_ids(session: Session, store_id: str, peer_mode: PeerMode = PeerMode.state_and_profile) -> list[str]:
+    cache_key = (store_id, peer_mode.value)
+    cached = peer_store_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
+
     store = session.get(Store, store_id)
     if not store:
         raise ValueError(f"Store {store_id} was not found.")
@@ -179,17 +185,23 @@ def peer_store_ids(session: Session, store_id: str, peer_mode: PeerMode = PeerMo
             .order_by(Store.id)
         ).all()
         if peers:
-            return [peer.id for peer in peers[:5]]
+            result = [peer.id for peer in peers[:5]]
+            peer_store_cache.set(cache_key, list(result))
+            return result
 
     if peer_mode in {PeerMode.state_and_profile, PeerMode.profile_type}:
         peers = session.scalars(
             select(Store).where(Store.id != store.id, Store.profile_type == store.profile_type).order_by(Store.id)
         ).all()
         if peers:
-            return [peer.id for peer in peers[:5]]
+            result = [peer.id for peer in peers[:5]]
+            peer_store_cache.set(cache_key, list(result))
+            return result
 
     peers = session.scalars(select(Store).where(Store.id != store.id).order_by(Store.id)).all()
-    return [peer.id for peer in peers[:5]]
+    result = [peer.id for peer in peers[:5]]
+    peer_store_cache.set(cache_key, list(result))
+    return result
 
 
 def _base_query(

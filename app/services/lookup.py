@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from copy import deepcopy
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Customer, Store
 from app.schemas import CustomerSearchResponse, CustomerSearchResult, ResolvedCustomer, ResolvedStore
+from app.services.operator_cache import store_resolution_cache
 
 
 @dataclass
@@ -117,6 +119,15 @@ def _score_store(store: Store, query: str) -> tuple[float, str]:
 
 
 def resolve_store(session: Session, store_query: str | None = None, store_id: str | None = None) -> StoreMatch:
+    cache_key = (store_id or "", _normalize(store_query))
+    cached = store_resolution_cache.get(cache_key)
+    if cached is not None:
+        resolved_payload, alternatives_payload = deepcopy(cached)
+        return StoreMatch(
+            resolved=ResolvedStore(**resolved_payload),
+            alternatives=[ResolvedStore(**row) for row in alternatives_payload],
+        )
+
     stores = session.scalars(select(Store).order_by(Store.name)).all()
     if not stores:
         raise ValueError("No stores are loaded.")
@@ -134,6 +145,7 @@ def resolve_store(session: Session, store_query: str | None = None, store_id: st
             match_reason="exact store id",
             match_score=100.0,
         )
+        store_resolution_cache.set(cache_key, (resolved.model_dump(), []))
         return StoreMatch(resolved=resolved, alternatives=[])
 
     if not store_query:
@@ -165,6 +177,10 @@ def resolve_store(session: Session, store_query: str | None = None, store_id: st
     scored.sort(key=lambda item: item[0], reverse=True)
     best_score, best = scored[0]
     alternatives = [resolved for score, resolved in scored[1:4] if best_score - score <= 18]
+    store_resolution_cache.set(
+        cache_key,
+        (best.model_dump(), [row.model_dump() for row in alternatives]),
+    )
     return StoreMatch(resolved=best, alternatives=alternatives)
 
 

@@ -21,7 +21,14 @@ from app.schemas import (
     VectorStatusResponse,
 )
 from app.services.indexing import index_products_for_run
-from app.services.loader import current_loaded_counts, finalize_run, load_entity_csv, read_generated_counts, reset_synthetic_tables
+from app.services.loader import (
+    assert_synthetic_tables_empty,
+    current_loaded_counts,
+    finalize_run,
+    load_entity_csv,
+    read_generated_counts,
+    reset_synthetic_tables,
+)
 from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
 from app.services.system_status import vector_status_payload
@@ -94,6 +101,7 @@ def load_synthetic(req: SyntheticLoadRequest, db: Session = Depends(get_db)):
 
     # Ensure repeated runs are idempotent by clearing old synthetic data first.
     reset_synthetic_tables(db)
+    assert_synthetic_tables_empty(db)
 
     # Enforce parent->child insert order regardless of request ordering.
     ordered_entities = [

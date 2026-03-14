@@ -12,6 +12,7 @@ from app.schemas import (
     CustomerRecommendationRequest,
     MerchandisingRecommendationRequest,
     ProductRecommendation,
+    RetrievalMode,
 )
 from app.services.embeddings import EmbeddingService
 from app.services.pinecone_service import PineconeService
@@ -89,10 +90,17 @@ def _rule_rerank(product: Product, req: CustomerRecommendationRequest, base_scor
 
 
 def customer_recommendations(
-    db: Session, req: CustomerRecommendationRequest
+    db: Session, req: CustomerRecommendationRequest, retrieval_mode: RetrievalMode = RetrievalMode.semantic
 ) -> tuple[list[ProductRecommendation], str]:
-    embedding_service = EmbeddingService()
-    pinecone = PineconeService()
+    if retrieval_mode == RetrievalMode.auto:
+        retrieval_mode = (
+            RetrievalMode.fast
+            if req.customer_id and (req.occasion or req.budget_min is not None or req.budget_max is not None)
+            else RetrievalMode.semantic
+        )
+    use_semantic = retrieval_mode == RetrievalMode.semantic
+    embedding_service = EmbeddingService() if use_semantic else None
+    pinecone = PineconeService() if use_semantic else None
 
     customer_brand_prefs: set[str] = set()
     if req.customer_id:
@@ -108,7 +116,7 @@ def customer_recommendations(
         customer_brand_prefs = {row[0] for row in brand_rows}
 
     vector_candidates: list[tuple[str, float]] = []
-    if pinecone.enabled:
+    if use_semantic and pinecone and pinecone.enabled and embedding_service:
         context_text = _build_customer_query_context(db, req)
         query_vector = embedding_service.embed_text(context_text)
         matches = pinecone.query(
@@ -119,7 +127,7 @@ def customer_recommendations(
         )
         vector_candidates = [(m["metadata"].get("product_id") or m["id"].replace("product:", ""), float(m["score"])) for m in matches]
 
-    strategy = "hybrid_vector_rules" if vector_candidates else "sql_rules_fallback"
+    strategy = "hybrid_vector_rules" if vector_candidates else "sql_rules_fast_path"
 
     if vector_candidates:
         ids = [pid for pid, _ in vector_candidates]
@@ -157,7 +165,7 @@ def customer_recommendations(
             return output, strategy
 
     # SQL fallback path for local mode or when vector hits cannot be resolved against Postgres.
-    strategy = "sql_rules_fallback"
+    strategy = "sql_rules_fast_path"
     query = select(Product).where(Product.store_id == req.store_id, Product.availability != "out of stock")
     if req.occasion and req.occasion in OCCASION_TO_CATEGORY:
         query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))

@@ -4,7 +4,12 @@ import csv
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset
+from app.services.synthetic_generator import (
+    DEMO_CUSTOMER_ID,
+    DEMO_CUSTOMER_PHONE_E164,
+    GenerationVolumes,
+    generate_synthetic_dataset,
+)
 
 
 def _sample_stores(run_id: str) -> list[dict]:
@@ -134,3 +139,28 @@ def test_products_include_required_feed_fields(tmp_path: Path):
     for product in products:
         for field in required_fields:
             assert product[field]
+
+
+def test_customers_include_unique_phones_and_demo_customer(tmp_path: Path):
+    run_id = "run_test_5"
+    stores = _sample_stores(run_id)
+    volumes = GenerationVolumes(stores=2, products=30, customers=40, orders=40)
+
+    artifacts = generate_synthetic_dataset(
+        seed=42,
+        run_id=run_id,
+        stores=stores,
+        volumes=volumes,
+        trailing_months=6,
+        output_root=tmp_path,
+        raw_snapshot={"stores": []},
+        now=datetime(2026, 3, 13, tzinfo=timezone.utc),
+    )
+
+    customers = _read_csv(artifacts.output_dir / "customers.csv")
+    phones = [customer["phone_e164"] for customer in customers]
+
+    assert len(customers) == 40
+    assert len(phones) == len(set(phones))
+    assert any(customer["id"] == DEMO_CUSTOMER_ID and customer["phone_e164"] == DEMO_CUSTOMER_PHONE_E164 for customer in customers)
+    assert sum(1 for customer in customers if customer["phone_e164"] == DEMO_CUSTOMER_PHONE_E164) == 1

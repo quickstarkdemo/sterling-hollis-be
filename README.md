@@ -18,10 +18,13 @@ Synthetic fashion data platform with:
 - Customer and merchandising recommendation endpoints
 - Human-first MCP tools for store resolution, customer resolution, associate recommendations, and merch workflows
 - Customer search by name, email, and synthetic phone number
+- Dedicated demo customer seeded with a stable real-number lookup target for demos
 - Draft-then-send Twilio SMS support using a global test destination number
 - Editable SMS drafts, history, and Twilio smoke-test support
 - Postgres-backed widget session persistence for Apps SDK render flows
 - Apps SDK render tools for associate workspace, SMS review, and merch board
+- Associate/SMS/merch bootstrap tools to reduce initial MCP round-trips
+- Automatic fast-path recommendation mode for structured associate requests
 - OpenAI-commerce-style product feed endpoint
 
 ## Project structure
@@ -286,14 +289,17 @@ Human-first operator tools:
 - `fashion_resolve_customer`
 - `fashion_find_customers`
 - `fashion_store_associate_recommend`
+- `fashion_associate_workspace_bootstrap`
 - `fashion_prepare_customer_sms`
 - `fashion_update_customer_sms_draft`
 - `fashion_send_customer_sms`
 - `fashion_customer_message_history`
+- `fashion_sms_review_bootstrap`
 - `fashion_twilio_smoke_test`
 - `fashion_merch_action_recommendations`
 - `fashion_merch_diagnostics`
 - `fashion_merch_trend_summary`
+- `fashion_merch_workspace_bootstrap`
 
 Apps SDK render tools:
 - `fashion_render_associate_workspace`
@@ -361,14 +367,18 @@ Human-first examples:
 - `fashion_resolve_customer(email="avery.parker.1@example-fashion.test")`
 - `fashion_resolve_customer(phone_last4="1234")`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
+- `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5, retrieval_mode="auto")`
+- `fashion_associate_workspace_bootstrap(store_query="Dallas", customer_phone_e164="+12146932322", occasion="wedding guest dress", budget_max=900, retrieval_mode="auto")`
 - `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
 - `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
 - `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
 - `fashion_customer_message_history(customer_email="avery.parker.1@example-fashion.test", status="sent", limit=10)`
+- `fashion_sms_review_bootstrap(message_id="<MESSAGE_ID>")`
 - `fashion_twilio_smoke_test(body_text="Smoke test from product-db")`
 - `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
 - `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", category="shoes", compare_mode="peer_and_prior_period", lookback_days=90)`
 - `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.", category="handbags", compare_mode="peer_and_prior_period")`
+- `fashion_merch_workspace_bootstrap(store_query="Dallas", question="What should this store feature, deprioritize, or promote this week?", category="handbags", compare_mode="peer_and_prior_period")`
 
 Render-tool examples for ChatGPT Apps:
 
@@ -441,6 +451,16 @@ The customer-communication flow is intentionally conservative:
 - all v1 outbound messages go to `TWILIO_TEST_TO_NUMBER`
 - the outbound sender is `TWILIO_SENDER_NUMBER`
 - synthetic customer `phone_e164` values are used for search and UI realism only; they are not the live delivery target
+- one seeded demo customer is assigned `+12146932322` for reliable demo lookup
+
+### Operator performance notes
+
+- Store resolution and peer-store lookup use a short in-process TTL cache.
+- Associate recommendation tools support `retrieval_mode`:
+  - `auto`: uses fast SQL/rules for structured requests and semantic retrieval otherwise
+  - `fast`: skips embedding/Pinecone and uses SQL/rules only
+  - `semantic`: forces embedding + Pinecone when providers are enabled
+- Bootstrap tools reduce initial UI latency by returning complete associate, SMS review, and merch workspace payloads in one MCP call.
 
 Current message body content is text-only:
 - associate greeting

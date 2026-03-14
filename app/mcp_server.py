@@ -13,6 +13,8 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    AssociateWorkspaceBootstrapResponse,
+    AssociateWorkspaceFilters,
     CompareMode,
     CustomerCommunicationDraftResponse,
     CustomerCommunicationHistoryResponse,
@@ -26,13 +28,17 @@ from app.schemas import (
     IndexProductsResponse,
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
+    MerchWorkspaceBootstrapResponse,
+    MerchWorkspaceFilters,
     MerchTrendSummaryResponse,
     MerchandisingRecommendationRequest,
     MerchandisingRecommendationResponse,
     Objective,
     PeerMode,
     PriceBand,
+    RetrievalMode,
     RunReportResponse,
+    SmsReviewBootstrapResponse,
     StoreAssociateRecommendationResponse,
     StoreResolutionResponse,
     SyntheticGenerateRequest,
@@ -52,7 +58,13 @@ from app.services.communications import (
     update_customer_sms_draft,
 )
 from app.services.indexing import index_products_for_run
-from app.services.loader import current_loaded_counts, load_entity_csv, read_generated_counts, reset_synthetic_tables
+from app.services.loader import (
+    assert_synthetic_tables_empty,
+    current_loaded_counts,
+    load_entity_csv,
+    read_generated_counts,
+    reset_synthetic_tables,
+)
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.merchandising import (
     merchandising_action_recommendations,
@@ -122,6 +134,20 @@ def _calltool_result(text: str, payload: dict | None = None, meta: dict | None =
     )
 
 
+def _resolve_retrieval_mode(
+    retrieval_mode: RetrievalMode,
+    customer_resolved: bool,
+    occasion: str | None,
+    budget_min: float | None,
+    budget_max: float | None,
+) -> RetrievalMode:
+    if retrieval_mode != RetrievalMode.auto:
+        return retrieval_mode
+    if customer_resolved and (occasion or budget_min is not None or budget_max is not None):
+        return RetrievalMode.fast
+    return RetrievalMode.semantic
+
+
 def _associate_recommendation_impl(
     store_query: str | None = None,
     store_id: str | None = None,
@@ -133,6 +159,7 @@ def _associate_recommendation_impl(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> StoreAssociateRecommendationResponse:
     with SessionLocal() as db:
         resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
@@ -143,6 +170,13 @@ def _associate_recommendation_impl(
             phone_e164=customer_phone_e164,
             phone_last4=phone_last4,
         ).resolved
+        effective_retrieval_mode = _resolve_retrieval_mode(
+            retrieval_mode,
+            customer_resolved=True,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+        )
         req = CustomerRecommendationRequest(
             store_id=resolved_store.id,
             customer_id=resolved_customer.id,
@@ -151,7 +185,7 @@ def _associate_recommendation_impl(
             budget_max=budget_max,
             top_k=top_k,
         )
-        rows, strategy = customer_recommendations(db, req)
+        rows, strategy = customer_recommendations(db, req, retrieval_mode=effective_retrieval_mode)
         recommendation = CustomerRecommendationResponse(
             store_id=resolved_store.id,
             strategy=strategy,
@@ -161,6 +195,119 @@ def _associate_recommendation_impl(
             store=resolved_store,
             customer=resolved_customer,
             recommendation=recommendation,
+            retrieval_mode=effective_retrieval_mode,
+        )
+
+
+def _associate_workspace_bootstrap_impl(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+) -> AssociateWorkspaceBootstrapResponse:
+    with SessionLocal() as db:
+        resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+        selected_customer = None
+        recommendation = None
+        if customer_email or customer_id or customer_phone_e164 or phone_last4:
+            recommendation = _associate_recommendation_impl(
+                store_query=store_query,
+                store_id=store_id,
+                customer_email=customer_email,
+                customer_id=customer_id,
+                customer_phone_e164=customer_phone_e164,
+                phone_last4=phone_last4,
+                occasion=occasion,
+                budget_min=budget_min,
+                budget_max=budget_max,
+                top_k=top_k,
+                retrieval_mode=retrieval_mode,
+            )
+            selected_customer = recommendation.customer
+            effective_retrieval_mode = recommendation.retrieval_mode
+        else:
+            effective_retrieval_mode = _resolve_retrieval_mode(
+                retrieval_mode,
+                customer_resolved=False,
+                occasion=occasion,
+                budget_min=budget_min,
+                budget_max=budget_max,
+            )
+
+        return AssociateWorkspaceBootstrapResponse(
+            store=resolved_store,
+            filters=AssociateWorkspaceFilters(
+                occasion=occasion,
+                budget_min=budget_min,
+                budget_max=budget_max,
+                top_k=top_k,
+                retrieval_mode=effective_retrieval_mode,
+            ),
+            selected_customer=selected_customer,
+            recommendation=recommendation,
+        )
+
+
+def _sms_review_bootstrap_impl(message_id: str) -> SmsReviewBootstrapResponse:
+    with SessionLocal() as db:
+        message, customer, store = get_customer_message(db, message_id)
+        history = customer_message_history(db, customer_id=customer.id, limit=10).messages
+        return SmsReviewBootstrapResponse(message=message, store=store, customer=customer, history=history)
+
+
+def _merch_workspace_bootstrap_impl(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.sell_through,
+    lookback_days: int = 90,
+    top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+) -> MerchWorkspaceBootstrapResponse:
+    with SessionLocal() as db:
+        initial_result = merchandising_action_recommendations(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            question=question,
+            objective=objective,
+            lookback_days=lookback_days,
+            top_k=top_k,
+            category=category,
+            brand=brand,
+            price_band=price_band,
+            occasion=occasion,
+            compare_mode=compare_mode,
+            peer_mode=peer_mode,
+        )
+        return MerchWorkspaceBootstrapResponse(
+            store=initial_result.store,
+            filters=MerchWorkspaceFilters(
+                question=question,
+                category=category,
+                brand=brand,
+                price_band=price_band,
+                occasion=occasion,
+                lookback_days=lookback_days,
+                compare_mode=compare_mode,
+                peer_mode=peer_mode,
+                top_k=top_k,
+            ),
+            initial_result=initial_result,
+            last_result=None,
+            last_tool=None,
         )
 
 
@@ -224,6 +371,7 @@ def _load_synthetic_impl(params: SyntheticLoadRequest) -> SyntheticLoadResponse:
             raise ValueError("run_id not found")
 
         reset_synthetic_tables(db)
+        assert_synthetic_tables_empty(db)
         ordered_entities = ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics"]
         requested = set(params.entities)
         entities = [entity for entity in ordered_entities if entity in requested]
@@ -496,6 +644,7 @@ def fashion_store_associate_recommend(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> StoreAssociateRecommendationResponse:
     """Main store-associate workflow for resolving a customer and store, then returning actionable recommendations."""
     return _associate_recommendation_impl(
@@ -509,6 +658,41 @@ def fashion_store_associate_recommend(
         budget_min=budget_min,
         budget_max=budget_max,
         top_k=top_k,
+        retrieval_mode=retrieval_mode,
+    )
+
+
+@mcp.tool(
+    name="fashion_associate_workspace_bootstrap",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_associate_workspace_bootstrap(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+) -> AssociateWorkspaceBootstrapResponse:
+    """Return the full initial associate workspace payload in one call."""
+    return _associate_workspace_bootstrap_impl(
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
+        customer_id=customer_id,
+        customer_phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+        retrieval_mode=retrieval_mode,
     )
 
 
@@ -528,8 +712,16 @@ def fashion_prepare_customer_sms(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> CustomerCommunicationDraftResponse:
     """Create a persisted SMS draft from store-associate recommendations without sending it yet."""
+    effective_retrieval_mode = _resolve_retrieval_mode(
+        retrieval_mode,
+        customer_resolved=bool(customer_email or customer_id or customer_phone_e164 or phone_last4),
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+    )
     with SessionLocal() as db:
         return prepare_customer_sms(
             db,
@@ -543,6 +735,7 @@ def fashion_prepare_customer_sms(
             budget_min=budget_min,
             budget_max=budget_max,
             top_k=top_k,
+            retrieval_mode=effective_retrieval_mode,
         )
 
 
@@ -607,6 +800,16 @@ def fashion_customer_message_history(
 
 
 @mcp.tool(
+    name="fashion_sms_review_bootstrap",
+    annotations=_tool_annotations(read_only=True, idempotent=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_sms_review_bootstrap(message_id: str) -> SmsReviewBootstrapResponse:
+    """Return the full SMS review payload in one call."""
+    return _sms_review_bootstrap_impl(message_id)
+
+
+@mcp.tool(
     name="fashion_twilio_smoke_test",
     annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
 )
@@ -652,6 +855,42 @@ def fashion_merch_action_recommendations(
             compare_mode=compare_mode,
             peer_mode=peer_mode,
         )
+
+
+@mcp.tool(
+    name="fashion_merch_workspace_bootstrap",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_merch_workspace_bootstrap(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.sell_through,
+    lookback_days: int = 90,
+    top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+) -> MerchWorkspaceBootstrapResponse:
+    """Return the full initial merchandising workspace payload in one call."""
+    return _merch_workspace_bootstrap_impl(
+        store_query=store_query,
+        store_id=store_id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+    )
 
 
 @mcp.tool(
@@ -737,41 +976,32 @@ def fashion_render_associate_workspace(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> CallToolResult:
     """Render the associate workspace inside ChatGPT with customer search, recommendations, and SMS drafting."""
-    with SessionLocal() as db:
-        resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
-        payload = {
-            "store": resolved_store.model_dump(mode="json"),
-            "filters": {
-                "occasion": occasion,
-                "budget_min": budget_min,
-                "budget_max": budget_max,
-                "top_k": top_k,
-            },
-            "customerQuery": "",
-            "customerResults": [],
-            "selectedCustomer": None,
-            "recommendation": None,
-            "lastDraft": None,
-        }
-        opened_for = resolved_store.name
-        if customer_email or customer_id or customer_phone_e164 or phone_last4:
-            response = _associate_recommendation_impl(
-                store_query=store_query,
-                store_id=store_id,
-                customer_email=customer_email,
-                customer_id=customer_id,
-                customer_phone_e164=customer_phone_e164,
-                phone_last4=phone_last4,
-                occasion=occasion,
-                budget_min=budget_min,
-                budget_max=budget_max,
-                top_k=top_k,
-            )
-            payload["selectedCustomer"] = response.customer.model_dump(mode="json")
-            payload["recommendation"] = response.model_dump(mode="json")
-            opened_for = f"{response.customer.first_name} {response.customer.last_name}"
+    bootstrap = _associate_workspace_bootstrap_impl(
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
+        customer_id=customer_id,
+        customer_phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+        retrieval_mode=retrieval_mode,
+    )
+    payload = {
+        "store": bootstrap.store.model_dump(mode="json"),
+        "filters": bootstrap.filters.model_dump(mode="json"),
+        "customerQuery": bootstrap.customer_query,
+        "customerResults": [row.model_dump(mode="json") for row in bootstrap.customer_results],
+        "selectedCustomer": bootstrap.selected_customer.model_dump(mode="json") if bootstrap.selected_customer else None,
+        "recommendation": bootstrap.recommendation.model_dump(mode="json") if bootstrap.recommendation else None,
+        "lastDraft": bootstrap.last_draft.model_dump(mode="json") if bootstrap.last_draft else None,
+    }
+    opened_for = bootstrap.selected_customer.full_name if bootstrap.selected_customer else bootstrap.store.name
     token = register_widget_state("associate_workspace", payload)
     return _calltool_result(
         text=f"Opened the associate workspace for {opened_for}.",
@@ -788,20 +1018,19 @@ def fashion_render_associate_workspace(
 )
 def fashion_render_sms_review(message_id: str) -> CallToolResult:
     """Render the SMS draft review widget for a persisted customer communication draft."""
-    with SessionLocal() as db:
-        draft, customer, store = get_customer_message(db, message_id)
-        payload = {
-            "message": draft.model_dump(mode="json"),
-            "store": store.model_dump(mode="json"),
-            "customer": customer.model_dump(mode="json"),
-            "history": [],
-        }
-        token = register_widget_state("sms", payload)
-        return _calltool_result(
-            text=f"Opened SMS draft review for message {message_id}.",
-            payload=payload,
-            meta={"openai/outputTemplate": f"ui://widgets/sms/{token}.html"},
-        )
+    bootstrap = _sms_review_bootstrap_impl(message_id)
+    payload = {
+        "message": bootstrap.message.model_dump(mode="json"),
+        "store": bootstrap.store.model_dump(mode="json"),
+        "customer": bootstrap.customer.model_dump(mode="json"),
+        "history": [row.model_dump(mode="json") for row in bootstrap.history],
+    }
+    token = register_widget_state("sms", payload)
+    return _calltool_result(
+        text=f"Opened SMS draft review for message {message_id}.",
+        payload=payload,
+        meta={"openai/outputTemplate": f"ui://widgets/sms/{token}.html"},
+    )
 
 
 @mcp.tool(
@@ -825,45 +1054,33 @@ def fashion_render_merch_board(
     peer_mode: PeerMode = PeerMode.state_and_profile,
 ) -> CallToolResult:
     """Render the merchandising action board inside ChatGPT from the human-facing merchandising workflow."""
-    with SessionLocal() as db:
-        response = merchandising_action_recommendations(
-            db,
-            store_query=store_query,
-            store_id=store_id,
-            question=question,
-            objective=objective,
-            lookback_days=lookback_days,
-            top_k=top_k,
-            category=category,
-            brand=brand,
-            price_band=price_band,
-            occasion=occasion,
-            compare_mode=compare_mode,
-            peer_mode=peer_mode,
-        )
-        payload = {
-            "store": response.store.model_dump(mode="json"),
-            "filters": {
-                "question": question,
-                "category": category,
-                "brand": brand,
-                "price_band": price_band.value if price_band else None,
-                "occasion": occasion,
-                "lookback_days": lookback_days,
-                "compare_mode": compare_mode.value,
-                "peer_mode": peer_mode.value,
-                "top_k": top_k,
-            },
-            "initialResult": response.model_dump(mode="json"),
-            "lastResult": None,
-            "lastTool": None,
-        }
-        token = register_widget_state("merch", payload)
-        return _calltool_result(
-            text=f"Opened the merchandising board for {response.store.name}.",
-            payload=payload,
-            meta={"openai/outputTemplate": f"ui://widgets/merch/{token}.html"},
-        )
+    bootstrap = _merch_workspace_bootstrap_impl(
+        store_query=store_query,
+        store_id=store_id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+    )
+    payload = {
+        "store": bootstrap.store.model_dump(mode="json"),
+        "filters": bootstrap.filters.model_dump(mode="json"),
+        "initialResult": bootstrap.initial_result.model_dump(mode="json"),
+        "lastResult": bootstrap.last_result.model_dump(mode="json") if bootstrap.last_result else None,
+        "lastTool": bootstrap.last_tool,
+    }
+    token = register_widget_state("merch", payload)
+    return _calltool_result(
+        text=f"Opened the merchandising board for {bootstrap.store.name}.",
+        payload=payload,
+        meta={"openai/outputTemplate": f"ui://widgets/merch/{token}.html"},
+    )
 
 
 @mcp.tool(
@@ -883,6 +1100,7 @@ def fashion_render_associate_board(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> CallToolResult:
     """Backward-compatible alias for the associate workspace render tool."""
     return fashion_render_associate_workspace(
@@ -896,6 +1114,7 @@ def fashion_render_associate_board(
         budget_min=budget_min,
         budget_max=budget_max,
         top_k=top_k,
+        retrieval_mode=retrieval_mode,
     )
 
 

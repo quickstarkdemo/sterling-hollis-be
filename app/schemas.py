@@ -108,6 +108,12 @@ class PriceBand(str, Enum):
     band_1000_plus = "1000_plus"
 
 
+class RetrievalMode(str, Enum):
+    auto = "auto"
+    fast = "fast"
+    semantic = "semantic"
+
+
 class CustomerRecommendationRequest(BaseModel):
     store_id: str
     customer_id: str | None = None
@@ -209,6 +215,7 @@ class StoreAssociateRecommendationResponse(BaseModel):
     store: ResolvedStore
     customer: ResolvedCustomer
     recommendation: CustomerRecommendationResponse
+    retrieval_mode: RetrievalMode = RetrievalMode.auto
 
 
 class CustomerCommunicationStatus(str, Enum):
@@ -239,6 +246,7 @@ class CustomerCommunicationDraftResponse(BaseModel):
     store: ResolvedStore
     customer: ResolvedCustomer
     recommendation: CustomerRecommendationResponse
+    retrieval_mode: RetrievalMode = RetrievalMode.auto
 
 
 class CustomerCommunicationUpdateResponse(BaseModel):
@@ -265,6 +273,43 @@ class TwilioSmokeTestRecord(BaseModel):
 
 class TwilioSmokeTestResponse(BaseModel):
     result: TwilioSmokeTestRecord
+
+
+class AssociateWorkspaceFilters(BaseModel):
+    occasion: str | None = None
+    budget_min: float | None = None
+    budget_max: float | None = None
+    top_k: int = 5
+    retrieval_mode: RetrievalMode = RetrievalMode.auto
+
+
+class AssociateWorkspaceBootstrapResponse(BaseModel):
+    store: ResolvedStore
+    filters: AssociateWorkspaceFilters
+    customer_query: str = ""
+    customer_results: list[CustomerSearchResult] = Field(default_factory=list)
+    selected_customer: ResolvedCustomer | None = None
+    recommendation: StoreAssociateRecommendationResponse | None = None
+    last_draft: CustomerCommunicationDraftResponse | None = None
+
+
+class SmsReviewBootstrapResponse(BaseModel):
+    message: CustomerCommunicationRecord
+    store: ResolvedStore
+    customer: ResolvedCustomer
+    history: list[CustomerCommunicationRecord] = Field(default_factory=list)
+
+
+class MerchWorkspaceFilters(BaseModel):
+    question: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    lookback_days: int = 90
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period
+    peer_mode: PeerMode = PeerMode.state_and_profile
+    top_k: int = 9
 
 
 class MerchAction(str, Enum):
@@ -347,3 +392,11 @@ class MerchTrendSummaryResponse(BaseModel):
     occasion: str | None = None
     summary: str
     highlights: list[MerchTrendHighlight]
+
+
+class MerchWorkspaceBootstrapResponse(BaseModel):
+    store: ResolvedStore
+    filters: MerchWorkspaceFilters
+    initial_result: MerchActionRecommendationsResponse
+    last_result: MerchActionRecommendationsResponse | MerchDiagnosticsResponse | MerchTrendSummaryResponse | None = None
+    last_tool: str | None = None

@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import Customer, Order, OrderItem, Product, Store, SyntheticRun
-from app.schemas import CompareMode, Objective, PeerMode, PriceBand
+from app.schemas import CompareMode, Objective, PeerMode, PriceBand, RetrievalMode
 from app.services.apps_ui import get_widget_state
 from app.services.communications import (
     customer_message_history,
@@ -25,6 +25,11 @@ from app.services.merchandising import merchandising_action_recommendations, mer
 
 class _DummyPineconeService:
     enabled = False
+
+
+class _BoomEmbeddingService:
+    def embed_text(self, text):
+        raise AssertionError("embedding path should not run in fast mode")
 
 
 @contextmanager
@@ -442,3 +447,58 @@ def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
 
         assert sms_result.meta["openai/outputTemplate"].startswith("ui://widgets/sms/")
         assert merch_result.meta["openai/outputTemplate"].startswith("ui://widgets/merch/")
+
+
+def test_bootstrap_tools_return_full_payloads(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        associate = mcp_server.fashion_associate_workspace_bootstrap(
+            store_query="Dallas",
+            customer_phone_e164="+12145551234",
+            occasion="wedding",
+            budget_max=900,
+            retrieval_mode=RetrievalMode.auto,
+        )
+        sms_draft = prepare_customer_sms(
+            session,
+            store_id="1001",
+            customer_id="cust_000001",
+            occasion="wedding",
+            budget_max=900,
+        )
+        sms = mcp_server.fashion_sms_review_bootstrap(sms_draft.message.id)
+        merch = mcp_server.fashion_merch_workspace_bootstrap(
+            store_query="Dallas",
+            question="What should we feature for wedding shoppers under $1000?",
+            category="womens_apparel",
+            price_band=PriceBand.band_500_1000,
+        )
+
+        assert associate.store.id == "1001"
+        assert associate.selected_customer.id == "cust_000001"
+        assert associate.recommendation is not None
+        assert sms.message.id == sms_draft.message.id
+        assert sms.history
+        assert merch.store.id == "1001"
+        assert merch.initial_result.recommendations
+
+
+def test_fast_mode_skips_embedding(monkeypatch):
+    import app.services.recommendations as recommendations
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        monkeypatch.setattr(recommendations, "EmbeddingService", lambda: _BoomEmbeddingService())
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            occasion="wedding",
+            budget_max=900,
+            retrieval_mode=RetrievalMode.fast,
+        )
+
+        assert response.retrieval_mode == RetrievalMode.fast
+        assert response.recommendation.strategy == "sql_rules_fast_path"
+        assert response.recommendation.recommendations

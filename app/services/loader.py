@@ -20,6 +20,7 @@ from app.models import (
     StoreDailyMetric,
     SyntheticRun,
 )
+from app.services.operator_cache import clear_operator_caches
 
 ENTITY_MODEL_MAP = {
     "stores": Store,
@@ -109,6 +110,24 @@ def reset_synthetic_tables(db: Session) -> None:
     db.execute(delete(Customer))
     db.execute(delete(Store))
     db.commit()
+    clear_operator_caches()
+
+
+def assert_synthetic_tables_empty(db: Session) -> None:
+    table_counts = {
+        "order_items": db.scalar(select(func.count()).select_from(OrderItem)) or 0,
+        "orders": db.scalar(select(func.count()).select_from(Order)) or 0,
+        "customer_communications": db.scalar(select(func.count()).select_from(CustomerCommunication)) or 0,
+        "product_embeddings": db.scalar(select(func.count()).select_from(ProductEmbedding)) or 0,
+        "store_daily_metrics": db.scalar(select(func.count()).select_from(StoreDailyMetric)) or 0,
+        "products": db.scalar(select(func.count()).select_from(Product)) or 0,
+        "customers": db.scalar(select(func.count()).select_from(Customer)) or 0,
+        "stores": db.scalar(select(func.count()).select_from(Store)) or 0,
+    }
+    remaining = {name: count for name, count in table_counts.items() if count}
+    if remaining:
+        formatted = ", ".join(f"{name}={count}" for name, count in sorted(remaining.items()))
+        raise ValueError(f"Synthetic reset failed; rows remain after reset: {formatted}")
 
 
 def load_entity_csv(db: Session, run_id: str, data_dir: Path, entity: str) -> int:

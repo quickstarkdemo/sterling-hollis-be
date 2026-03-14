@@ -33,17 +33,11 @@ LAST_NAMES = [
 LOYALTY_TIERS = ["standard", "silver", "gold", "platinum"]
 CHANNELS = ["in_store", "online", "hybrid"]
 OCCASIONS = ["wedding", "vacation", "workwear", "holiday_party", "everyday_luxury"]
-STATE_AREA_CODES = {
-    "TX": ["214", "469", "713", "832"],
-    "CO": ["303", "720"],
-    "CA": ["310", "415", "628"],
-    "FL": ["305", "786"],
-    "NY": ["212", "646"],
-    "IL": ["312", "773"],
-    "MA": ["617", "857"],
-    "NV": ["702", "725"],
-    "HI": ["808"],
-}
+DEMO_CUSTOMER_ID = "cust_demo_000001"
+DEMO_CUSTOMER_PHONE_E164 = "+12146932322"
+DEMO_CUSTOMER_EMAIL = "avery.demo@example-fashion.test"
+DEMO_CUSTOMER_FIRST_NAME = "Avery"
+DEMO_CUSTOMER_LAST_NAME = "Demo"
 
 
 @dataclass
@@ -88,12 +82,9 @@ def _json(value: dict | list) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
-def _synthetic_phone_e164(idx: int, state: str) -> str:
-    area_codes = STATE_AREA_CODES.get(state.upper(), ["214", "303", "415"])
-    area = area_codes[idx % len(area_codes)]
-    exchange = 200 + ((idx // len(area_codes)) % 700)
-    subscriber = 1000 + (idx % 9000)
-    return f"+1{area}{exchange:03d}{subscriber:04d}"
+def _synthetic_phone_e164(idx: int) -> str:
+    base_number = 2_000_000_000 + idx
+    return f"+1{base_number:010d}"
 
 
 def _pick_category_for_profile(rng: random.Random, profile_type: str) -> str:
@@ -121,7 +112,34 @@ def generate_customers(
     now: datetime,
 ) -> list[dict]:
     customers: list[dict] = []
-    for idx in range(count):
+    if count <= 0:
+        return customers
+
+    demo_store = stores[0]
+    demo_joined_at = now - timedelta(days=540)
+    customers.append(
+        {
+            "id": DEMO_CUSTOMER_ID,
+            "seed_run_id": run_id,
+            "home_store_id": demo_store["id"],
+            "first_name": DEMO_CUSTOMER_FIRST_NAME,
+            "last_name": DEMO_CUSTOMER_LAST_NAME,
+            "email": DEMO_CUSTOMER_EMAIL,
+            "phone_e164": DEMO_CUSTOMER_PHONE_E164,
+            "city": demo_store["city"],
+            "state": demo_store["state"],
+            "joined_at": _iso(demo_joined_at),
+            "loyalty_tier": "gold",
+            "price_sensitivity": 0.38,
+            "occasion_affinity": _json({"wedding": 0.95, "vacation": 0.55, "workwear": 0.35, "holiday_party": 0.82, "everyday_luxury": 0.74}),
+            "style_vector": _json({cat: (0.85 if cat == "womens_apparel" else 0.45) for cat in CATEGORY_TAXONOMY.keys()}),
+            "size_preferences": _json({"top": "M", "bottom": "8", "shoe": "8"}),
+            "channel_preference": "hybrid",
+            "pii_token": _hash_token(DEMO_CUSTOMER_EMAIL),
+        }
+    )
+
+    for idx in range(max(count - 1, 0)):
         cid = f"cust_{idx + 1:06d}"
         first = rng.choice(FIRST_NAMES)
         last = rng.choice(LAST_NAMES)
@@ -150,7 +168,7 @@ def generate_customers(
         channel_pref = _weighted_choice(rng, [("in_store", 0.35), ("online", 0.30), ("hybrid", 0.35)])
 
         email = f"{first.lower()}.{last.lower()}.{idx + 1}@example-fashion.test"
-        phone_e164 = _synthetic_phone_e164(idx + 1, store["state"])
+        phone_e164 = _synthetic_phone_e164(idx + 1)
 
         customers.append(
             {
@@ -175,6 +193,17 @@ def generate_customers(
         )
 
     return customers
+
+
+def _assert_unique_customers(customers: list[dict]) -> None:
+    phones = [customer["phone_e164"] for customer in customers]
+    emails = [customer["email"] for customer in customers]
+    if len(phones) != len(set(phones)):
+        raise ValueError("Generated duplicate phone_e164 values in customers.csv")
+    if len(emails) != len(set(emails)):
+        raise ValueError("Generated duplicate email values in customers.csv")
+    if DEMO_CUSTOMER_PHONE_E164 in phones[1:] or phones.count(DEMO_CUSTOMER_PHONE_E164) != 1:
+        raise ValueError("Demo customer phone number collision detected")
 
 
 def generate_products(
@@ -513,6 +542,7 @@ def generate_synthetic_dataset(
     selected_stores = stores[: volumes.stores] if volumes.stores < len(stores) else list(stores)
 
     customers = generate_customers(rng, run_id, selected_stores, volumes.customers, now)
+    _assert_unique_customers(customers)
     products = generate_products(rng, run_id, selected_stores, volumes.products)
     orders, order_items = generate_orders_and_items(
         rng,

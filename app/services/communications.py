@@ -15,6 +15,7 @@ from app.schemas import (
     CustomerCommunicationStatus,
     CustomerCommunicationUpdateResponse,
     CustomerRecommendationResponse,
+    RetrievalMode,
     ResolvedCustomer,
     ResolvedStore,
     TwilioSmokeTestRecord,
@@ -88,6 +89,7 @@ def prepare_customer_sms(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 5,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
 ) -> CustomerCommunicationDraftResponse:
     settings = get_settings()
     resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
@@ -107,7 +109,7 @@ def prepare_customer_sms(
         budget_max=budget_max,
         top_k=top_k,
     )
-    rows, strategy = customer_recommendations(session, req)
+    rows, strategy = customer_recommendations(session, req, retrieval_mode=retrieval_mode)
     recommendation = CustomerRecommendationResponse(
         store_id=resolved_store.id,
         strategy=strategy,
@@ -142,6 +144,7 @@ def prepare_customer_sms(
         store=resolved_store,
         customer=resolved_customer,
         recommendation=recommendation,
+        retrieval_mode=retrieval_mode,
     )
 
 

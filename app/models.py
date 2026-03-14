@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -106,6 +107,8 @@ class Product(Base):
     __table_args__ = (
         CheckConstraint("price >= 0", name="ck_products_price_non_negative"),
         CheckConstraint("inventory_qty >= 0", name="ck_products_inventory_non_negative"),
+        Index("ix_products_store_availability_category", "store_id", "availability", "category"),
+        Index("ix_products_store_brand", "store_id", "brand"),
     )
 
 
@@ -132,6 +135,9 @@ class Order(Base):
     __table_args__ = (
         CheckConstraint("subtotal >= 0", name="ck_orders_subtotal_non_negative"),
         CheckConstraint("total_amount >= 0", name="ck_orders_total_non_negative"),
+        Index("ix_orders_store_ordered_at", "store_id", "ordered_at"),
+        Index("ix_orders_customer_ordered_at", "customer_id", "ordered_at"),
+        Index("ix_orders_store_occasion_ordered_at", "store_id", "occasion", "ordered_at"),
     )
 
 
@@ -221,6 +227,10 @@ class CustomerCommunication(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_customer_communications_customer_created_at", "customer_id", "created_at"),
+    )
 
 
 class UiSession(Base):
