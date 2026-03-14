@@ -20,10 +20,13 @@ from app.schemas import (
     CustomerCommunicationHistoryResponse,
     CustomerCommunicationStatus,
     CustomerCommunicationUpdateResponse,
+    CustomerLookupResponse,
     CustomerRecommendationRequest,
     CustomerRecommendationResponse,
     CustomerResolutionResponse,
     CustomerSearchResponse,
+    IndexJobListResponse,
+    IndexJobResponse,
     IndexProductsRequest,
     IndexProductsResponse,
     MerchActionRecommendationsResponse,
@@ -58,6 +61,7 @@ from app.services.communications import (
     update_customer_sms_draft,
 )
 from app.services.indexing import index_products_for_run
+from app.services.index_jobs import enqueue_index_job, get_index_job, list_index_jobs
 from app.services.loader import (
     assert_synthetic_tables_empty,
     current_loaded_counts,
@@ -493,8 +497,35 @@ def fashion_index_products(
     run_id: str,
     batch_size: int = 128,
 ) -> IndexProductsResponse:
-    """Generate product embeddings and upsert vectors into Pinecone for a run."""
+    """Generate product embeddings and upsert vectors into Pinecone for a run. This legacy tool runs synchronously; prefer fashion_start_index_products for timeout resilience."""
     return _index_products_impl(IndexProductsRequest(run_id=run_id, batch_size=batch_size))
+
+
+@mcp.tool(name="fashion_start_index_products", annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True))
+def fashion_start_index_products(
+    run_id: str,
+    batch_size: int = 128,
+) -> IndexJobResponse:
+    """Queue a background product-indexing job for a run and return immediately."""
+    with SessionLocal() as db:
+        return enqueue_index_job(db, run_id=run_id, batch_size=batch_size)
+
+
+@mcp.tool(name="fashion_get_index_job", annotations=_tool_annotations(read_only=True, idempotent=True))
+def fashion_get_index_job(job_id: str) -> IndexJobResponse:
+    """Return the current status for a background indexing job."""
+    with SessionLocal() as db:
+        return get_index_job(db, job_id)
+
+
+@mcp.tool(name="fashion_list_index_jobs", annotations=_tool_annotations(read_only=True, idempotent=True))
+def fashion_list_index_jobs(
+    run_id: str | None = None,
+    limit: int = 20,
+) -> IndexJobListResponse:
+    """List recent background indexing jobs, optionally filtered by run_id."""
+    with SessionLocal() as db:
+        return list_index_jobs(db, run_id=run_id, limit=limit)
 
 
 @mcp.tool(name="fashion_get_run_report", annotations=_tool_annotations(read_only=True, idempotent=True))
@@ -604,7 +635,7 @@ def fashion_resolve_customer(
     phone_e164: str | None = None,
     phone_last4: str | None = None,
 ) -> CustomerResolutionResponse:
-    """Resolve a customer by email, customer_id, or synthetic phone for operator workflows."""
+    """Resolve a customer by exact email, customer_id, full synthetic phone, or unique phone last4."""
     with SessionLocal() as db:
         match = resolve_customer(
             db,
@@ -615,6 +646,35 @@ def fashion_resolve_customer(
         )
         query = email or customer_id or phone_e164 or phone_last4 or ""
         return CustomerResolutionResponse(query=query, resolved=match.resolved)
+
+
+@mcp.tool(
+    name="fashion_lookup_customer",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_lookup_customer(query: str, limit: int = 10) -> CustomerLookupResponse:
+    """Lookup a customer from a single operator query. Exact identifiers resolve directly; partial or ambiguous queries return candidates."""
+    normalized = query.strip()
+    digits_only = "".join(ch for ch in normalized if ch.isdigit())
+    with SessionLocal() as db:
+        try:
+            if "@" in normalized:
+                resolved = resolve_customer(db, email=normalized).resolved
+                return CustomerLookupResponse(query=query, mode="resolved", resolved=resolved)
+            if normalized.startswith("cust_"):
+                resolved = resolve_customer(db, customer_id=normalized).resolved
+                return CustomerLookupResponse(query=query, mode="resolved", resolved=resolved)
+            if len(digits_only) >= 10:
+                resolved = resolve_customer(db, phone_e164=normalized).resolved
+                return CustomerLookupResponse(query=query, mode="resolved", resolved=resolved)
+        except ValueError:
+            pass
+
+        candidates = find_customers(db, query=query, limit=limit).results
+        if len(candidates) == 1 and candidates[0].match_score >= 95:
+            return CustomerLookupResponse(query=query, mode="resolved", resolved=candidates[0])
+        return CustomerLookupResponse(query=query, mode="candidates", candidates=candidates)
 
 
 @mcp.tool(

@@ -288,7 +288,7 @@ def resolve_customer(
         digits = _digits(phone_last4)
         matches = session.scalars(select(Customer).where(Customer.phone_e164.like(f"%{digits[-4:]}"))).all()
         if len(matches) > 1:
-            raise ValueError(f"Phone last4 '{digits[-4:]}' matched multiple customers. Use fashion_find_customers first.")
+            raise ValueError(f"Phone last4 '{digits[-4:]}' matched multiple customers. Use fashion_lookup_customer or fashion_find_customers first.")
         customer = matches[0] if matches else None
         match_reason = "phone_last4"
 

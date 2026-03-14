@@ -19,6 +19,7 @@ from app.services.communications import (
     twilio_smoke_test,
     update_customer_sms_draft,
 )
+from app.services.index_jobs import process_next_index_job
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.merchandising import merchandising_action_recommendations, merchandising_diagnostics, merchandising_trend_summary
 
@@ -502,3 +503,45 @@ def test_fast_mode_skips_embedding(monkeypatch):
         assert response.retrieval_mode == RetrievalMode.fast
         assert response.recommendation.strategy == "sql_rules_fast_path"
         assert response.recommendation.recommendations
+
+
+def test_lookup_customer_returns_candidates_for_ambiguous_last4(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_lookup_customer("Avery")
+        assert response.mode == "candidates"
+        assert len(response.candidates) == 2
+
+
+def test_start_and_process_index_job(monkeypatch):
+    import app.services.index_jobs as index_jobs
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        monkeypatch.setattr(
+            index_jobs,
+            "index_products_for_run",
+            lambda db, run_id, batch_size=128: {
+                "attempted": 4,
+                "indexed": 4,
+                "failed": 0,
+                "status_breakdown": {"indexed": 4},
+            },
+        )
+
+        queued = mcp_server.fashion_start_index_products("run_test", batch_size=64)
+        assert queued.status.value == "queued"
+        assert queued.run_id == "run_test"
+
+        processed = process_next_index_job(mcp_server.SessionLocal)
+        fetched = mcp_server.fashion_get_index_job(queued.id)
+        listed = mcp_server.fashion_list_index_jobs(run_id="run_test", limit=10)
+
+        assert processed is not None
+        assert processed.status.value == "succeeded"
+        assert processed.indexed == 4
+        assert fetched.status.value == "succeeded"
+        assert listed.jobs
+        assert listed.jobs[0].id == queued.id

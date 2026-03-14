@@ -33,5 +33,26 @@ services:
     depends_on:
       - postgres
 
+  index-worker:
+    build: .
+    command: ./scripts/run_index_worker.sh
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/productdb
+      DB_HOST: postgres
+      DB_PORT: 5432
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      PINECONE_API_KEY: ${PINECONE_API_KEY:-}
+      PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME:-fashion-products-v1}
+      PINECONE_CLOUD: ${PINECONE_CLOUD:-aws}
+      PINECONE_REGION: ${PINECONE_REGION:-us-east-1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
+      INDEX_WORKER_POLL_SECONDS: ${INDEX_WORKER_POLL_SECONDS:-2.0}
+      DATA_DIR: /app/data/runs
+    volumes:
+      - ./:/app
+    depends_on:
+      - postgres
+
 volumes:
   pgdata:

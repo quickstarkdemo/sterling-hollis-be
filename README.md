@@ -15,9 +15,11 @@ Synthetic fashion data platform with:
 - CSV run artifacts under `data/runs/<run_id>/`
 - Admin load and finalize endpoints
 - Product embedding/index endpoint (OpenAI + Pinecone when configured, deterministic fallback otherwise)
+- Durable async product indexing jobs backed by Postgres and a lightweight worker service
 - Customer and merchandising recommendation endpoints
 - Human-first MCP tools for store resolution, customer resolution, associate recommendations, and merch workflows
 - Customer search by name, email, and synthetic phone number
+- Unified customer lookup tool that resolves exact identifiers or returns candidate lists for ambiguous searches
 - Dedicated demo customer seeded with a stable real-number lookup target for demos
 - Draft-then-send Twilio SMS support using a global test destination number
 - Editable SMS drafts, history, and Twilio smoke-test support
@@ -66,6 +68,7 @@ Optional for Twilio-assisted customer communication:
 - `TWILIO_API_KEY_SECRET`
 - `TWILIO_SENDER_NUMBER`
 - `TWILIO_TEST_TO_NUMBER`
+- `INDEX_WORKER_POLL_SECONDS` if you want a non-default worker poll interval
 
 Deployment-related values:
 - `DOCKERHUB_USER`
@@ -106,6 +109,7 @@ Twilio:
 - `TWILIO_API_KEY_SECRET`
 - `TWILIO_SENDER_NUMBER`
 - `TWILIO_TEST_TO_NUMBER`
+- `INDEX_WORKER_POLL_SECONDS`
 
 Deployment:
 - `DOCKERHUB_USER`
@@ -132,6 +136,7 @@ Compose now starts the API in migration-first mode:
 - wait for Postgres
 - run `alembic upgrade head`
 - start FastAPI
+- start a separate `index-worker` service that polls durable indexing jobs from Postgres
 
 The local development compose file includes a bundled Postgres container and sets `UVICORN_RELOAD=true`. The production deployment path does not bundle Postgres and runs Uvicorn without reload.
 
@@ -171,7 +176,7 @@ curl -X POST http://localhost:8000/admin/synthetic/load \
   -H 'content-type: application/json' \
   -d '{"run_id":"<RUN_ID>","entities":["stores","customers","products","orders","order_items","store_daily_metrics"]}'
 
-# Index products (OpenAI/Pinecone if configured, fallback local embedding otherwise)
+# Index products synchronously (legacy; may take long enough to hit MCP/client timeouts)
 curl -X POST http://localhost:8000/admin/synthetic/index-products \
   -H 'content-type: application/json' \
   -d '{"run_id":"<RUN_ID>","batch_size":128}'
@@ -179,6 +184,14 @@ curl -X POST http://localhost:8000/admin/synthetic/index-products \
 # Run report
 curl http://localhost:8000/admin/synthetic/runs/<RUN_ID>/report
 ```
+
+For MCP/operator flows, prefer the durable async indexing path:
+
+1. `fashion_start_index_products`
+2. `fashion_get_index_job`
+3. `fashion_get_run_report`
+
+This avoids client-side timeouts while the worker continues processing in the background.
 
 ### 3a) If you add OpenAI/Pinecone keys after a run already exists
 
@@ -230,6 +243,7 @@ Key tables:
 - `customer_communications`
 - `ui_sessions`
 - `twilio_smoke_tests`
+- `index_jobs`
 
 If you want SQL instead of running Alembic directly:
 
@@ -257,6 +271,56 @@ Pinecone:
 - `POST /recommendations/merchandising`
 - `GET /feeds/products/openai?store_id=<ID>&limit=2000`
 - `POST /mcp` and related Streamable HTTP MCP traffic mounted at `/mcp`
+
+## MCP highlights
+
+Low-level/admin MCP tools:
+- `fashion_generate_synthetic`
+- `fashion_load_synthetic`
+- `fashion_start_index_products`
+- `fashion_get_index_job`
+- `fashion_list_index_jobs`
+- `fashion_get_run_report`
+
+Operator/customer tools:
+- `fashion_lookup_customer`
+- `fashion_find_customers`
+- `fashion_resolve_customer`
+- `fashion_resolve_store`
+- `fashion_store_associate_recommend`
+- `fashion_prepare_customer_sms`
+- `fashion_update_customer_sms_draft`
+- `fashion_send_customer_sms`
+- `fashion_customer_message_history`
+- `fashion_twilio_smoke_test`
+
+Bootstrap/render tools:
+- `fashion_associate_workspace_bootstrap`
+- `fashion_sms_review_bootstrap`
+- `fashion_merch_workspace_bootstrap`
+- `fashion_render_associate_workspace`
+- `fashion_render_sms_review`
+- `fashion_render_merch_board`
+
+### Customer lookup behavior
+
+Use `fashion_lookup_customer` when the query may be ambiguous.
+
+- exact `email`, `customer_id`, or full `phone_e164` resolves directly
+- partial email, name fragments, and phone last-4 return ranked candidates
+
+Use `fashion_resolve_customer` only when you already have an exact identifier and want strict resolution.
+
+### Async indexing behavior
+
+`fashion_index_products` still exists as a legacy synchronous tool, but operator clients may time out before it returns on larger runs.
+
+Preferred pattern:
+1. `fashion_start_index_products(run_id=...)`
+2. poll `fashion_get_index_job(job_id=...)`
+3. confirm final state with `fashion_get_run_report(run_id=...)`
+
+The `index-worker` service executes these jobs independently of the MCP request lifecycle, so client timeouts do not cancel indexing.
 
 ## MCP Endpoint
 

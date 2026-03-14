@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     twilio_test_to_number: str | None = None
 
     vector_top_k: int = 50
+    index_worker_poll_seconds: float = 2.0
 
 
 @lru_cache

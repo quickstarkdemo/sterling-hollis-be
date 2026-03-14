@@ -114,6 +114,13 @@ class RetrievalMode(str, Enum):
     semantic = "semantic"
 
 
+class IndexJobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
 class CustomerRecommendationRequest(BaseModel):
     store_id: str
     customer_id: str | None = None
@@ -211,6 +218,13 @@ class CustomerResolutionResponse(BaseModel):
     resolved: ResolvedCustomer
 
 
+class CustomerLookupResponse(BaseModel):
+    query: str
+    mode: str
+    resolved: ResolvedCustomer | None = None
+    candidates: list[CustomerSearchResult] = Field(default_factory=list)
+
+
 class StoreAssociateRecommendationResponse(BaseModel):
     store: ResolvedStore
     customer: ResolvedCustomer
@@ -273,6 +287,25 @@ class TwilioSmokeTestRecord(BaseModel):
 
 class TwilioSmokeTestResponse(BaseModel):
     result: TwilioSmokeTestRecord
+
+
+class IndexJobResponse(BaseModel):
+    id: str
+    run_id: str
+    batch_size: int
+    status: IndexJobStatus
+    attempted: int
+    indexed: int
+    failed_count: int
+    status_breakdown: dict[str, int]
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class IndexJobListResponse(BaseModel):
+    jobs: list[IndexJobResponse]
 
 
 class AssociateWorkspaceFilters(BaseModel):
