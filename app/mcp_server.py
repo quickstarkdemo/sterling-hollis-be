@@ -137,9 +137,10 @@ def _tool_annotations(read_only: bool, idempotent: bool, open_world: bool = Fals
     }
 
 
-def _render_tool_meta(invoking: str, invoked: str) -> dict:
+def _render_tool_meta(template_base: str, invoking: str, invoked: str) -> dict:
     return {
         **_WIDGET_TOOL_META,
+        "openai/outputTemplate": f"{template_base}/{{token}}.html",
         "openai/toolInvocation/invoking": invoking,
         "openai/toolInvocation/invoked": invoked,
     }
@@ -470,7 +471,7 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
 
 @mcp.resource(
     _ASSOCIATE_WIDGET_TEMPLATE_BASE + "/{token}.html",
-    mime_type="text/html+skybridge",
+    mime_type="text/html;profile=mcp-app",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate workspace for customer search, recommendations, and SMS drafting."},
 )
 def associate_widget_resource(token: str) -> str:
@@ -479,7 +480,7 @@ def associate_widget_resource(token: str) -> str:
 
 @mcp.resource(
     _SMS_WIDGET_TEMPLATE_BASE + "/{token}.html",
-    mime_type="text/html+skybridge",
+    mime_type="text/html;profile=mcp-app",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
 )
 def sms_widget_resource(token: str) -> str:
@@ -488,7 +489,7 @@ def sms_widget_resource(token: str) -> str:
 
 @mcp.resource(
     _MERCH_WIDGET_TEMPLATE_BASE + "/{token}.html",
-    mime_type="text/html+skybridge",
+    mime_type="text/html;profile=mcp-app",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
 )
 def merch_widget_resource(token: str) -> str:
@@ -1090,6 +1091,7 @@ def fashion_merch_trend_summary(
     name="fashion_render_associate_workspace",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_render_tool_meta(
+        _ASSOCIATE_WIDGET_TEMPLATE_BASE,
         invoking="Opening associate workspace...",
         invoked="Associate workspace ready.",
     ),
@@ -1137,7 +1139,7 @@ def fashion_render_associate_workspace(
     template_uri = f"{_ASSOCIATE_WIDGET_TEMPLATE_BASE}/{token}.html"
     return _calltool_result(
         text=f"Opened the associate workspace for {opened_for}.",
-        payload={"kind": "associate_workspace", "widgetSessionId": token},
+        payload=None,
         meta={"openai/outputTemplate": template_uri, "openai/widgetSessionId": token},
     )
 
@@ -1146,6 +1148,7 @@ def fashion_render_associate_workspace(
     name="fashion_render_sms_review",
     annotations=_tool_annotations(read_only=True, idempotent=True),
     meta=_render_tool_meta(
+        _SMS_WIDGET_TEMPLATE_BASE,
         invoking="Opening SMS review...",
         invoked="SMS review ready.",
     ),
@@ -1165,7 +1168,7 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
     template_uri = f"{_SMS_WIDGET_TEMPLATE_BASE}/{token}.html"
     return _calltool_result(
         text=f"Opened SMS draft review for message {message_id}.",
-        payload={"kind": "sms", "widgetSessionId": token},
+        payload=None,
         meta={"openai/outputTemplate": template_uri, "openai/widgetSessionId": token},
     )
 
@@ -1174,6 +1177,7 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
     name="fashion_render_merch_board",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_render_tool_meta(
+        _MERCH_WIDGET_TEMPLATE_BASE,
         invoking="Opening merchandising board...",
         invoked="Merchandising board ready.",
     ),
@@ -1219,7 +1223,7 @@ def fashion_render_merch_board(
     template_uri = f"{_MERCH_WIDGET_TEMPLATE_BASE}/{token}.html"
     return _calltool_result(
         text=f"Opened the merchandising board for {bootstrap.store.name}.",
-        payload={"kind": "merch", "widgetSessionId": token},
+        payload=None,
         meta={"openai/outputTemplate": template_uri, "openai/widgetSessionId": token},
     )
 
@@ -1228,6 +1232,7 @@ def fashion_render_merch_board(
     name="fashion_render_associate_board",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_render_tool_meta(
+        _ASSOCIATE_WIDGET_TEMPLATE_BASE,
         invoking="Opening associate workspace...",
         invoked="Associate workspace ready.",
     ),
