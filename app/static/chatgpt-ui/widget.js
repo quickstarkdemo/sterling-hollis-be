@@ -104,11 +104,22 @@ function isPlainObject(value) {
 
 function normalizeHydratedState(raw) {
   if (!isPlainObject(raw)) return null;
+  const hiddenMeta = isPlainObject(raw._meta) ? raw._meta : isPlainObject(raw.meta) ? raw.meta : {};
+  const hiddenSessionId =
+    hiddenMeta['openai/widgetSessionId'] ||
+    hiddenMeta.widgetSessionId ||
+    hiddenMeta['widgetSessionId'] ||
+    null;
   const candidate = isPlainObject(raw.structuredContent) ? raw.structuredContent : raw;
   if (!isPlainObject(candidate)) return null;
-  if (candidate.kind && isPlainObject(candidate.payload)) return candidate;
+  if (candidate.kind && isPlainObject(candidate.payload)) {
+    if (hiddenSessionId && !candidate.payload.widgetSessionId) candidate.payload.widgetSessionId = hiddenSessionId;
+    return candidate;
+  }
   if (candidate.payload && isPlainObject(candidate.payload)) {
-    return { kind: meta.kind || 'unknown', payload: candidate.payload };
+    const payload = { ...candidate.payload };
+    if (hiddenSessionId && !payload.widgetSessionId) payload.widgetSessionId = hiddenSessionId;
+    return { kind: meta.kind || 'unknown', payload };
   }
   if (candidate.result && isPlainObject(candidate.result)) {
     return normalizeHydratedState(candidate.result);
@@ -116,7 +127,9 @@ function normalizeHydratedState(raw) {
   if (candidate.content && Array.isArray(candidate.content) && candidate.structuredContent) {
     return normalizeHydratedState(candidate.structuredContent);
   }
-  return { kind: meta.kind || 'unknown', payload: candidate };
+  const payload = { ...candidate };
+  if (hiddenSessionId && !payload.widgetSessionId) payload.widgetSessionId = hiddenSessionId;
+  return { kind: meta.kind || 'unknown', payload };
 }
 
 async function hydrateState() {
