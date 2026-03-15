@@ -75,13 +75,8 @@ def render_widget_html(
 ) -> str:
     settings = get_settings()
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
-    bootstrap_session_id = widget_session_id
-    if bootstrap_session_id is None and isinstance(initial_payload, dict):
-        bootstrap_session_id = initial_payload.get("widgetSessionId")
     widget_summary = summary or {
-        "associate_workspace": "Interactive associate workspace for customer search, recommendations, and SMS drafting.",
-        "sms": "Editable SMS review and test-send board.",
-        "merch": "Interactive merchandising board with actions, diagnostics, and trends.",
+        "customer_search_workspace": "Search customers by name, email, or phone and select a profile for follow-up actions.",
     }.get(kind, "Operator workspace")
     return f"""<!doctype html>
 <html lang="en">
@@ -102,11 +97,10 @@ def render_widget_html(
         title: {json.dumps(title)},
         kind: {json.dumps(kind)},
         summary: {json.dumps(widget_summary)},
-        widgetSessionId: {json.dumps(bootstrap_session_id)},
+        widgetSessionId: {json.dumps(widget_session_id)},
         initialPayload: {json.dumps(initial_payload)},
         assetBaseUrl: {json.dumps(asset_base)},
         publicBaseUrl: {json.dumps(settings.public_base_url.rstrip("/"))},
-        sessionEndpointBase: {json.dumps(settings.public_base_url.rstrip("/") + "/ui-assets/session")},
       }};
     </script>
     <script type="module">

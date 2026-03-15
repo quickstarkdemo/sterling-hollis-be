@@ -23,11 +23,9 @@ Synthetic fashion data platform with:
 - Dedicated demo customer seeded with a stable real-number lookup target for demos
 - Draft-then-send Twilio SMS support using a global test destination number
 - Editable SMS drafts, history, and Twilio smoke-test support
-- Postgres-backed widget session persistence for Apps SDK render flows
-- Apps SDK render tools for associate workspace, SMS review, and merch board
+- Apps SDK render tool for a minimal customer-search workspace
 - External ChatGPT UI bundle served from `/ui-assets` instead of inline widget HTML
-- Local original demo image assets for recommendation and merchandising cards
-- Associate/SMS/merch bootstrap tools to reduce initial MCP round-trips
+- Archived legacy workspace assets under `app/static/chatgpt-ui/archive/legacy-workspaces`
 - Automatic fast-path recommendation mode for structured associate requests
 - OpenAI-commerce-style product feed endpoint
 
@@ -296,13 +294,8 @@ Operator/customer tools:
 - `fashion_customer_message_history`
 - `fashion_twilio_smoke_test`
 
-Bootstrap/render tools:
-- `fashion_associate_workspace_bootstrap`
-- `fashion_sms_review_bootstrap`
-- `fashion_merch_workspace_bootstrap`
-- `fashion_render_associate_workspace`
-- `fashion_render_sms_review`
-- `fashion_render_merch_board`
+Render tools:
+- `fashion_render_customer_search_workspace`
 
 ### Customer lookup behavior
 
@@ -355,23 +348,17 @@ Human-first operator tools:
 - `fashion_resolve_customer`
 - `fashion_find_customers`
 - `fashion_store_associate_recommend`
-- `fashion_associate_workspace_bootstrap`
 - `fashion_prepare_customer_sms`
 - `fashion_update_customer_sms_draft`
 - `fashion_send_customer_sms`
 - `fashion_customer_message_history`
-- `fashion_sms_review_bootstrap`
 - `fashion_twilio_smoke_test`
 - `fashion_merch_action_recommendations`
 - `fashion_merch_diagnostics`
 - `fashion_merch_trend_summary`
-- `fashion_merch_workspace_bootstrap`
 
 Apps SDK render tools:
-- `fashion_render_associate_workspace`
-- `fashion_render_associate_board` (backward-compatible alias)
-- `fashion_render_sms_review`
-- `fashion_render_merch_board`
+- `fashion_render_customer_search_workspace`
 
 ### Local MCP smoke test
 
@@ -434,23 +421,18 @@ Human-first examples:
 - `fashion_resolve_customer(phone_last4="1234")`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5, retrieval_mode="auto")`
-- `fashion_associate_workspace_bootstrap(store_query="Dallas", customer_phone_e164="+12146932322", occasion="wedding guest dress", budget_max=900, retrieval_mode="auto")`
 - `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
 - `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
 - `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
 - `fashion_customer_message_history(customer_email="avery.parker.1@example-fashion.test", status="sent", limit=10)`
-- `fashion_sms_review_bootstrap(message_id="<MESSAGE_ID>")`
 - `fashion_twilio_smoke_test(body_text="Smoke test from product-db")`
 - `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
 - `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", category="shoes", compare_mode="peer_and_prior_period", lookback_days=90)`
 - `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.", category="handbags", compare_mode="peer_and_prior_period")`
-- `fashion_merch_workspace_bootstrap(store_query="Dallas", question="What should this store feature, deprioritize, or promote this week?", category="handbags", compare_mode="peer_and_prior_period")`
 
 Render-tool examples for ChatGPT Apps:
 
-- `fashion_render_associate_workspace(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
-- `fashion_render_sms_review(message_id="<MESSAGE_ID>")`
-- `fashion_render_merch_board(store_query="Dallas", question="What should this store feature, deprioritize, or promote this week?", category="handbags", price_band="500_1000", compare_mode="peer_and_prior_period", top_k=9)`
+- `fashion_render_customer_search_workspace(query="avery", limit=10)`
 
 ### Manual local MCP testing with Inspector
 
@@ -526,7 +508,6 @@ The customer-communication flow is intentionally conservative:
   - `auto`: uses fast SQL/rules for structured requests and semantic retrieval otherwise
   - `fast`: skips embedding/Pinecone and uses SQL/rules only
   - `semantic`: forces embedding + Pinecone when providers are enabled
-- Bootstrap tools reduce initial UI latency by returning complete associate, SMS review, and merch workspace payloads in one MCP call.
 
 Current message body content is text-only:
 - associate greeting
@@ -539,17 +520,15 @@ The synthetic dataset includes `image_link`, but those URLs are placeholders and
 
 The repo now includes Apps SDK-ready render tools layered on top of the human-first MCP tools:
 
-- associate workspace
-- SMS draft review/send board
-- merchandising board with slice filters
+- customer search workspace
 
-These widgets are mounted as MCP resources and are intended for ChatGPT app usage. Widget state is persisted in Postgres through `ui_sessions`, so a rendered workspace survives process restarts until its TTL expires. They rely on `PUBLIC_BASE_URL` for widget CSP and remote access.
+This widget is mounted as an MCP resource and is intended for ChatGPT app usage. It relies on `PUBLIC_BASE_URL` for widget CSP and remote access.
 
 Implementation notes:
 - widget HTML is now a thin shell that loads a bundled JS/CSS UI from `/ui-assets`
-- recommendation and merchandising cards are enriched with local demo imagery
-- associate workspace supports explicit product selection before SMS draft creation
-- SMS review shows selected product cards and keeps live sending pinned to `TWILIO_TEST_TO_NUMBER`
+- widget runtime uses `window.openai.callTool` directly (no custom parent RPC fallback)
+- minimal widget state (`query`, selected customer) is persisted with optional `window.openai.setWidgetState`
+- legacy multi-workspace UI assets are archived under `app/static/chatgpt-ui/archive/legacy-workspaces`
 
 ## Testing
 

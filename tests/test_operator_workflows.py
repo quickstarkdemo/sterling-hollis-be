@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base
 from app.models import Customer, Order, OrderItem, Product, Store, SyntheticRun
 from app.schemas import CompareMode, Objective, PeerMode, PriceBand, RetrievalMode
-from app.services.apps_ui import get_widget_state
 from app.services.communications import (
     customer_message_history,
     prepare_customer_sms,
@@ -408,105 +407,50 @@ def test_merchandising_supports_expanded_slices(monkeypatch):
         assert trends.highlights
 
 
-def test_render_associate_workspace_persists_widget_state(monkeypatch):
+def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
-        result = mcp_server.fashion_render_associate_workspace(
-            customer_email="avery.parker.1@example-fashion.test",
-            occasion="wedding",
-            budget_max=900,
-            top_k=3,
+        result = mcp_server.fashion_render_customer_search_workspace(
+            query="avery.parker.1@example-fashion.test",
+            limit=10,
         )
+        html = mcp_server.customer_search_widget_resource()
 
-        token = result.meta["openai/widgetSessionId"]
-        persisted = get_widget_state(token)
-        html = mcp_server.associate_widget_session_resource(token)
-
-        assert result.meta["openai/widgetSessionId"] == token
-        assert result.meta["openai/outputTemplate"] == f"ui://widgets/associate/workspace/{token}.html"
-        assert result.meta["ui"]["resourceUri"] == f"ui://widgets/associate/workspace/{token}.html"
-        assert persisted["kind"] == "associate_workspace"
-        assert result.structuredContent["kind"] == "associate_workspace"
-        assert result.structuredContent["payload"]["widgetSessionId"] == token
-        assert result.structuredContent["payload"]["selectedCustomer"]["id"] == "cust_000001"
-        assert result.structuredContent["payload"]["store"]["id"] == "1001"
-        assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
-        assert persisted["payload"]["store"]["id"] == "1001"
-        assert persisted["payload"]["widgetSessionId"] == token
-        assert persisted["payload"]["selectedProductIds"]
+        assert result.meta["openai/outputTemplate"] == "ui://widgets/customer-search/workspace.html"
+        assert result.meta["ui"]["resourceUri"] == "ui://widgets/customer-search/workspace.html"
+        assert result.structuredContent["kind"] == "customer_search_workspace"
+        assert result.structuredContent["payload"]["query"] == "avery.parker.1@example-fashion.test"
+        assert result.structuredContent["payload"]["mode"] == "resolved"
+        assert result.structuredContent["payload"]["resolved"]["id"] == "cust_000001"
+        assert result.structuredContent["payload"]["results"][0]["id"] == "cust_000001"
         assert "<style>" in html
-        assert "attachHostListeners();" in html
-        assert f'widgetSessionId: "{token}"' in html
-        assert "initialPayload:" in html
-        assert '"selectedCustomer"' in html
+        assert "Customer Search Workspace" in html
+        assert "window.__FASHION_WIDGET__" in html
 
 
-def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
-    import app.services.communications as communications
-
+def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
-        monkeypatch.setattr(communications.TwilioService, "send_sms", lambda self, body, to_number=None: {"sid": "SM456"})
-        draft = prepare_customer_sms(session, store_id="1001", customer_id="cust_000001", occasion="wedding", budget_max=900)
+        tool_names = set(mcp_server.mcp._tool_manager._tools.keys())
+        assert "fashion_render_customer_search_workspace" in tool_names
 
-        sms_result = mcp_server.fashion_render_sms_review(draft.message.id)
-        merch_result = mcp_server.fashion_render_merch_board(
-            store_query="Dallas",
-            question="What should this store feature this week if we care about margin?",
-            category="womens_apparel",
-            compare_mode=CompareMode.peer_and_prior_period,
-            peer_mode=PeerMode.profile_type,
-            top_k=6,
-        )
+        removed_tools = {
+            "fashion_associate_workspace_bootstrap",
+            "fashion_sms_review_bootstrap",
+            "fashion_merch_workspace_bootstrap",
+            "fashion_render_associate_workspace",
+            "fashion_render_associate_board",
+            "fashion_render_sms_review",
+            "fashion_render_merch_board",
+        }
+        assert tool_names.isdisjoint(removed_tools)
 
-        sms_token = sms_result.meta["openai/widgetSessionId"]
-        merch_token = merch_result.meta["openai/widgetSessionId"]
-        assert sms_result.meta["openai/outputTemplate"] == f"ui://widgets/sms/review/{sms_token}.html"
-        assert sms_result.structuredContent["kind"] == "sms"
-        assert sms_result.structuredContent["payload"]["widgetSessionId"] == sms_token
-        assert sms_result.structuredContent["payload"]["message"]["id"] == draft.message.id
-        assert sms_token
-        assert merch_result.meta["openai/outputTemplate"] == f"ui://widgets/merch/board/{merch_token}.html"
-        assert merch_result.structuredContent["kind"] == "merch"
-        assert merch_result.structuredContent["payload"]["widgetSessionId"] == merch_token
-        assert merch_result.structuredContent["payload"]["store"]["id"] == "1001"
-        assert merch_token
-
-
-def test_bootstrap_tools_return_full_payloads(monkeypatch):
-    with _patched_runtime(monkeypatch) as (session, mcp_server):
-        _seed_data(session)
-
-        associate = mcp_server.fashion_associate_workspace_bootstrap(
-            customer_phone_e164="+12145551234",
-            occasion="wedding",
-            budget_max=900,
-            retrieval_mode=RetrievalMode.auto,
-        )
-        sms_draft = prepare_customer_sms(
-            session,
-            store_id="1001",
-            customer_id="cust_000001",
-            occasion="wedding",
-            budget_max=900,
-        )
-        sms = mcp_server.fashion_sms_review_bootstrap(sms_draft.message.id)
-        merch = mcp_server.fashion_merch_workspace_bootstrap(
-            store_query="Dallas",
-            question="What should we feature for wedding shoppers under $1000?",
-            category="womens_apparel",
-            price_band=PriceBand.band_500_1000,
-        )
-
-        assert associate.store.id == "1001"
-        assert associate.selected_customer.id == "cust_000001"
-        assert associate.recommendation is not None
-        assert associate.selected_product_ids
-        assert sms.message.id == sms_draft.message.id
-        assert sms.selected_products
-        assert sms.history
-        assert merch.store.id == "1001"
-        assert merch.initial_result.recommendations
+        resources = mcp_server.mcp._resource_manager._resources
+        assert "ui://widgets/customer-search/workspace.html" in resources
+        assert resources["ui://widgets/customer-search/workspace.html"].mime_type == "text/html;profile=mcp-app"
+        assert "ui://widgets/associate/workspace.html" not in resources
+        assert "ui://widgets/sms/review.html" not in resources
+        assert "ui://widgets/merch/board.html" not in resources
 
 
 def test_fast_mode_skips_embedding(monkeypatch):

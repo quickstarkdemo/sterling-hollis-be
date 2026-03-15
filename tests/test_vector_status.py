@@ -71,7 +71,7 @@ def test_widget_session_endpoint_allows_chatgpt_sandbox_origin(monkeypatch):
     monkeypatch.setattr(
         app_main,
         "get_widget_state",
-        lambda token: {"kind": "merch", "payload": {"widgetSessionId": token}},
+        lambda token: {"kind": "customer_search_workspace", "payload": {"query": "", "results": []}},
     )
 
     client = TestClient(create_app())
@@ -80,4 +80,4 @@ def test_widget_session_endpoint_allows_chatgpt_sandbox_origin(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == origin
-    assert response.json()["kind"] == "merch"
+    assert response.json()["kind"] == "customer_search_workspace"

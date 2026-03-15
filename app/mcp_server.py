@@ -13,8 +13,6 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
-    AssociateWorkspaceBootstrapResponse,
-    AssociateWorkspaceFilters,
     CompareMode,
     CustomerCommunicationDraftResponse,
     CustomerCommunicationHistoryResponse,
@@ -31,8 +29,6 @@ from app.schemas import (
     IndexProductsResponse,
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
-    MerchWorkspaceBootstrapResponse,
-    MerchWorkspaceFilters,
     MerchTrendSummaryResponse,
     MerchandisingRecommendationRequest,
     MerchandisingRecommendationResponse,
@@ -41,7 +37,6 @@ from app.schemas import (
     PriceBand,
     RetrievalMode,
     RunReportResponse,
-    SmsReviewBootstrapResponse,
     StoreAssociateRecommendationResponse,
     StoreResolutionResponse,
     SyntheticGenerateRequest,
@@ -51,11 +46,9 @@ from app.schemas import (
     TwilioSmokeTestResponse,
     VectorStatusResponse,
 )
-from app.services.apps_ui import get_widget_state, register_widget_state, render_widget_html
+from app.services.apps_ui import render_widget_html
 from app.services.communications import (
     customer_message_history,
-    get_customer_message,
-    get_selected_products_for_message,
     prepare_customer_sms,
     send_customer_sms,
     twilio_smoke_test,
@@ -108,15 +101,8 @@ _WIDGET_TOOL_META = {
     "openai/visibility": "public",
     "ui": {"visibility": "public"},
 }
-_ASSOCIATE_WIDGET_TEMPLATE_BASE = "ui://widgets/associate/workspace"
-_SMS_WIDGET_TEMPLATE_BASE = "ui://widgets/sms/review"
-_MERCH_WIDGET_TEMPLATE_BASE = "ui://widgets/merch/board"
-_ASSOCIATE_WIDGET_RESOURCE_URI = _ASSOCIATE_WIDGET_TEMPLATE_BASE + ".html"
-_SMS_WIDGET_RESOURCE_URI = _SMS_WIDGET_TEMPLATE_BASE + ".html"
-_MERCH_WIDGET_RESOURCE_URI = _MERCH_WIDGET_TEMPLATE_BASE + ".html"
-_ASSOCIATE_WIDGET_SESSION_RESOURCE_URI = _ASSOCIATE_WIDGET_TEMPLATE_BASE + "/{session_token}.html"
-_SMS_WIDGET_SESSION_RESOURCE_URI = _SMS_WIDGET_TEMPLATE_BASE + "/{session_token}.html"
-_MERCH_WIDGET_SESSION_RESOURCE_URI = _MERCH_WIDGET_TEMPLATE_BASE + "/{session_token}.html"
+_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE = "ui://widgets/customer-search/workspace"
+_CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE + ".html"
 
 
 class LatestRunResponse(BaseModel):
@@ -153,13 +139,6 @@ def _render_tool_meta(resource_uri: str, invoking: str, invoked: str) -> dict:
     }
 
 
-def _widget_result_meta(resource_uri: str, session_token: str, invoking: str, invoked: str) -> dict:
-    return {
-        **_render_tool_meta(resource_uri, invoking, invoked),
-        "openai/widgetSessionId": session_token,
-    }
-
-
 def _calltool_result(text: str, payload: dict | None = None, meta: dict | None = None) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
@@ -167,17 +146,6 @@ def _calltool_result(text: str, payload: dict | None = None, meta: dict | None =
         _meta=meta,
         isError=False,
     )
-
-
-def _session_widget_resource_uri(base_uri: str, session_token: str) -> str:
-    return f"{base_uri}/{session_token}.html"
-
-
-def _load_widget_payload(session_token: str) -> dict:
-    try:
-        return get_widget_state(session_token)["payload"]
-    except ValueError:
-        return {"widgetSessionId": session_token}
 
 
 def _resolve_associate_context(
@@ -278,132 +246,6 @@ def _associate_recommendation_impl(
         )
 
 
-def _associate_workspace_bootstrap_impl(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    customer_email: str | None = None,
-    customer_id: str | None = None,
-    customer_phone_e164: str | None = None,
-    phone_last4: str | None = None,
-    occasion: str | None = None,
-    budget_min: float | None = None,
-    budget_max: float | None = None,
-    top_k: int = 5,
-    retrieval_mode: RetrievalMode = RetrievalMode.auto,
-) -> AssociateWorkspaceBootstrapResponse:
-    with SessionLocal() as db:
-        resolved_store, preselected_customer = _resolve_associate_context(
-            db,
-            store_query=store_query,
-            store_id=store_id,
-            customer_email=customer_email,
-            customer_id=customer_id,
-            customer_phone_e164=customer_phone_e164,
-            phone_last4=phone_last4,
-        )
-        selected_customer = None
-        recommendation = None
-        selected_product_ids: list[str] = []
-        if preselected_customer is not None:
-            recommendation = _associate_recommendation_impl(
-                store_id=resolved_store.id,
-                customer_id=preselected_customer.id,
-                occasion=occasion,
-                budget_min=budget_min,
-                budget_max=budget_max,
-                top_k=top_k,
-                retrieval_mode=retrieval_mode,
-            )
-            selected_customer = recommendation.customer
-            effective_retrieval_mode = recommendation.retrieval_mode
-            selected_product_ids = [item.product_id for item in recommendation.recommendation.recommendations[:3]]
-        else:
-            effective_retrieval_mode = _resolve_retrieval_mode(
-                retrieval_mode,
-                customer_resolved=False,
-                occasion=occasion,
-                budget_min=budget_min,
-                budget_max=budget_max,
-            )
-
-        return AssociateWorkspaceBootstrapResponse(
-            store=resolved_store,
-            filters=AssociateWorkspaceFilters(
-                occasion=occasion,
-                budget_min=budget_min,
-                budget_max=budget_max,
-                top_k=top_k,
-                retrieval_mode=effective_retrieval_mode,
-            ),
-            selected_customer=selected_customer,
-            recommendation=recommendation,
-            selected_product_ids=selected_product_ids,
-        )
-
-
-def _sms_review_bootstrap_impl(message_id: str) -> SmsReviewBootstrapResponse:
-    with SessionLocal() as db:
-        message, customer, store = get_customer_message(db, message_id)
-        selected_products = get_selected_products_for_message(db, message_id)
-        history = customer_message_history(db, customer_id=customer.id, limit=10).messages
-        return SmsReviewBootstrapResponse(
-            message=message,
-            store=store,
-            customer=customer,
-            selected_products=selected_products,
-            history=history,
-        )
-
-
-def _merch_workspace_bootstrap_impl(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    question: str | None = None,
-    objective: Objective = Objective.sell_through,
-    lookback_days: int = 90,
-    top_k: int = 9,
-    category: str | None = None,
-    brand: str | None = None,
-    price_band: PriceBand | None = None,
-    occasion: str | None = None,
-    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
-    peer_mode: PeerMode = PeerMode.state_and_profile,
-) -> MerchWorkspaceBootstrapResponse:
-    with SessionLocal() as db:
-        initial_result = merchandising_action_recommendations(
-            db,
-            store_query=store_query,
-            store_id=store_id,
-            question=question,
-            objective=objective,
-            lookback_days=lookback_days,
-            top_k=top_k,
-            category=category,
-            brand=brand,
-            price_band=price_band,
-            occasion=occasion,
-            compare_mode=compare_mode,
-            peer_mode=peer_mode,
-        )
-        return MerchWorkspaceBootstrapResponse(
-            store=initial_result.store,
-            filters=MerchWorkspaceFilters(
-                question=question,
-                category=category,
-                brand=brand,
-                price_band=price_band,
-                occasion=occasion,
-                lookback_days=lookback_days,
-                compare_mode=compare_mode,
-                peer_mode=peer_mode,
-                top_k=top_k,
-            ),
-            initial_result=initial_result,
-            last_result=None,
-            last_tool=None,
-        )
-
-
 def _generate_synthetic_impl(params: SyntheticGenerateRequest) -> SyntheticGenerateResponse:
     settings = get_settings()
     with SessionLocal() as db:
@@ -495,72 +337,12 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
 
 
 @mcp.resource(
-    _ASSOCIATE_WIDGET_RESOURCE_URI,
-    mime_type="text/html+skybridge",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate workspace for customer search, recommendations, and SMS drafting."},
+    _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
+    mime_type="text/html;profile=mcp-app",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Minimal customer search workspace for reliable lookup and selection."},
 )
-def associate_widget_resource() -> str:
-    return render_widget_html("Associate Workspace", "associate_workspace")
-
-
-@mcp.resource(
-    _ASSOCIATE_WIDGET_SESSION_RESOURCE_URI,
-    mime_type="text/html+skybridge",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate workspace for customer search, recommendations, and SMS drafting."},
-)
-def associate_widget_session_resource(session_token: str) -> str:
-    return render_widget_html(
-        "Associate Workspace",
-        "associate_workspace",
-        widget_session_id=session_token,
-        initial_payload=_load_widget_payload(session_token),
-    )
-
-
-@mcp.resource(
-    _SMS_WIDGET_RESOURCE_URI,
-    mime_type="text/html+skybridge",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
-)
-def sms_widget_resource() -> str:
-    return render_widget_html("SMS Draft Review", "sms")
-
-
-@mcp.resource(
-    _SMS_WIDGET_SESSION_RESOURCE_URI,
-    mime_type="text/html+skybridge",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
-)
-def sms_widget_session_resource(session_token: str) -> str:
-    return render_widget_html(
-        "SMS Draft Review",
-        "sms",
-        widget_session_id=session_token,
-        initial_payload=_load_widget_payload(session_token),
-    )
-
-
-@mcp.resource(
-    _MERCH_WIDGET_RESOURCE_URI,
-    mime_type="text/html+skybridge",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
-)
-def merch_widget_resource() -> str:
-    return render_widget_html("Merchandising Action Board", "merch")
-
-
-@mcp.resource(
-    _MERCH_WIDGET_SESSION_RESOURCE_URI,
-    mime_type="text/html+skybridge",
-    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
-)
-def merch_widget_session_resource(session_token: str) -> str:
-    return render_widget_html(
-        "Merchandising Action Board",
-        "merch",
-        widget_session_id=session_token,
-        initial_payload=_load_widget_payload(session_token),
-    )
+def customer_search_widget_resource() -> str:
+    return render_widget_html("Customer Search Workspace", "customer_search_workspace")
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -819,6 +601,69 @@ def fashion_find_customers(query: str, limit: int = 10) -> CustomerSearchRespons
         return find_customers(db, query=query, limit=limit)
 
 
+def _customer_search_workspace_payload(query: str | None, limit: int) -> dict:
+    normalized_query = (query or "").strip()
+    if not normalized_query:
+        return {
+            "query": "",
+            "mode": "idle",
+            "resolved": None,
+            "results": [],
+            "uiHints": {
+                "searchPlaceholder": "Search by name, email, or phone",
+                "emptyState": "Type a customer name, email, or phone number and run search.",
+            },
+        }
+
+    lookup = fashion_lookup_customer(normalized_query, limit=limit)
+    if lookup.mode == "resolved" and lookup.resolved is not None:
+        results = [lookup.resolved.model_dump(mode="json")]
+    else:
+        results = [candidate.model_dump(mode="json") for candidate in lookup.candidates]
+
+    return {
+        "query": normalized_query,
+        "mode": lookup.mode,
+        "resolved": lookup.resolved.model_dump(mode="json") if lookup.resolved else None,
+        "results": results,
+        "uiHints": {
+            "searchPlaceholder": "Search by name, email, or phone",
+            "emptyState": "No customers matched the current query.",
+        },
+    }
+
+
+@mcp.tool(
+    name="fashion_render_customer_search_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
+        invoking="Opening customer search workspace...",
+        invoked="Customer search workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_render_customer_search_workspace(query: str | None = None, limit: int = 10) -> CallToolResult:
+    """Render the minimal customer-search workspace inside ChatGPT."""
+    effective_limit = max(1, min(limit, 25))
+    workspace_payload = _customer_search_workspace_payload(query=query, limit=effective_limit)
+    structured_payload = {"kind": "customer_search_workspace", "payload": workspace_payload}
+    summary = (
+        f"Opened customer search workspace with query '{workspace_payload['query']}'."
+        if workspace_payload["query"]
+        else "Opened customer search workspace."
+    )
+    return _calltool_result(
+        text=summary,
+        payload=structured_payload,
+        meta=_render_tool_meta(
+            _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
+            invoking="Opening customer search workspace...",
+            invoked="Customer search workspace ready.",
+        ),
+    )
+
+
 @mcp.tool(
     name="fashion_store_associate_recommend",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
@@ -839,40 +684,6 @@ def fashion_store_associate_recommend(
 ) -> StoreAssociateRecommendationResponse:
     """Main store-associate workflow for resolving a customer and store, then returning actionable recommendations."""
     return _associate_recommendation_impl(
-        store_query=store_query,
-        store_id=store_id,
-        customer_email=customer_email,
-        customer_id=customer_id,
-        customer_phone_e164=customer_phone_e164,
-        phone_last4=phone_last4,
-        occasion=occasion,
-        budget_min=budget_min,
-        budget_max=budget_max,
-        top_k=top_k,
-        retrieval_mode=retrieval_mode,
-    )
-
-
-@mcp.tool(
-    name="fashion_associate_workspace_bootstrap",
-    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta=_WIDGET_TOOL_META,
-)
-def fashion_associate_workspace_bootstrap(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    customer_email: str | None = None,
-    customer_id: str | None = None,
-    customer_phone_e164: str | None = None,
-    phone_last4: str | None = None,
-    occasion: str | None = None,
-    budget_min: float | None = None,
-    budget_max: float | None = None,
-    top_k: int = 5,
-    retrieval_mode: RetrievalMode = RetrievalMode.auto,
-) -> AssociateWorkspaceBootstrapResponse:
-    """Return the full initial associate workspace payload in one call."""
-    return _associate_workspace_bootstrap_impl(
         store_query=store_query,
         store_id=store_id,
         customer_email=customer_email,
@@ -993,16 +804,6 @@ def fashion_customer_message_history(
 
 
 @mcp.tool(
-    name="fashion_sms_review_bootstrap",
-    annotations=_tool_annotations(read_only=True, idempotent=True),
-    meta=_WIDGET_TOOL_META,
-)
-def fashion_sms_review_bootstrap(message_id: str) -> SmsReviewBootstrapResponse:
-    """Return the full SMS review payload in one call."""
-    return _sms_review_bootstrap_impl(message_id)
-
-
-@mcp.tool(
     name="fashion_twilio_smoke_test",
     annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
 )
@@ -1048,42 +849,6 @@ def fashion_merch_action_recommendations(
             compare_mode=compare_mode,
             peer_mode=peer_mode,
         )
-
-
-@mcp.tool(
-    name="fashion_merch_workspace_bootstrap",
-    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta=_WIDGET_TOOL_META,
-)
-def fashion_merch_workspace_bootstrap(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    question: str | None = None,
-    objective: Objective = Objective.sell_through,
-    lookback_days: int = 90,
-    top_k: int = 9,
-    category: str | None = None,
-    brand: str | None = None,
-    price_band: PriceBand | None = None,
-    occasion: str | None = None,
-    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
-    peer_mode: PeerMode = PeerMode.state_and_profile,
-) -> MerchWorkspaceBootstrapResponse:
-    """Return the full initial merchandising workspace payload in one call."""
-    return _merch_workspace_bootstrap_impl(
-        store_query=store_query,
-        store_id=store_id,
-        question=question,
-        objective=objective,
-        lookback_days=lookback_days,
-        top_k=top_k,
-        category=category,
-        brand=brand,
-        price_band=price_band,
-        occasion=occasion,
-        compare_mode=compare_mode,
-        peer_mode=peer_mode,
-    )
 
 
 @mcp.tool(
@@ -1152,204 +917,6 @@ def fashion_merch_trend_summary(
             compare_mode=compare_mode,
             peer_mode=peer_mode,
         )
-
-
-@mcp.tool(
-    name="fashion_render_associate_workspace",
-    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta=_render_tool_meta(
-        _ASSOCIATE_WIDGET_RESOURCE_URI,
-        invoking="Opening associate workspace...",
-        invoked="Associate workspace ready.",
-    ),
-    structured_output=False,
-)
-def fashion_render_associate_workspace(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    customer_email: str | None = None,
-    customer_id: str | None = None,
-    customer_phone_e164: str | None = None,
-    phone_last4: str | None = None,
-    occasion: str | None = None,
-    budget_min: float | None = None,
-    budget_max: float | None = None,
-    top_k: int = 5,
-    retrieval_mode: RetrievalMode = RetrievalMode.auto,
-) -> CallToolResult:
-    """Render the associate workspace inside ChatGPT. Prefer this when the user asks to open, show, browse, or review an interactive styling workspace instead of a plain-text summary."""
-    bootstrap = _associate_workspace_bootstrap_impl(
-        store_query=store_query,
-        store_id=store_id,
-        customer_email=customer_email,
-        customer_id=customer_id,
-        customer_phone_e164=customer_phone_e164,
-        phone_last4=phone_last4,
-        occasion=occasion,
-        budget_min=budget_min,
-        budget_max=budget_max,
-        top_k=top_k,
-        retrieval_mode=retrieval_mode,
-    )
-    payload = {
-        "store": bootstrap.store.model_dump(mode="json"),
-        "filters": bootstrap.filters.model_dump(mode="json"),
-        "customerQuery": bootstrap.customer_query,
-        "customerResults": [row.model_dump(mode="json") for row in bootstrap.customer_results],
-        "selectedCustomer": bootstrap.selected_customer.model_dump(mode="json") if bootstrap.selected_customer else None,
-        "recommendation": bootstrap.recommendation.model_dump(mode="json") if bootstrap.recommendation else None,
-        "lastDraft": bootstrap.last_draft.model_dump(mode="json") if bootstrap.last_draft else None,
-        "selectedProductIds": bootstrap.selected_product_ids,
-    }
-    opened_for = bootstrap.selected_customer.full_name if bootstrap.selected_customer else bootstrap.store.name
-    token = register_widget_state("associate_workspace", payload)
-    resource_uri = _session_widget_resource_uri(_ASSOCIATE_WIDGET_TEMPLATE_BASE, token)
-    structured_payload = {"kind": "associate_workspace", "payload": {**payload, "widgetSessionId": token}}
-    return _calltool_result(
-        text=f"Opened the associate workspace for {opened_for}.",
-        payload=structured_payload,
-        meta=_widget_result_meta(
-            resource_uri,
-            token,
-            invoking="Opening associate workspace...",
-            invoked="Associate workspace ready.",
-        ),
-    )
-
-
-@mcp.tool(
-    name="fashion_render_sms_review",
-    annotations=_tool_annotations(read_only=True, idempotent=True),
-    meta=_render_tool_meta(
-        _SMS_WIDGET_RESOURCE_URI,
-        invoking="Opening SMS review...",
-        invoked="SMS review ready.",
-    ),
-    structured_output=False,
-)
-def fashion_render_sms_review(message_id: str) -> CallToolResult:
-    """Render the SMS draft review widget inside ChatGPT. Prefer this when the user asks to review, edit, or send a draft message interactively."""
-    bootstrap = _sms_review_bootstrap_impl(message_id)
-    payload = {
-        "message": bootstrap.message.model_dump(mode="json"),
-        "store": bootstrap.store.model_dump(mode="json"),
-        "customer": bootstrap.customer.model_dump(mode="json"),
-        "selectedProducts": [row.model_dump(mode="json") for row in bootstrap.selected_products],
-        "history": [row.model_dump(mode="json") for row in bootstrap.history],
-    }
-    token = register_widget_state("sms", payload)
-    resource_uri = _session_widget_resource_uri(_SMS_WIDGET_TEMPLATE_BASE, token)
-    structured_payload = {"kind": "sms", "payload": {**payload, "widgetSessionId": token}}
-    return _calltool_result(
-        text=f"Opened SMS draft review for message {message_id}.",
-        payload=structured_payload,
-        meta=_widget_result_meta(
-            resource_uri,
-            token,
-            invoking="Opening SMS review...",
-            invoked="SMS review ready.",
-        ),
-    )
-
-
-@mcp.tool(
-    name="fashion_render_merch_board",
-    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta=_render_tool_meta(
-        _MERCH_WIDGET_RESOURCE_URI,
-        invoking="Opening merchandising board...",
-        invoked="Merchandising board ready.",
-    ),
-    structured_output=False,
-)
-def fashion_render_merch_board(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    question: str | None = None,
-    objective: Objective = Objective.sell_through,
-    lookback_days: int = 90,
-    top_k: int = 9,
-    category: str | None = None,
-    brand: str | None = None,
-    price_band: PriceBand | None = None,
-    occasion: str | None = None,
-    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
-    peer_mode: PeerMode = PeerMode.state_and_profile,
-) -> CallToolResult:
-    """Render the merchandising board inside ChatGPT. Prefer this when the user asks to open, show, browse, or review an interactive merchandising board rather than a text-only answer."""
-    bootstrap = _merch_workspace_bootstrap_impl(
-        store_query=store_query,
-        store_id=store_id,
-        question=question,
-        objective=objective,
-        lookback_days=lookback_days,
-        top_k=top_k,
-        category=category,
-        brand=brand,
-        price_band=price_band,
-        occasion=occasion,
-        compare_mode=compare_mode,
-        peer_mode=peer_mode,
-    )
-    payload = {
-        "store": bootstrap.store.model_dump(mode="json"),
-        "filters": bootstrap.filters.model_dump(mode="json"),
-        "initialResult": bootstrap.initial_result.model_dump(mode="json"),
-        "lastResult": bootstrap.last_result.model_dump(mode="json") if bootstrap.last_result else None,
-        "lastTool": bootstrap.last_tool,
-    }
-    token = register_widget_state("merch", payload)
-    resource_uri = _session_widget_resource_uri(_MERCH_WIDGET_TEMPLATE_BASE, token)
-    structured_payload = {"kind": "merch", "payload": {**payload, "widgetSessionId": token}}
-    return _calltool_result(
-        text=f"Opened the merchandising board for {bootstrap.store.name}.",
-        payload=structured_payload,
-        meta=_widget_result_meta(
-            resource_uri,
-            token,
-            invoking="Opening merchandising board...",
-            invoked="Merchandising board ready.",
-        ),
-    )
-
-
-@mcp.tool(
-    name="fashion_render_associate_board",
-    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
-    meta=_render_tool_meta(
-        _ASSOCIATE_WIDGET_RESOURCE_URI,
-        invoking="Opening associate workspace...",
-        invoked="Associate workspace ready.",
-    ),
-    structured_output=False,
-)
-def fashion_render_associate_board(
-    store_query: str | None = None,
-    store_id: str | None = None,
-    customer_email: str | None = None,
-    customer_id: str | None = None,
-    customer_phone_e164: str | None = None,
-    phone_last4: str | None = None,
-    occasion: str | None = None,
-    budget_min: float | None = None,
-    budget_max: float | None = None,
-    top_k: int = 5,
-    retrieval_mode: RetrievalMode = RetrievalMode.auto,
-) -> CallToolResult:
-    """Backward-compatible alias for the associate workspace render tool."""
-    return fashion_render_associate_workspace(
-        store_query=store_query,
-        store_id=store_id,
-        customer_email=customer_email,
-        customer_id=customer_id,
-        customer_phone_e164=customer_phone_e164,
-        phone_last4=phone_last4,
-        occasion=occasion,
-        budget_min=budget_min,
-        budget_max=budget_max,
-        top_k=top_k,
-        retrieval_mode=retrieval_mode,
-    )
 
 
 @mcp.tool(name="fashion_get_product_feed", annotations=_tool_annotations(read_only=True, idempotent=True))
