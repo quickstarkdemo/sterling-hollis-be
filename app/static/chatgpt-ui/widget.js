@@ -107,7 +107,8 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function normalizeHydratedState(raw) {
+function normalizeHydratedState(raw, options = {}) {
+  const { allowLoose = false } = options;
   if (!isPlainObject(raw)) return null;
   const hiddenMeta = isPlainObject(raw._meta) ? raw._meta : isPlainObject(raw.meta) ? raw.meta : {};
   const hiddenSessionId =
@@ -127,11 +128,12 @@ function normalizeHydratedState(raw) {
     return { kind: meta.kind || 'unknown', payload };
   }
   if (candidate.result && isPlainObject(candidate.result)) {
-    return normalizeHydratedState(candidate.result);
+    return normalizeHydratedState(candidate.result, options);
   }
   if (candidate.content && Array.isArray(candidate.content) && candidate.structuredContent) {
-    return normalizeHydratedState(candidate.structuredContent);
+    return normalizeHydratedState(candidate.structuredContent, options);
   }
+  if (!allowLoose) return null;
   const payload = { ...candidate };
   if (hiddenSessionId && !payload.widgetSessionId) payload.widgetSessionId = hiddenSessionId;
   return { kind: meta.kind || 'unknown', payload };
@@ -167,7 +169,7 @@ function seedBootstrapState() {
 async function hydrateState() {
   const tryBridgeHydration = () => {
     const bridge = window.openai || {};
-    return applyHydratedState(bridge.toolOutput) || applyHydratedState(bridge.widgetState);
+    return applyHydratedState(bridge.toolOutput) || applyHydratedState(bridge.widgetState, { allowLoose: true });
   };
 
   if (tryBridgeHydration() || !needsSessionFetch({ kind: state.kind, payload: state.payload })) {
@@ -200,8 +202,8 @@ async function hydrateState() {
   }
 }
 
-function applyHydratedState(raw) {
-  const hydrated = normalizeHydratedState(raw);
+function applyHydratedState(raw, options = {}) {
+  const hydrated = normalizeHydratedState(raw, options);
   if (!hydrated) return false;
   if (needsSessionFetch(hydrated)) {
     state.kind = hydrated.kind || state.kind;
@@ -219,7 +221,7 @@ function applyHydratedState(raw) {
 function attachHostListeners() {
   window.addEventListener('openai:set_globals', (event) => {
     const globals = event.detail?.globals || event.detail || {};
-    if (applyHydratedState(globals.toolOutput) || applyHydratedState(globals.widgetState) || applyHydratedState(globals)) {
+    if (applyHydratedState(globals.toolOutput) || applyHydratedState(globals.widgetState, { allowLoose: true })) {
       boot();
     }
   });
