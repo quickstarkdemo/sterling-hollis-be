@@ -5,6 +5,7 @@ __pycache__/
 product_db.egg-info/
 deploy/runtime.env
 test-results/
+.deploy/
 
 # Synthetic outputs
 /data/runs/

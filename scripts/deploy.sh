@@ -5,6 +5,7 @@ set -euo pipefail
 DEFAULT_ENV_FILE=".env"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEPLOY_STATE_DIR="$PROJECT_ROOT/.deploy"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,6 +28,50 @@ print_warning() {
 
 print_error() {
   echo -e "${RED}$1${NC}"
+}
+
+hash_file() {
+  local file_path="$1"
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file_path" | awk '{print $1}'
+    return
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file_path" | awk '{print $1}'
+    return
+  fi
+
+  print_error "Either shasum or sha256sum is required"
+  exit 1
+}
+
+hash_text() {
+  local text="$1"
+
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$text" | shasum -a 256 | awk '{print $1}'
+    return
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$text" | sha256sum | awk '{print $1}'
+    return
+  fi
+
+  print_error "Either shasum or sha256sum is required"
+  exit 1
+}
+
+env_state_file() {
+  local env_file="$1"
+  local env_abs_path
+  local env_id
+
+  env_abs_path="$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")"
+  env_id="$(hash_text "$env_abs_path")"
+  echo "$DEPLOY_STATE_DIR/env-sync-${env_id}.sha256"
 }
 
 prompt_yes_no() {
@@ -113,8 +158,27 @@ set_version() {
 
 upload_secrets() {
   local env_file="$1"
+  local state_file
+  local current_hash
+  local previous_hash=""
+
+  state_file="$(env_state_file "$env_file")"
+  current_hash="$(hash_file "$env_file")"
+
+  if [[ -f "$state_file" ]]; then
+    previous_hash="$(cut -d ' ' -f1 < "$state_file")"
+  fi
+
+  if [[ -n "$previous_hash" && "$previous_hash" == "$current_hash" ]]; then
+    print_step "Environment file unchanged; skipping GitHub secret upload."
+    return
+  fi
+
   print_step "Uploading GitHub secrets from $env_file..."
   "$SCRIPT_DIR/setup-secrets.sh" "$env_file"
+  mkdir -p "$DEPLOY_STATE_DIR"
+  printf '%s  %s\n' "$current_hash" "$env_file" > "$state_file"
+  print_success "Recorded env sync fingerprint for $env_file"
 }
 
 commit_and_push() {
