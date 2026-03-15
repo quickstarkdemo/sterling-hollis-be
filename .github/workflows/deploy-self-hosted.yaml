@@ -36,6 +36,8 @@ jobs:
         id: image_changes
         shell: bash
         run: |
+          set -euo pipefail
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch: forcing image rebuild."
@@ -43,17 +45,30 @@ jobs:
           fi
 
           BEFORE_SHA="${{ github.event.before }}"
+          AFTER_SHA="${GITHUB_SHA}"
+
           if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "No usable before SHA: forcing image rebuild."
             exit 0
           fi
 
-          if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth=2 origin "${GITHUB_REF#refs/heads/}"
+          if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null || ! git cat-file -e "${AFTER_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --prune --depth=100 origin "${GITHUB_REF#refs/heads/}" || true
           fi
 
-          CHANGED_FILES="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
+          if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null || ! git cat-file -e "${AFTER_SHA}^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Unable to resolve push commit range (likely rewritten/reverted history). Forcing image rebuild."
+            exit 0
+          fi
+
+          if ! CHANGED_FILES="$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA")"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Unable to diff commit range. Forcing image rebuild."
+            exit 0
+          fi
+
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
