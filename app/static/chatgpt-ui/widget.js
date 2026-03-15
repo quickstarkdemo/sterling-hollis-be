@@ -58,7 +58,11 @@ function normalizeWorkspacePayload(raw) {
     query: typeof raw.query === "string" ? raw.query : "",
     mode: typeof raw.mode === "string" ? raw.mode : "idle",
     resolved: isObject(raw.resolved) ? clone(raw.resolved) : null,
-    results: Array.isArray(raw.results) ? clone(raw.results) : [],
+    results: Array.isArray(raw.results)
+      ? clone(raw.results)
+      : Array.isArray(raw.candidates)
+        ? clone(raw.candidates)
+        : [],
     uiHints: {
       searchPlaceholder:
         raw.uiHints && typeof raw.uiHints.searchPlaceholder === "string"
@@ -424,9 +428,10 @@ window.addEventListener(
   "openai:set_globals",
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
-    const payloadChanged = applyWorkspacePayload(globals.toolOutput);
+    // Do not re-apply globals.toolOutput here; widgetState updates can fire
+    // frequently and stale toolOutput snapshots can clobber interactive results.
     const uiChanged = applyUiWidgetState(globals.widgetState);
-    if (payloadChanged || uiChanged) {
+    if (uiChanged) {
       render();
     }
   },
