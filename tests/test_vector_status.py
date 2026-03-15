@@ -63,3 +63,21 @@ def test_vector_status_endpoint_supports_live_probe(monkeypatch):
     assert payload["openai"]["probe_ok"] is True
     assert payload["pinecone"]["probe_attempted"] is True
     assert payload["pinecone"]["probe_ok"] is True
+
+
+def test_widget_session_endpoint_allows_chatgpt_sandbox_origin(monkeypatch):
+    import app.main as app_main
+
+    monkeypatch.setattr(
+        app_main,
+        "get_widget_state",
+        lambda token: {"kind": "merch", "payload": {"widgetSessionId": token}},
+    )
+
+    client = TestClient(create_app())
+    origin = "https://connector_69b5c127e7208191b4ae3a02044726fa.web-sandbox.oaiusercontent.com"
+    response = client.get("/ui-assets/session/test-token.json", headers={"Origin": origin})
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.json()["kind"] == "merch"

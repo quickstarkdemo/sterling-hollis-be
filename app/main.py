@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
@@ -22,6 +23,18 @@ def create_app() -> FastAPI:
             yield
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            settings.public_base_url.rstrip("/"),
+        ],
+        allow_origin_regex=r"https://.*\.oaiusercontent\.com",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     static_dir = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
 
     @app.get("/health")
