@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.models import Customer, Store
 from app.schemas import CustomerSearchResponse, CustomerSearchResult, ResolvedCustomer, ResolvedStore
+from app.services.demo_customer import (
+    DEMO_CUSTOMER_EMAIL,
+    DEMO_CUSTOMER_FIRST_NAME,
+    DEMO_CUSTOMER_ID,
+    DEMO_CUSTOMER_LAST_NAME,
+)
 from app.services.operator_cache import store_resolution_cache
 
 
@@ -54,13 +60,20 @@ def _mask_phone(phone_e164: str) -> str:
 
 
 def _resolved_customer(customer: Customer, home_store: Store | None, match_reason: str) -> ResolvedCustomer:
+    first_name = customer.first_name
+    last_name = customer.last_name
+    email = customer.email
+    if customer.id == DEMO_CUSTOMER_ID:
+        first_name = DEMO_CUSTOMER_FIRST_NAME
+        last_name = DEMO_CUSTOMER_LAST_NAME
+        email = DEMO_CUSTOMER_EMAIL
     return ResolvedCustomer(
         id=customer.id,
-        email=customer.email,
+        email=email,
         phone_e164=customer.phone_e164,
-        full_name=f"{customer.first_name} {customer.last_name}",
-        first_name=customer.first_name,
-        last_name=customer.last_name,
+        full_name=f"{first_name} {last_name}",
+        first_name=first_name,
+        last_name=last_name,
         home_store_id=customer.home_store_id,
         home_store_name=home_store.name if home_store else customer.home_store_id,
         loyalty_tier=customer.loyalty_tier,
@@ -209,17 +222,27 @@ def find_customers(session: Session, query: str, limit: int = 10) -> CustomerSea
             filters.append(Customer.phone_e164.like(f"%{digits[-4:]}"))
 
     customers = session.scalars(select(Customer).where(or_(*filters)).limit(max(limit * 5, 25))).all()
+    demo_search_text = f"{DEMO_CUSTOMER_FIRST_NAME} {DEMO_CUSTOMER_LAST_NAME} {DEMO_CUSTOMER_EMAIL}".lower()
+    matches_demo_identity = bool(normalized) and (
+        normalized in demo_search_text
+        or all(token in demo_search_text for token in normalized.split())
+    )
+    if matches_demo_identity and not any(customer.id == DEMO_CUSTOMER_ID for customer in customers):
+        demo_customer = session.get(Customer, DEMO_CUSTOMER_ID)
+        if demo_customer is not None:
+            customers.append(demo_customer)
     if not customers:
         return CustomerSearchResponse(query=query, results=[])
 
     scored: list[CustomerSearchResult] = []
     for customer in customers:
         home_store = session.get(Store, customer.home_store_id)
-        full_name = f"{customer.first_name} {customer.last_name}"
+        resolved_customer = _resolved_customer(customer, home_store, "partial match")
+        full_name = resolved_customer.full_name
         score = 0.0
         reason = "partial match"
 
-        email = customer.email.lower()
+        email = resolved_customer.email.lower()
         if normalized and normalized == email:
             score = 100.0
             reason = "exact email"
@@ -238,9 +261,9 @@ def find_customers(session: Session, query: str, limit: int = 10) -> CustomerSea
                 reason = "email contains query"
             else:
                 for token in normalized.split():
-                    if token in customer.first_name.lower():
+                    if token in resolved_customer.first_name.lower():
                         score += 22.0
-                    if token in customer.last_name.lower():
+                    if token in resolved_customer.last_name.lower():
                         score += 24.0
                     if token in email:
                         score += 18.0
@@ -276,6 +299,8 @@ def resolve_customer(
     if email:
         normalized = email.strip().lower()
         customer = session.scalar(select(Customer).where(Customer.email == normalized))
+        if customer is None and normalized == DEMO_CUSTOMER_EMAIL:
+            customer = session.get(Customer, DEMO_CUSTOMER_ID)
         match_reason = "email"
     if customer is None and customer_id:
         customer = session.get(Customer, customer_id)

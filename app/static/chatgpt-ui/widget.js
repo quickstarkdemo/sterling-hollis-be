@@ -17,6 +17,7 @@ const state = {
     selectedCustomerId: null,
     occasion: "",
     budgetMax: "",
+    emailTo: "",
     notice: "",
     noticeTone: "info",
     isSearching: false,
@@ -26,6 +27,8 @@ const state = {
     response: null,
     error: "",
     isLoading: false,
+    isSendingEmail: false,
+    selectedProductIds: [],
     seedAttemptedCustomerId: null,
   },
 };
@@ -39,6 +42,24 @@ function clone(value) {
     return value;
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeProductIds(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const unique = [];
+  for (const value of raw) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const productId = value.trim();
+    if (!productId || unique.includes(productId)) {
+      continue;
+    }
+    unique.push(productId);
+  }
+  return unique;
 }
 
 function normalizeWorkspacePayload(raw) {
@@ -123,6 +144,17 @@ function applyUiWidgetState(raw) {
     state.ui.budgetMax = raw.budgetMax;
     changed = true;
   }
+  if (typeof raw.emailTo === "string" && raw.emailTo !== state.ui.emailTo) {
+    state.ui.emailTo = raw.emailTo;
+    changed = true;
+  }
+  if (Array.isArray(raw.selectedProductIds)) {
+    const next = normalizeProductIds(raw.selectedProductIds);
+    if (JSON.stringify(next) !== JSON.stringify(state.recommendation.selectedProductIds)) {
+      state.recommendation.selectedProductIds = next;
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -143,6 +175,12 @@ function loadWidgetState() {
   if (typeof widgetState.budgetMax === "string") {
     state.ui.budgetMax = widgetState.budgetMax;
   }
+  if (typeof widgetState.emailTo === "string") {
+    state.ui.emailTo = widgetState.emailTo;
+  }
+  if (Array.isArray(widgetState.selectedProductIds)) {
+    state.recommendation.selectedProductIds = normalizeProductIds(widgetState.selectedProductIds);
+  }
 }
 
 function persistWidgetState() {
@@ -155,6 +193,8 @@ function persistWidgetState() {
       selectedCustomerId: state.ui.selectedCustomerId,
       occasion: state.ui.occasion,
       budgetMax: state.ui.budgetMax,
+      emailTo: state.ui.emailTo,
+      selectedProductIds: state.recommendation.selectedProductIds,
     });
   } catch {
     // Best-effort only.
@@ -196,6 +236,10 @@ function el(tag, props = {}, ...children) {
     }
     if (key === "value") {
       node.value = String(value);
+      return;
+    }
+    if (key === "checked") {
+      node.checked = Boolean(value);
       return;
     }
     if (key.startsWith("on") && typeof value === "function") {
@@ -248,12 +292,15 @@ function clearRecommendationState() {
   state.recommendation.customerId = null;
   state.recommendation.response = null;
   state.recommendation.error = "";
+  state.recommendation.isSendingEmail = false;
+  state.recommendation.selectedProductIds = [];
   state.recommendation.seedAttemptedCustomerId = null;
 }
 
 function selectCustomerId(customerId) {
   if (customerId !== state.ui.selectedCustomerId) {
     state.ui.selectedCustomerId = customerId;
+    state.ui.emailTo = "";
     clearRecommendationState();
   }
   persistWidgetState();
@@ -324,13 +371,14 @@ async function runSearch() {
   clearRecommendationState();
 
   if (resolved && resolved.id) {
-    state.ui.selectedCustomerId = resolved.id;
+    selectCustomerId(resolved.id);
   } else if (nextResults.length) {
     if (!nextResults.some((row) => row.id === state.ui.selectedCustomerId)) {
-      state.ui.selectedCustomerId = nextResults[0].id;
+      selectCustomerId(nextResults[0].id);
     }
   } else {
     state.ui.selectedCustomerId = null;
+    state.ui.emailTo = "";
   }
 
   persistWidgetState();
@@ -408,7 +456,7 @@ async function loadRecommendations(selected, options = {}) {
   }
 
   const response = normalizeRecommendationResponse(result);
-  const rows = response?.recommendation?.recommendations;
+  const rows = recommendationRows(response);
   if (!Array.isArray(rows)) {
     state.recommendation.error = "Recommendation tool returned an unexpected payload.";
     state.recommendation.response = null;
@@ -420,6 +468,11 @@ async function loadRecommendations(selected, options = {}) {
   state.recommendation.customerId = selected.id;
   state.recommendation.response = response;
   state.recommendation.error = "";
+  state.recommendation.selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  if (!state.ui.emailTo && selected.email) {
+    state.ui.emailTo = selected.email;
+  }
+  persistWidgetState();
   setNotice(
     autoSeed
       ? `Loaded ${rows.length} starter recommendations for ${selected.full_name || selected.id}.`
@@ -469,6 +522,116 @@ function normalizeRecommendationResponse(raw) {
   return null;
 }
 
+function recommendationRows(response) {
+  if (!isObject(response?.recommendation) || !Array.isArray(response.recommendation.recommendations)) {
+    return [];
+  }
+  return response.recommendation.recommendations;
+}
+
+function syncSelectedProducts(rows, existingSelection = []) {
+  const validIds = new Set(rows.map((item) => item.product_id).filter((value) => typeof value === "string" && value));
+  const filtered = normalizeProductIds(existingSelection).filter((productId) => validIds.has(productId));
+  if (filtered.length) {
+    return filtered;
+  }
+  return rows
+    .slice(0, 3)
+    .map((item) => item.product_id)
+    .filter((value) => typeof value === "string" && value);
+}
+
+function toggleSelectedProduct(productId) {
+  if (!productId) {
+    return;
+  }
+  const current = normalizeProductIds(state.recommendation.selectedProductIds);
+  const idx = current.indexOf(productId);
+  if (idx >= 0) {
+    current.splice(idx, 1);
+  } else {
+    current.push(productId);
+  }
+  state.recommendation.selectedProductIds = current;
+  persistWidgetState();
+}
+
+async function sendRecommendationsEmail(selected, response) {
+  if (!selected) {
+    setNotice("Select a customer before sending email.", "error");
+    render();
+    return;
+  }
+  const rows = recommendationRows(response);
+  if (!rows.length) {
+    setNotice("No recommendation items are available to send.", "error");
+    render();
+    return;
+  }
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  if (!selectedIds.length) {
+    setNotice("Select at least one recommendation before sending email.", "error");
+    render();
+    return;
+  }
+  const destination = (state.ui.emailTo || selected.email || "").trim();
+  if (!destination) {
+    setNotice("Enter a destination email before sending recommendations.", "error");
+    render();
+    return;
+  }
+
+  const args = {
+    store_id: selected.home_store_id,
+    customer_id: selected.id,
+    selected_product_ids: selectedIds,
+    to_email: destination,
+  };
+  const occasion = state.ui.occasion.trim();
+  if (occasion) {
+    args.occasion = occasion;
+  }
+  const budgetMax = parseBudgetMax(state.ui.budgetMax);
+  if (budgetMax !== null) {
+    args.budget_max = budgetMax;
+  }
+
+  state.recommendation.isSendingEmail = true;
+  state.recommendation.selectedProductIds = selectedIds;
+  setNotice(`Sending recommendations email to ${destination}...`);
+  persistWidgetState();
+  render();
+
+  const result = await callTool("fashion_send_customer_recommendations_email", args);
+  state.recommendation.isSendingEmail = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+
+  const payload = isObject(result.structuredContent) ? result.structuredContent : result;
+  const status = typeof payload?.message?.status === "string" ? payload.message.status : null;
+  if (!status) {
+    setNotice("Email tool returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+
+  const sentTo = typeof payload.destination_email === "string" ? payload.destination_email : destination;
+  if (status === "sent") {
+    const providerId = payload.provider_message_id ? ` (${payload.provider_message_id})` : "";
+    setNotice(`Sent recommendations email to ${sentTo}${providerId}.`);
+  } else {
+    const errorMessage =
+      typeof payload?.message?.error_message === "string" && payload.message.error_message
+        ? payload.message.error_message
+        : "Email send failed.";
+    setNotice(errorMessage, "error");
+  }
+  render();
+}
+
 function queueSeedRecommendations(selected) {
   if (!selected || !selected.id) {
     return;
@@ -496,7 +659,8 @@ function queueSeedRecommendations(selected) {
 }
 
 function recommendationCards(response) {
-  const rows = response?.recommendation?.recommendations || [];
+  const rows = recommendationRows(response);
+  const selectedIds = new Set(normalizeProductIds(state.recommendation.selectedProductIds));
   if (!rows.length) {
     return [el("p", { className: "fw-empty", text: "No recommendations returned for the selected filters." })];
   }
@@ -504,30 +668,67 @@ function recommendationCards(response) {
     el(
       "article",
       { className: "fw-rec-card" },
-      el("h3", { className: "fw-rec-title", text: item.title || item.product_id }),
-      el("p", { className: "fw-rec-meta", text: `${item.brand || "Unknown brand"} • ${money(item.price)}` }),
+      el(
+        "label",
+        { className: "fw-rec-select" },
+        el("input", {
+          type: "checkbox",
+          checked: selectedIds.has(item.product_id),
+          onChange: () => {
+            toggleSelectedProduct(item.product_id);
+            render();
+          },
+        }),
+        el("span", { text: "Select" }),
+      ),
       el(
         "div",
-        { className: "fw-chip-row" },
-        item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
-        item.availability ? el("span", { className: "fw-chip subtle", text: item.availability }) : null,
-        item.score !== undefined ? el("span", { className: "fw-chip", text: `score ${Number(item.score).toFixed(2)}` }) : null,
+        { className: "fw-rec-layout" },
+        el(
+          "div",
+          { className: "fw-rec-image-wrap" },
+          el("img", {
+            className: "fw-rec-image",
+            src: item.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`,
+            alt: item.title || item.product_id || "Product image",
+            loading: "lazy",
+          }),
+        ),
+        el(
+          "div",
+          { className: "fw-rec-content" },
+          el("h3", { className: "fw-rec-title", text: item.title || item.product_id }),
+          el("p", { className: "fw-rec-meta", text: `${item.brand || "Unknown brand"} • ${money(item.price)}` }),
+          el(
+            "div",
+            { className: "fw-chip-row" },
+            item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
+            item.availability ? el("span", { className: "fw-chip subtle", text: item.availability }) : null,
+            item.score !== undefined
+              ? el("span", { className: "fw-chip", text: `score ${Number(item.score).toFixed(2)}` })
+              : null,
+          ),
+          Array.isArray(item.reasons) && item.reasons.length
+            ? el(
+                "ul",
+                { className: "fw-rec-reasons" },
+                ...item.reasons.slice(0, 3).map((reason) => el("li", { text: reason })),
+              )
+            : null,
+          item.link
+            ? el(
+                "a",
+                {
+                  className: "fw-link",
+                  href: item.link,
+                  target: "_blank",
+                  rel: "noreferrer",
+                },
+                "Open product",
+              )
+            : null,
+        ),
       ),
-      Array.isArray(item.reasons) && item.reasons.length
-        ? el("ul", { className: "fw-rec-reasons" }, ...item.reasons.slice(0, 3).map((reason) => el("li", { text: reason })))
-        : null,
-      item.link
-        ? el(
-            "a",
-            {
-              className: "fw-link",
-              href: item.link,
-              target: "_blank",
-              rel: "noreferrer",
-            },
-            "Open product",
-          )
-        : null,
     ),
   );
 }
@@ -537,6 +738,10 @@ function render() {
   const results = Array.isArray(state.payload.results) ? state.payload.results : [];
   resolveRowSelection(results);
   const selected = selectedCustomer(results);
+  if (selected && !state.ui.emailTo && selected.email) {
+    state.ui.emailTo = selected.email;
+    persistWidgetState();
+  }
 
   const searchInput = el("input", {
     className: "fw-input",
@@ -689,6 +894,13 @@ function render() {
     ? (() => {
         const response =
           state.recommendation.customerId === selected.id ? state.recommendation.response : null;
+        const rows = recommendationRows(response);
+        const selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+        if (JSON.stringify(selectedProductIds) !== JSON.stringify(state.recommendation.selectedProductIds)) {
+          state.recommendation.selectedProductIds = selectedProductIds;
+          persistWidgetState();
+        }
+        const selectedProductCount = selectedProductIds.length;
         const strategy = response?.recommendation?.strategy;
         const retrievalModeRaw = response?.retrieval_mode;
         const retrievalMode =
@@ -707,6 +919,43 @@ function render() {
                 { className: "fw-chip-row" },
                 strategy ? el("span", { className: "fw-chip", text: strategy }) : null,
                 retrievalMode ? el("span", { className: "fw-chip subtle", text: retrievalMode }) : null,
+              )
+            : null,
+          response
+            ? el(
+                "div",
+                { className: "fw-send-row" },
+                el(
+                  "div",
+                  { className: "fw-field" },
+                  el("label", { className: "fw-label", text: "Email To" }),
+                  el("input", {
+                    className: "fw-input",
+                    type: "email",
+                    value: state.ui.emailTo,
+                    placeholder: "customer@example.com",
+                    onInput: (event) => {
+                      state.ui.emailTo = event.target.value;
+                      persistWidgetState();
+                    },
+                  }),
+                ),
+                el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
+                el(
+                  "button",
+                  {
+                    className: "fw-button",
+                    type: "button",
+                    disabled:
+                      state.recommendation.isSendingEmail || !selectedProductCount || !state.ui.emailTo.trim()
+                        ? "true"
+                        : null,
+                    onClick: () => {
+                      void sendRecommendationsEmail(selected, response);
+                    },
+                  },
+                  state.recommendation.isSendingEmail ? "Sending..." : "Send Recommendations Email",
+                ),
               )
             : null,
           state.recommendation.error

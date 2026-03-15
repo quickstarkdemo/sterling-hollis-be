@@ -13,7 +13,9 @@ from app.schemas import (
     CustomerCommunicationHistoryResponse,
     CustomerCommunicationRecord,
     CustomerCommunicationStatus,
+    CustomerEmailSendResponse,
     CustomerCommunicationUpdateResponse,
+    CustomerRecommendationRequest,
     CustomerRecommendationResponse,
     RetrievalMode,
     ResolvedCustomer,
@@ -23,10 +25,10 @@ from app.schemas import (
     UiProductCard,
 )
 from app.services.demo_assets import demo_image_url
+from app.services.email_service import SesEmailService
 from app.services.lookup import resolve_customer, resolve_store
 from app.services.recommendations import customer_recommendations
 from app.services.twilio_service import TwilioService
-from app.schemas import CustomerRecommendationRequest
 
 
 def _record_from_model(record: CustomerCommunication, customer: ResolvedCustomer) -> CustomerCommunicationRecord:
@@ -100,6 +102,29 @@ def build_sms_body(
         f"Hi {customer.first_name}, here are a few picks from {store.name}.",
         *(_product_summary_lines(session, product_ids) or ["- I have a few curated options ready for review."]),
         "Reply if you'd like me to hold or pull together options.",
+    ]
+    return "\n".join(lines)
+
+
+def _build_email_subject(store: ResolvedStore, occasion: str | None = None) -> str:
+    if occasion:
+        return f"{store.name} recommendations for {occasion}"
+    return f"{store.name} recommendations"
+
+
+def build_email_body(
+    session: Session,
+    store: ResolvedStore,
+    customer: ResolvedCustomer,
+    selected_product_ids: list[str],
+) -> str:
+    lines = [
+        f"Hi {customer.first_name},",
+        "",
+        f"I pulled together a few recommendations from {store.name}:",
+        *(_product_summary_lines(session, selected_product_ids) or ["- I have a few curated options ready to review."]),
+        "",
+        "Reply to this email if you'd like me to hold any of these or tailor another set of options.",
     ]
     return "\n".join(lines)
 
@@ -225,6 +250,123 @@ def send_customer_sms(session: Session, message_id: str) -> CustomerCommunicatio
     session.add(record)
     session.commit()
     return _record_from_model(record, customer)
+
+
+def send_customer_recommendations_email(
+    session: Session,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 6,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    selected_product_ids: list[str] | None = None,
+    to_email: str | None = None,
+    subject: str | None = None,
+) -> CustomerEmailSendResponse:
+    resolved_customer = resolve_customer(
+        session,
+        email=customer_email,
+        customer_id=customer_id,
+        phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+    ).resolved
+
+    if store_id or store_query:
+        resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
+    else:
+        resolved_store = resolve_store(session, store_id=resolved_customer.home_store_id).resolved
+
+    strategy = "selected_products_only"
+    selected_product_ids = selected_product_ids or []
+    if not selected_product_ids:
+        req = CustomerRecommendationRequest(
+            store_id=resolved_store.id,
+            customer_id=resolved_customer.id,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=top_k,
+        )
+        rows, strategy = customer_recommendations(session, req, retrieval_mode=retrieval_mode)
+        recommendation = CustomerRecommendationResponse(
+            store_id=resolved_store.id,
+            strategy=strategy,
+            recommendations=rows,
+        )
+        selected_product_ids = [product.product_id for product in recommendation.recommendations[:3]]
+    if not selected_product_ids:
+        raise ValueError("No recommendations available to send.")
+
+    destination_email = (to_email or resolved_customer.email or "").strip().lower()
+    if not destination_email:
+        raise ValueError("Destination email is required.")
+
+    resolved_subject = (subject or _build_email_subject(resolved_store, occasion=occasion)).strip()
+    body_text = build_email_body(
+        session,
+        resolved_store,
+        resolved_customer,
+        selected_product_ids=selected_product_ids,
+    )
+    selected_products = _selected_product_cards(session, selected_product_ids)
+
+    record = CustomerCommunication(
+        id=f"msg_{uuid.uuid4().hex[:12]}",
+        customer_id=resolved_customer.id,
+        store_id=resolved_store.id,
+        channel="email",
+        status=CustomerCommunicationStatus.draft.value,
+        destination_e164=destination_email,
+        body_text=body_text,
+        product_ids=selected_product_ids,
+        recommendation_context={
+            "occasion": occasion,
+            "budget_min": budget_min,
+            "budget_max": budget_max,
+            "top_k": top_k,
+            "strategy": strategy,
+            "subject": resolved_subject,
+            "retrieval_mode": retrieval_mode.value if isinstance(retrieval_mode, RetrievalMode) else str(retrieval_mode),
+        },
+    )
+    session.add(record)
+    session.commit()
+
+    email_service = SesEmailService()
+    provider_message_id = None
+    try:
+        payload = email_service.send_email(
+            to_email=destination_email,
+            subject=resolved_subject,
+            text_body=body_text,
+        )
+        provider_message_id = payload.get("message_id")
+        record.status = CustomerCommunicationStatus.sent.value
+        record.twilio_message_sid = provider_message_id
+        record.error_message = None
+        record.sent_at = datetime.now(timezone.utc)
+    except Exception as exc:
+        record.status = CustomerCommunicationStatus.failed.value
+        record.error_message = str(exc)[:2000]
+
+    session.add(record)
+    session.commit()
+
+    return CustomerEmailSendResponse(
+        message=_record_from_model(record, resolved_customer),
+        store=resolved_store,
+        customer=resolved_customer,
+        destination_email=destination_email,
+        subject=resolved_subject,
+        selected_products=selected_products,
+        provider_message_id=provider_message_id,
+    )
 
 
 def customer_message_history(

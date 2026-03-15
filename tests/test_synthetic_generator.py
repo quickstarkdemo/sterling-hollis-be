@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.synthetic_generator import (
+    DEMO_CUSTOMER_EMAIL,
+    DEMO_CUSTOMER_FIRST_NAME,
     DEMO_CUSTOMER_ID,
+    DEMO_CUSTOMER_LAST_NAME,
     DEMO_CUSTOMER_PHONE_E164,
     GenerationVolumes,
     generate_synthetic_dataset,
@@ -163,4 +166,11 @@ def test_customers_include_unique_phones_and_demo_customer(tmp_path: Path):
     assert len(customers) == 40
     assert len(phones) == len(set(phones))
     assert any(customer["id"] == DEMO_CUSTOMER_ID and customer["phone_e164"] == DEMO_CUSTOMER_PHONE_E164 for customer in customers)
+    assert any(
+        customer["id"] == DEMO_CUSTOMER_ID
+        and customer["email"] == DEMO_CUSTOMER_EMAIL
+        and customer["first_name"] == DEMO_CUSTOMER_FIRST_NAME
+        and customer["last_name"] == DEMO_CUSTOMER_LAST_NAME
+        for customer in customers
+    )
     assert sum(1 for customer in customers if customer["phone_e164"] == DEMO_CUSTOMER_PHONE_E164) == 1

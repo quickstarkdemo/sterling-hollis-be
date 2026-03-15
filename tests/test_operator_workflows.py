@@ -14,6 +14,7 @@ from app.schemas import CompareMode, Objective, PeerMode, PriceBand, RetrievalMo
 from app.services.communications import (
     customer_message_history,
     prepare_customer_sms,
+    send_customer_recommendations_email,
     send_customer_sms,
     twilio_smoke_test,
     update_customer_sms_draft,
@@ -333,6 +334,11 @@ def test_prepare_update_send_history_and_smoke(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, _):
         _seed_data(session)
         monkeypatch.setattr(communications.TwilioService, "send_sms", lambda self, body, to_number=None: {"sid": "SM123"})
+        monkeypatch.setattr(
+            communications.SesEmailService,
+            "send_email",
+            lambda self, to_email, subject, text_body, html_body=None: {"message_id": "SES123"},
+        )
 
         draft = prepare_customer_sms(
             session,
@@ -350,6 +356,14 @@ def test_prepare_update_send_history_and_smoke(monkeypatch):
             selected_product_ids=["prod_1", "prod_2"],
         )
         sent = send_customer_sms(session, draft.message.id)
+        email_sent = send_customer_recommendations_email(
+            session,
+            store_id="1001",
+            customer_id="cust_000001",
+            selected_product_ids=["prod_1", "prod_2"],
+            to_email="buyer@example.com",
+            subject="Curated picks for you",
+        )
         history = customer_message_history(session, customer_id="cust_000001", status=sent.status)
         smoke = twilio_smoke_test(session, body_text="Smoke test")
 
@@ -359,7 +373,11 @@ def test_prepare_update_send_history_and_smoke(monkeypatch):
         assert updated.message.body_text == "Curated picks just for you."
         assert sent.status.value == "sent"
         assert sent.twilio_message_sid == "SM123"
-        assert len(history.messages) == 1
+        assert email_sent.message.status.value == "sent"
+        assert email_sent.message.channel == "email"
+        assert email_sent.destination_email == "buyer@example.com"
+        assert email_sent.provider_message_id == "SES123"
+        assert len(history.messages) == 2
         assert smoke.result.status.value == "sent"
 
 
@@ -456,6 +474,32 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "ui://widgets/associate/workspace.html" not in resources
         assert "ui://widgets/sms/review.html" not in resources
         assert "ui://widgets/merch/board.html" not in resources
+
+
+def test_send_customer_recommendations_email_tool(monkeypatch):
+    import app.services.communications as communications
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        monkeypatch.setattr(
+            communications.SesEmailService,
+            "send_email",
+            lambda self, to_email, subject, text_body, html_body=None: {"message_id": "SES_TOOL_123"},
+        )
+
+        response = mcp_server.fashion_send_customer_recommendations_email(
+            store_id="1001",
+            customer_id="cust_000001",
+            selected_product_ids=["prod_1", "prod_2"],
+            to_email="buyer@example.com",
+            subject="Looks for this week",
+        )
+
+        assert response.message.channel == "email"
+        assert response.message.status.value == "sent"
+        assert response.destination_email == "buyer@example.com"
+        assert response.provider_message_id == "SES_TOOL_123"
+        assert response.selected_products
 
 
 def test_fast_mode_skips_embedding(monkeypatch):

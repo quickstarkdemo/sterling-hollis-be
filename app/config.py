@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     twilio_sender_number: str | None = None
     twilio_test_to_number: str | None = None
 
+    ses_region: str | None = None
+    ses_from_email: str | None = None
+    amazon_key_id: str | None = None
+    amazon_key_secret: str | None = None
+
     vector_top_k: int = 50
     index_worker_poll_seconds: float = 2.0
 

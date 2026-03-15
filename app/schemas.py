@@ -288,6 +288,16 @@ class CustomerCommunicationHistoryResponse(BaseModel):
     messages: list[CustomerCommunicationRecord]
 
 
+class CustomerEmailSendResponse(BaseModel):
+    message: CustomerCommunicationRecord
+    store: ResolvedStore
+    customer: ResolvedCustomer
+    destination_email: str
+    subject: str
+    selected_products: list[UiProductCard] = Field(default_factory=list)
+    provider_message_id: str | None = None
+
+
 class TwilioSmokeTestRecord(BaseModel):
     id: str
     destination_e164: str

@@ -21,6 +21,13 @@ from app.services.taxonomy import (
     STORE_ASSORTMENT_PROFILES,
     SYNTHETIC_BRANDS,
 )
+from app.services.demo_customer import (
+    DEMO_CUSTOMER_EMAIL,
+    DEMO_CUSTOMER_FIRST_NAME,
+    DEMO_CUSTOMER_ID,
+    DEMO_CUSTOMER_LAST_NAME,
+    DEMO_CUSTOMER_PHONE_E164,
+)
 
 FIRST_NAMES = [
     "Avery", "Jordan", "Taylor", "Emerson", "Morgan", "Riley", "Parker", "Casey", "Alex", "Sydney",
@@ -33,13 +40,6 @@ LAST_NAMES = [
 LOYALTY_TIERS = ["standard", "silver", "gold", "platinum"]
 CHANNELS = ["in_store", "online", "hybrid"]
 OCCASIONS = ["wedding", "vacation", "workwear", "holiday_party", "everyday_luxury"]
-DEMO_CUSTOMER_ID = "cust_demo_000001"
-DEMO_CUSTOMER_PHONE_E164 = "+12146932322"
-DEMO_CUSTOMER_EMAIL = "avery.demo@example-fashion.test"
-DEMO_CUSTOMER_FIRST_NAME = "Avery"
-DEMO_CUSTOMER_LAST_NAME = "Demo"
-
-
 @dataclass
 class GenerationVolumes:
     stores: int = 36
