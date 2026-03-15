@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
 
 
@@ -81,3 +82,14 @@ def test_widget_session_endpoint_allows_chatgpt_sandbox_origin(monkeypatch):
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == origin
     assert response.json()["kind"] == "customer_search_workspace"
+
+
+def test_health_endpoint_reports_build_version(monkeypatch):
+    monkeypatch.setenv("APP_BUILD_VERSION", "test-build-123")
+    get_settings.cache_clear()
+    client = TestClient(create_app())
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["version"] == "test-build-123"
+    get_settings.cache_clear()

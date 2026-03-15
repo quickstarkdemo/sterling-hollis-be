@@ -415,9 +415,11 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
             limit=10,
         )
         html = mcp_server.customer_search_widget_resource()
+        template_uri = result.meta["openai/outputTemplate"]
 
-        assert result.meta["openai/outputTemplate"] == "ui://widgets/customer-search/workspace.html"
-        assert result.meta["ui"]["resourceUri"] == "ui://widgets/customer-search/workspace.html"
+        assert template_uri.startswith("ui://widgets/customer-search/workspace-")
+        assert template_uri.endswith(".html")
+        assert result.meta["ui"]["resourceUri"] == template_uri
         assert result.structuredContent["kind"] == "customer_search_workspace"
         assert result.structuredContent["payload"]["query"] == "avery.parker.1@example-fashion.test"
         assert result.structuredContent["payload"]["mode"] == "resolved"
@@ -446,8 +448,11 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert tool_names.isdisjoint(removed_tools)
 
         resources = mcp_server.mcp._resource_manager._resources
-        assert "ui://widgets/customer-search/workspace.html" in resources
-        assert resources["ui://widgets/customer-search/workspace.html"].mime_type == "text/html;profile=mcp-app"
+        customer_workspace_keys = [
+            key for key in resources.keys() if key.startswith("ui://widgets/customer-search/workspace-")
+        ]
+        assert customer_workspace_keys
+        assert resources[customer_workspace_keys[0]].mime_type == "text/html;profile=mcp-app"
         assert "ui://widgets/associate/workspace.html" not in resources
         assert "ui://widgets/sms/review.html" not in resources
         assert "ui://widgets/merch/board.html" not in resources

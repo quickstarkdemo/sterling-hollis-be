@@ -127,6 +127,7 @@ jobs:
           MCP_ALLOWED_HOSTS=${{ secrets.MCP_ALLOWED_HOSTS || '127.0.0.1:*,localhost:*,[::1]:*' }}
           MCP_ALLOWED_ORIGINS=${{ secrets.MCP_ALLOWED_ORIGINS || 'http://127.0.0.1:*,http://localhost:*,http://[::1]:*' }}
           PUBLIC_BASE_URL=${{ secrets.PUBLIC_BASE_URL || 'http://localhost:8000' }}
+          APP_BUILD_VERSION=${{ steps.version.outputs.version }}
           TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }}
           TWILIO_API_KEY_SID=${{ secrets.TWILIO_API_KEY_SID }}
           TWILIO_API_KEY_SECRET=${{ secrets.TWILIO_API_KEY_SECRET }}

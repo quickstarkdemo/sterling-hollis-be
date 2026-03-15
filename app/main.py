@@ -63,7 +63,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok"}
+        return {"status": "ok", "version": settings.app_build_version or "dev"}
 
     @app.get("/ui-assets/session/{token}.json")
     def widget_session(token: str, request: Request) -> JSONResponse:

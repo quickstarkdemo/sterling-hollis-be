@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -102,7 +103,8 @@ _WIDGET_TOOL_META = {
     "ui": {"visibility": "public"},
 }
 _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE = "ui://widgets/customer-search/workspace"
-_CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE + ".html"
+_WIDGET_BUILD_TAG = re.sub(r"[^A-Za-z0-9._-]", "-", settings.app_build_version or "dev")
+_CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
 
 
 class LatestRunResponse(BaseModel):

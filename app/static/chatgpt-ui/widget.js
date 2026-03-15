@@ -559,10 +559,20 @@ function render() {
     ? el("div", { className: `fw-notice ${state.ui.noticeTone === "error" ? "error" : ""}`, text: state.ui.notice })
     : null;
 
+  const buildLabel =
+    typeof meta.buildVersion === "string" && meta.buildVersion.trim()
+      ? `build ${meta.buildVersion.trim()}`
+      : null;
+
   const header = el(
     "header",
     { className: "fw-hero" },
-    el("h1", { className: "fw-title", text: meta.title || "Customer Workspace" }),
+    el(
+      "div",
+      { className: "fw-title-row" },
+      el("h1", { className: "fw-title", text: meta.title || "Customer Workspace" }),
+      buildLabel ? el("span", { className: "fw-version", text: buildLabel }) : null,
+    ),
     el(
       "p",
       {

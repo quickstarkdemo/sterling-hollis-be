@@ -72,6 +72,7 @@ def render_widget_html(
 ) -> str:
     settings = get_settings()
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
+    build_version = settings.app_build_version or "dev"
     widget_summary = summary or {
         "customer_search_workspace": "Search customers by name, email, or phone and select a profile for follow-up actions.",
     }.get(kind, "Operator workspace")
@@ -93,6 +94,7 @@ def render_widget_html(
       window.__FASHION_WIDGET__ = {{
         title: {json.dumps(title)},
         kind: {json.dumps(kind)},
+        buildVersion: {json.dumps(build_version)},
         summary: {json.dumps(widget_summary)},
         widgetSessionId: {json.dumps(widget_session_id)},
         initialPayload: {json.dumps(initial_payload)},

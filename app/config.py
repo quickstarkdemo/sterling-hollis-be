@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Fashion Product DB"
     environment: str = "dev"
+    app_build_version: str | None = None
 
     database_url: str | None = None
     pghost: str | None = None
@@ -47,6 +49,12 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    if not settings.app_build_version:
+        version_file = Path(__file__).resolve().parent.parent / "VERSION"
+        try:
+            settings.app_build_version = version_file.read_text(encoding="utf-8").strip() or "dev"
+        except OSError:
+            settings.app_build_version = "dev"
     if settings.pghost and settings.pgdatabase and settings.pguser and settings.pgpassword is not None:
         user = quote_plus(settings.pguser)
         password = quote_plus(settings.pgpassword)
