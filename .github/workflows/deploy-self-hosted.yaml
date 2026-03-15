@@ -1,4 +1,4 @@
-name: Deploy Product API
+name: Product API
 
 on:
   push:

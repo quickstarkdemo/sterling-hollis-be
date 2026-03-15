@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 import json
 import uuid
-from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -56,12 +55,10 @@ def get_widget_state(token: str) -> dict:
         }
 
 
-@lru_cache(maxsize=1)
 def _widget_css() -> str:
     return (_STATIC_DIR / "widget.css").read_text(encoding="utf-8")
 
 
-@lru_cache(maxsize=1)
 def _widget_js() -> str:
     return (_STATIC_DIR / "widget.js").read_text(encoding="utf-8")
 

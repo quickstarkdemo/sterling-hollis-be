@@ -342,7 +342,7 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Minimal customer search workspace for reliable lookup and selection."},
 )
 def customer_search_widget_resource() -> str:
-    return render_widget_html("Customer Search Workspace", "customer_search_workspace")
+    return render_widget_html("Customer Workspace", "customer_search_workspace")
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -638,8 +638,8 @@ def _customer_search_workspace_payload(query: str | None, limit: int) -> dict:
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_render_tool_meta(
         _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
-        invoking="Opening customer search workspace...",
-        invoked="Customer search workspace ready.",
+        invoking="Opening customer workspace...",
+        invoked="Customer workspace ready.",
     ),
     structured_output=False,
 )
@@ -649,17 +649,17 @@ def fashion_render_customer_search_workspace(query: str | None = None, limit: in
     workspace_payload = _customer_search_workspace_payload(query=query, limit=effective_limit)
     structured_payload = {"kind": "customer_search_workspace", "payload": workspace_payload}
     summary = (
-        f"Opened customer search workspace with query '{workspace_payload['query']}'."
+        f"Opened customer workspace with query '{workspace_payload['query']}'."
         if workspace_payload["query"]
-        else "Opened customer search workspace."
+        else "Opened customer workspace."
     )
     return _calltool_result(
         text=summary,
         payload=structured_payload,
         meta=_render_tool_meta(
             _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
-            invoking="Opening customer search workspace...",
-            invoked="Customer search workspace ready.",
+            invoking="Opening customer workspace...",
+            invoked="Customer workspace ready.",
         ),
     )
 

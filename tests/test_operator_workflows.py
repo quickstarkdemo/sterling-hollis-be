@@ -424,7 +424,7 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert result.structuredContent["payload"]["resolved"]["id"] == "cust_000001"
         assert result.structuredContent["payload"]["results"][0]["id"] == "cust_000001"
         assert "<style>" in html
-        assert "Customer Search Workspace" in html
+        assert "Customer Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
 
 

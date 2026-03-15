@@ -26,6 +26,7 @@ const state = {
     response: null,
     error: "",
     isLoading: false,
+    seedAttemptedCustomerId: null,
   },
 };
 
@@ -247,6 +248,7 @@ function clearRecommendationState() {
   state.recommendation.customerId = null;
   state.recommendation.response = null;
   state.recommendation.error = "";
+  state.recommendation.seedAttemptedCustomerId = null;
 }
 
 function selectCustomerId(customerId) {
@@ -366,7 +368,8 @@ function selectedCustomer(results) {
   return results.find((customer) => customer.id === state.ui.selectedCustomerId) || null;
 }
 
-async function loadRecommendations(selected) {
+async function loadRecommendations(selected, options = {}) {
+  const autoSeed = options.autoSeed === true;
   if (!selected) {
     setNotice("Select a customer before requesting recommendations.", "error");
     render();
@@ -376,7 +379,7 @@ async function loadRecommendations(selected) {
   const args = {
     store_id: selected.home_store_id,
     customer_id: selected.id,
-    top_k: 6,
+    top_k: autoSeed ? 3 : 6,
     retrieval_mode: "auto",
   };
   const occasion = state.ui.occasion.trim();
@@ -390,7 +393,7 @@ async function loadRecommendations(selected) {
 
   state.recommendation.isLoading = true;
   state.recommendation.error = "";
-  setNotice("Loading recommendations...");
+  setNotice(autoSeed ? "Loading starter recommendations..." : "Loading recommendations...");
   persistWidgetState();
   render();
 
@@ -404,8 +407,8 @@ async function loadRecommendations(selected) {
     return;
   }
 
-  const response = result.structuredContent || result;
-  const rows = response?.recommendation?.recommendation?.recommendations;
+  const response = normalizeRecommendationResponse(result);
+  const rows = response?.recommendation?.recommendations;
   if (!Array.isArray(rows)) {
     state.recommendation.error = "Recommendation tool returned an unexpected payload.";
     state.recommendation.response = null;
@@ -417,12 +420,83 @@ async function loadRecommendations(selected) {
   state.recommendation.customerId = selected.id;
   state.recommendation.response = response;
   state.recommendation.error = "";
-  setNotice(`Loaded ${rows.length} recommendations for ${selected.full_name || selected.id}.`);
+  setNotice(
+    autoSeed
+      ? `Loaded ${rows.length} starter recommendations for ${selected.full_name || selected.id}.`
+      : `Loaded ${rows.length} recommendations for ${selected.full_name || selected.id}.`,
+  );
   render();
 }
 
+function parseJsonContentPayload(raw) {
+  if (!raw || !Array.isArray(raw.content)) {
+    return null;
+  }
+  const firstText = raw.content.find((part) => part && typeof part.text === "string");
+  if (!firstText || !firstText.text) {
+    return null;
+  }
+  try {
+    return JSON.parse(firstText.text);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeRecommendationResponse(raw) {
+  if (isObject(raw?.structuredContent)) {
+    return normalizeRecommendationResponse(raw.structuredContent);
+  }
+  if (isObject(raw?.result)) {
+    return normalizeRecommendationResponse(raw.result);
+  }
+  if (isObject(raw?.recommendation) && isObject(raw.recommendation.recommendation)) {
+    return normalizeRecommendationResponse(raw.recommendation);
+  }
+  if (!isObject(raw)) {
+    return null;
+  }
+  if (isObject(raw.recommendation) && Array.isArray(raw.recommendation.recommendations)) {
+    return raw;
+  }
+  if (Array.isArray(raw.recommendations)) {
+    return { recommendation: raw, retrieval_mode: raw.retrieval_mode || "auto" };
+  }
+  const parsed = parseJsonContentPayload(raw);
+  if (parsed) {
+    return normalizeRecommendationResponse(parsed);
+  }
+  return null;
+}
+
+function queueSeedRecommendations(selected) {
+  if (!selected || !selected.id) {
+    return;
+  }
+  if (state.recommendation.isLoading) {
+    return;
+  }
+  if (state.recommendation.customerId === selected.id && state.recommendation.response) {
+    return;
+  }
+  if (state.recommendation.seedAttemptedCustomerId === selected.id) {
+    return;
+  }
+  state.recommendation.seedAttemptedCustomerId = selected.id;
+  window.setTimeout(() => {
+    const activeSelected = selectedCustomer(Array.isArray(state.payload.results) ? state.payload.results : []);
+    if (!activeSelected || activeSelected.id !== selected.id) {
+      return;
+    }
+    if (state.recommendation.customerId === activeSelected.id && state.recommendation.response) {
+      return;
+    }
+    void loadRecommendations(activeSelected, { autoSeed: true });
+  }, 0);
+}
+
 function recommendationCards(response) {
-  const rows = response?.recommendation?.recommendation?.recommendations || [];
+  const rows = response?.recommendation?.recommendations || [];
   if (!rows.length) {
     return [el("p", { className: "fw-empty", text: "No recommendations returned for the selected filters." })];
   }
@@ -488,8 +562,7 @@ function render() {
   const header = el(
     "header",
     { className: "fw-hero" },
-    el("p", { className: "fw-kicker", text: meta.kind || "customer_search_workspace" }),
-    el("h1", { className: "fw-title", text: meta.title || "Customer Search Workspace" }),
+    el("h1", { className: "fw-title", text: meta.title || "Customer Workspace" }),
     el(
       "p",
       {
@@ -606,8 +679,14 @@ function render() {
     ? (() => {
         const response =
           state.recommendation.customerId === selected.id ? state.recommendation.response : null;
-        const strategy = response?.recommendation?.recommendation?.strategy;
-        const retrievalMode = response?.retrieval_mode;
+        const strategy = response?.recommendation?.strategy;
+        const retrievalModeRaw = response?.retrieval_mode;
+        const retrievalMode =
+          typeof retrievalModeRaw === "string"
+            ? retrievalModeRaw
+            : typeof retrievalModeRaw?.value === "string"
+              ? retrievalModeRaw.value
+              : null;
         return el(
           "section",
           { className: "fw-panel" },
@@ -655,6 +734,9 @@ function render() {
       recommendationPanel,
     ),
   );
+  if (selected) {
+    queueSeedRecommendations(selected);
+  }
 }
 
 function boot() {
