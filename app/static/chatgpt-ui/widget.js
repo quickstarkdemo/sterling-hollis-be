@@ -15,9 +15,17 @@ const state = {
   ui: {
     query: "",
     selectedCustomerId: null,
+    occasion: "",
+    budgetMax: "",
     notice: "",
     noticeTone: "info",
     isSearching: false,
+  },
+  recommendation: {
+    customerId: null,
+    response: null,
+    error: "",
+    isLoading: false,
   },
 };
 
@@ -106,6 +114,14 @@ function applyUiWidgetState(raw) {
     state.ui.selectedCustomerId = raw.selectedCustomerId;
     changed = true;
   }
+  if (typeof raw.occasion === "string" && raw.occasion !== state.ui.occasion) {
+    state.ui.occasion = raw.occasion;
+    changed = true;
+  }
+  if (typeof raw.budgetMax === "string" && raw.budgetMax !== state.ui.budgetMax) {
+    state.ui.budgetMax = raw.budgetMax;
+    changed = true;
+  }
   return changed;
 }
 
@@ -120,6 +136,12 @@ function loadWidgetState() {
   if (typeof widgetState.selectedCustomerId === "string") {
     state.ui.selectedCustomerId = widgetState.selectedCustomerId;
   }
+  if (typeof widgetState.occasion === "string") {
+    state.ui.occasion = widgetState.occasion;
+  }
+  if (typeof widgetState.budgetMax === "string") {
+    state.ui.budgetMax = widgetState.budgetMax;
+  }
 }
 
 function persistWidgetState() {
@@ -130,6 +152,8 @@ function persistWidgetState() {
     window.openai.setWidgetState({
       query: state.ui.query,
       selectedCustomerId: state.ui.selectedCustomerId,
+      occasion: state.ui.occasion,
+      budgetMax: state.ui.budgetMax,
     });
   } catch {
     // Best-effort only.
@@ -200,16 +224,49 @@ function customerLabel(customer) {
   return email || phone;
 }
 
+function money(value) {
+  if (value === null || value === undefined || value === "") {
+    return "Price unavailable";
+  }
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return String(value);
+  }
+  return `$${numberValue.toFixed(2)}`;
+}
+
+function parseBudgetMax(value) {
+  if (!value || !value.trim()) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function clearRecommendationState() {
+  state.recommendation.customerId = null;
+  state.recommendation.response = null;
+  state.recommendation.error = "";
+}
+
+function selectCustomerId(customerId) {
+  if (customerId !== state.ui.selectedCustomerId) {
+    state.ui.selectedCustomerId = customerId;
+    clearRecommendationState();
+  }
+  persistWidgetState();
+}
+
 function resolveRowSelection(results) {
   if (!results.length) {
     state.ui.selectedCustomerId = null;
+    clearRecommendationState();
     return;
   }
   if (state.ui.selectedCustomerId && results.some((customer) => customer.id === state.ui.selectedCustomerId)) {
     return;
   }
-  state.ui.selectedCustomerId = results[0].id;
-  persistWidgetState();
+  selectCustomerId(results[0].id);
 }
 
 async function runSearch() {
@@ -262,6 +319,7 @@ async function runSearch() {
     resolved,
     results: nextResults,
   };
+  clearRecommendationState();
 
   if (resolved && resolved.id) {
     state.ui.selectedCustomerId = resolved.id;
@@ -285,8 +343,7 @@ function renderCustomerRow(customer) {
       className: `fw-result ${selected ? "selected" : ""}`,
       type: "button",
       onClick: () => {
-        state.ui.selectedCustomerId = customer.id;
-        persistWidgetState();
+        selectCustomerId(customer.id);
         render();
       },
     },
@@ -307,6 +364,98 @@ function selectedCustomer(results) {
     return null;
   }
   return results.find((customer) => customer.id === state.ui.selectedCustomerId) || null;
+}
+
+async function loadRecommendations(selected) {
+  if (!selected) {
+    setNotice("Select a customer before requesting recommendations.", "error");
+    render();
+    return;
+  }
+
+  const args = {
+    store_id: selected.home_store_id,
+    customer_id: selected.id,
+    top_k: 6,
+    retrieval_mode: "auto",
+  };
+  const occasion = state.ui.occasion.trim();
+  if (occasion) {
+    args.occasion = occasion;
+  }
+  const budgetMax = parseBudgetMax(state.ui.budgetMax);
+  if (budgetMax !== null) {
+    args.budget_max = budgetMax;
+  }
+
+  state.recommendation.isLoading = true;
+  state.recommendation.error = "";
+  setNotice("Loading recommendations...");
+  persistWidgetState();
+  render();
+
+  const result = await callTool("fashion_store_associate_recommend", args);
+  state.recommendation.isLoading = false;
+  if (result.__toolError) {
+    state.recommendation.error = result.__toolError;
+    state.recommendation.response = null;
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+
+  const response = result.structuredContent || result;
+  const rows = response?.recommendation?.recommendation?.recommendations;
+  if (!Array.isArray(rows)) {
+    state.recommendation.error = "Recommendation tool returned an unexpected payload.";
+    state.recommendation.response = null;
+    setNotice(state.recommendation.error, "error");
+    render();
+    return;
+  }
+
+  state.recommendation.customerId = selected.id;
+  state.recommendation.response = response;
+  state.recommendation.error = "";
+  setNotice(`Loaded ${rows.length} recommendations for ${selected.full_name || selected.id}.`);
+  render();
+}
+
+function recommendationCards(response) {
+  const rows = response?.recommendation?.recommendation?.recommendations || [];
+  if (!rows.length) {
+    return [el("p", { className: "fw-empty", text: "No recommendations returned for the selected filters." })];
+  }
+  return rows.map((item) =>
+    el(
+      "article",
+      { className: "fw-rec-card" },
+      el("h3", { className: "fw-rec-title", text: item.title || item.product_id }),
+      el("p", { className: "fw-rec-meta", text: `${item.brand || "Unknown brand"} • ${money(item.price)}` }),
+      el(
+        "div",
+        { className: "fw-chip-row" },
+        item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
+        item.availability ? el("span", { className: "fw-chip subtle", text: item.availability }) : null,
+        item.score !== undefined ? el("span", { className: "fw-chip", text: `score ${Number(item.score).toFixed(2)}` }) : null,
+      ),
+      Array.isArray(item.reasons) && item.reasons.length
+        ? el("ul", { className: "fw-rec-reasons" }, ...item.reasons.slice(0, 3).map((reason) => el("li", { text: reason })))
+        : null,
+      item.link
+        ? el(
+            "a",
+            {
+              className: "fw-link",
+              href: item.link,
+              target: "_blank",
+              rel: "noreferrer",
+            },
+            "Open product",
+          )
+        : null,
+    ),
+  );
 }
 
 function render() {
@@ -370,6 +519,62 @@ function render() {
     ),
   );
 
+  const recommendationControls = selected
+    ? el(
+        "div",
+        { className: "fw-control-row" },
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Occasion" }),
+          el("input", {
+            className: "fw-input",
+            type: "text",
+            value: state.ui.occasion,
+            placeholder: "wedding, workwear, vacation...",
+            onInput: (event) => {
+              state.ui.occasion = event.target.value;
+              persistWidgetState();
+            },
+          }),
+        ),
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Max Price" }),
+          el("input", {
+            className: "fw-input",
+            type: "number",
+            step: "0.01",
+            min: "0",
+            value: state.ui.budgetMax,
+            placeholder: "900",
+            onInput: (event) => {
+              state.ui.budgetMax = event.target.value;
+              persistWidgetState();
+            },
+          }),
+        ),
+        el(
+          "div",
+          { className: "fw-field actions" },
+          el("label", { className: "fw-label", text: "Recommendations" }),
+          el(
+            "button",
+            {
+              className: "fw-button",
+              type: "button",
+              disabled: state.recommendation.isLoading ? "true" : null,
+              onClick: () => {
+                void loadRecommendations(selected);
+              },
+            },
+            state.recommendation.isLoading ? "Loading..." : "Refresh Recommendations",
+          ),
+        ),
+      )
+    : null;
+
   const resultList = results.length
     ? el("div", { className: "fw-list" }, ...results.map(renderCustomerRow))
     : el("div", { className: "fw-empty", text: state.payload.uiHints.emptyState });
@@ -388,6 +593,7 @@ function render() {
           selected.loyalty_tier ? el("span", { className: "fw-chip subtle", text: selected.loyalty_tier }) : null,
           selected.match_reason ? el("span", { className: "fw-chip subtle", text: selected.match_reason }) : null,
         ),
+        recommendationControls,
       )
     : el(
         "section",
@@ -395,6 +601,42 @@ function render() {
         el("h2", { className: "fw-panel-title", text: "Selected Customer" }),
         el("p", { className: "fw-empty", text: "Pick a result to inspect details here." }),
       );
+
+  const recommendationPanel = selected
+    ? (() => {
+        const response =
+          state.recommendation.customerId === selected.id ? state.recommendation.response : null;
+        const strategy = response?.recommendation?.recommendation?.strategy;
+        const retrievalMode = response?.retrieval_mode;
+        return el(
+          "section",
+          { className: "fw-panel" },
+          el("h2", { className: "fw-panel-title", text: "Product Recommendations" }),
+          response
+            ? el(
+                "div",
+                { className: "fw-chip-row" },
+                strategy ? el("span", { className: "fw-chip", text: strategy }) : null,
+                retrievalMode ? el("span", { className: "fw-chip subtle", text: retrievalMode }) : null,
+              )
+            : null,
+          state.recommendation.error
+            ? el("p", { className: "fw-empty", text: state.recommendation.error })
+            : null,
+          ...(response
+            ? recommendationCards(response)
+            : [
+                el(
+                  "p",
+                  {
+                    className: "fw-empty",
+                    text: "Use the controls above to generate recommendations for this customer.",
+                  },
+                ),
+              ]),
+        );
+      })()
+    : null;
 
   container.appendChild(
     el(
@@ -410,6 +652,7 @@ function render() {
         resultList,
       ),
       detailPanel,
+      recommendationPanel,
     ),
   );
 }
