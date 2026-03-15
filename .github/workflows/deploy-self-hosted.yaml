@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Read version
         id: version
@@ -30,7 +32,41 @@ jobs:
           docker version
           docker compose version
 
+      - name: Detect image-affecting changes
+        id: image_changes
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: forcing image rebuild."
+            exit 0
+          fi
+
+          BEFORE_SHA="${{ github.event.before }}"
+          if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "No usable before SHA: forcing image rebuild."
+            exit 0
+          fi
+
+          if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=2 origin "${GITHUB_REF#refs/heads/}"
+          fi
+
+          CHANGED_FILES="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -Eq '^(app/|alembic/|scripts/|Dockerfile$|pyproject\.toml$|requirements[^/]*\.txt$|uv\.lock$)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Runtime image inputs changed."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No runtime image inputs changed; reusing latest image."
+          fi
+
       - name: Build and push API image
+        if: steps.image_changes.outputs.changed == 'true'
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login --username "${{ secrets.DOCKERHUB_USER }}" --password-stdin
           docker build \
@@ -39,6 +75,19 @@ jobs:
             .
           docker push "${DOCKERHUB_IMAGE}:latest"
           docker push "${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}"
+
+      - name: Resolve deploy image
+        id: deploy_image
+        shell: bash
+        run: |
+          if [[ "${{ steps.image_changes.outputs.changed }}" == "true" ]]; then
+            DEPLOY_IMAGE="${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}"
+          else
+            DEPLOY_IMAGE="${DOCKERHUB_IMAGE}:latest"
+          fi
+
+          echo "ref=$DEPLOY_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Deploy image: $DEPLOY_IMAGE"
 
       - name: Write runtime env file
         run: |
@@ -73,14 +122,21 @@ jobs:
 
       - name: Deploy compose stack
         env:
-          PRODUCT_API_IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.version }}
+          PRODUCT_API_IMAGE: ${{ steps.deploy_image.outputs.ref }}
         run: |
-          docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate --remove-orphans
+          docker image inspect "${PRODUCT_API_IMAGE}" >/dev/null 2>&1 || docker pull "${PRODUCT_API_IMAGE}"
+
+          if [[ "${{ steps.image_changes.outputs.changed }}" == "true" ]]; then
+            docker compose -f deploy/docker-compose.prod.yml up -d --remove-orphans
+          else
+            docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate --remove-orphans
+          fi
+
           docker compose -f deploy/docker-compose.prod.yml ps
 
       - name: Health check
         env:
-          PRODUCT_API_IMAGE: ${{ env.DOCKERHUB_IMAGE }}:${{ steps.version.outputs.version }}
+          PRODUCT_API_IMAGE: ${{ steps.deploy_image.outputs.ref }}
         run: |
           ATTEMPTS=24
           SLEEP_SECONDS=5

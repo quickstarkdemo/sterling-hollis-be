@@ -3,7 +3,6 @@ services:
     image: ${PRODUCT_API_IMAGE}
     container_name: products-api
     restart: unless-stopped
-    pull_policy: always
     env_file:
       - ./runtime.env
     ports:
@@ -25,7 +24,6 @@ services:
     image: ${PRODUCT_API_IMAGE}
     container_name: products-index-worker
     restart: unless-stopped
-    pull_policy: always
     command: ./scripts/run_index_worker.sh
     env_file:
       - ./runtime.env

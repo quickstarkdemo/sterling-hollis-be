@@ -102,6 +102,11 @@ function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function cloneJson(value) {
+  if (value === null || value === undefined) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
 function normalizeHydratedState(raw) {
   if (!isPlainObject(raw)) return null;
   const hiddenMeta = isPlainObject(raw._meta) ? raw._meta : isPlainObject(raw.meta) ? raw.meta : {};
@@ -132,6 +137,14 @@ function normalizeHydratedState(raw) {
   return { kind: meta.kind || 'unknown', payload };
 }
 
+function bootstrapHydratedState() {
+  if (!isPlainObject(meta.initialPayload)) return null;
+  return normalizeHydratedState({
+    kind: meta.kind || 'unknown',
+    payload: cloneJson(meta.initialPayload),
+  });
+}
+
 function needsSessionFetch(hydrated) {
   if (!hydrated || !isPlainObject(hydrated.payload)) return false;
   const keys = Object.keys(hydrated.payload);
@@ -140,37 +153,46 @@ function needsSessionFetch(hydrated) {
   return keys.every((key) => key === 'widgetSessionId' || key === 'kind');
 }
 
+function seedBootstrapState() {
+  const hydrated = bootstrapHydratedState();
+  if (!hydrated) return false;
+  state.kind = hydrated.kind || state.kind;
+  state.payload = hydrated.payload || {};
+  if (!state.payload.widgetSessionId && meta.widgetSessionId) {
+    state.payload.widgetSessionId = meta.widgetSessionId;
+  }
+  return true;
+}
+
 async function hydrateState() {
-  const bridge = window.openai || {};
-  let hydrated = normalizeHydratedState(bridge.toolOutput) || normalizeHydratedState(bridge.widgetState);
-  let sessionId = hydrated?.payload?.widgetSessionId || hydrated?.widgetSessionId || meta.widgetSessionId;
+  const tryBridgeHydration = () => {
+    const bridge = window.openai || {};
+    return applyHydratedState(bridge.toolOutput) || applyHydratedState(bridge.widgetState);
+  };
+
+  if (tryBridgeHydration() || !needsSessionFetch({ kind: state.kind, payload: state.payload })) {
+    if (meta.widgetSessionId && !state.payload.widgetSessionId) state.payload.widgetSessionId = meta.widgetSessionId;
+    return;
+  }
 
   for (let attempt = 0; attempt < HYDRATION_ATTEMPTS; attempt += 1) {
-    if ((needsSessionFetch(hydrated) || !hydrated) && sessionId && meta.sessionEndpointBase) {
-      try {
-        const response = await fetch(`${meta.sessionEndpointBase}/${encodeURIComponent(sessionId)}.json`, {
-          credentials: 'omit',
-        });
-        if (response.ok) hydrated = normalizeHydratedState(await response.json());
-      } catch {
-        // Best-effort rehydration only.
-      }
-    }
-
-    if (hydrated) break;
-
-    if (attempt < HYDRATION_ATTEMPTS - 1) {
-      await sleep(HYDRATION_DELAY_MS);
-      const nextBridge = window.openai || {};
-      hydrated = normalizeHydratedState(nextBridge.toolOutput) || normalizeHydratedState(nextBridge.widgetState);
-      sessionId = hydrated?.payload?.widgetSessionId || hydrated?.widgetSessionId || sessionId || meta.widgetSessionId;
+    await sleep(HYDRATION_DELAY_MS);
+    if (tryBridgeHydration() || !needsSessionFetch({ kind: state.kind, payload: state.payload })) {
+      if (meta.widgetSessionId && !state.payload.widgetSessionId) state.payload.widgetSessionId = meta.widgetSessionId;
+      return;
     }
   }
 
-  if (hydrated) {
-    state.kind = hydrated.kind || state.kind;
-    state.payload = hydrated.payload || {};
-    sessionId = state.payload.widgetSessionId || sessionId;
+  const sessionId = state.payload.widgetSessionId || meta.widgetSessionId;
+  if (sessionId && meta.sessionEndpointBase) {
+    try {
+      const response = await fetch(`${meta.sessionEndpointBase}/${encodeURIComponent(sessionId)}.json`, {
+        credentials: 'omit',
+      });
+      if (response.ok) applyHydratedState(await response.json());
+    } catch {
+      // Best-effort rehydration only.
+    }
   }
 
   if (sessionId && !state.payload.widgetSessionId) {
@@ -484,7 +506,6 @@ async function renderAssociateWorkspace() {
     }
     if (resolved.mode === 'resolved' && resolved.resolved) {
       const bootstrapResult = await callTool('fashion_associate_workspace_bootstrap', {
-        store_id: payloadState.store.id,
         customer_id: resolved.resolved.id,
         ...currentFilterArgs(),
       });
@@ -518,7 +539,6 @@ async function renderAssociateWorkspace() {
 
   async function selectCustomer(candidate) {
     const bootstrapResult = await callTool('fashion_associate_workspace_bootstrap', {
-      store_id: payloadState.store.id,
       customer_id: candidate.id,
       ...currentFilterArgs(),
     });
@@ -549,7 +569,6 @@ async function renderAssociateWorkspace() {
     setUiNotice(payloadState, 'Refreshing recommendations…');
     await syncWidgetState();
     const bootstrapResult = await callTool('fashion_associate_workspace_bootstrap', {
-      store_id: payloadState.store.id,
       customer_id: payloadState.selectedCustomer.id,
       ...currentFilterArgs(),
     });
@@ -1037,4 +1056,5 @@ async function boot() {
 }
 
 attachHostListeners();
+seedBootstrapState();
 boot();

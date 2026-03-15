@@ -183,18 +183,39 @@ upload_secrets() {
 
 commit_and_push() {
   local commit_message
+  local unstaged_tracked
+  local untracked_files
 
   git status --short
   echo ""
   read -r -p "Commit message [Deploy product-db]: " commit_message
   commit_message="${commit_message:-Deploy product-db}"
 
-  if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
-    git add .
+  unstaged_tracked="$(git diff --name-only)"
+  untracked_files="$(git ls-files --others --exclude-standard)"
+
+  if [[ -n "$untracked_files" ]]; then
+    print_error "Refusing to deploy with untracked files present."
+    echo "$untracked_files"
+    echo ""
+    echo "Stage or ignore these files intentionally before deploying."
+    exit 1
   fi
 
-  if git diff --cached --quiet && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
-    print_warning "No tracked changes to commit."
+  if [[ -n "$unstaged_tracked" ]]; then
+    if [[ "$unstaged_tracked" == "VERSION" ]]; then
+      git add VERSION
+    else
+      print_error "Refusing to deploy with unstaged tracked changes."
+      echo "$unstaged_tracked"
+      echo ""
+      echo "Stage exactly what you want deployed, then rerun the script."
+      exit 1
+    fi
+  fi
+
+  if git diff --cached --quiet; then
+    print_warning "No staged changes to commit."
     if prompt_yes_no "Trigger deploy workflow manually instead?" "y"; then
       gh workflow run deploy-self-hosted.yaml
       print_success "Workflow dispatch requested."

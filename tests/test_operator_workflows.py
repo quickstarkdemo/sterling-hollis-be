@@ -420,18 +420,25 @@ def test_render_associate_workspace_persists_widget_state(monkeypatch):
 
         token = result.meta["openai/widgetSessionId"]
         persisted = get_widget_state(token)
-        html = mcp_server.associate_widget_resource()
+        html = mcp_server.associate_widget_session_resource(token)
 
         assert result.meta["openai/widgetSessionId"] == token
+        assert result.meta["openai/outputTemplate"] == f"ui://widgets/associate/workspace/{token}.html"
+        assert result.meta["ui"]["resourceUri"] == f"ui://widgets/associate/workspace/{token}.html"
         assert persisted["kind"] == "associate_workspace"
-        assert result.structuredContent == {"kind": "associate_workspace", "widgetSessionId": token}
+        assert result.structuredContent["kind"] == "associate_workspace"
+        assert result.structuredContent["payload"]["widgetSessionId"] == token
+        assert result.structuredContent["payload"]["selectedCustomer"]["id"] == "cust_000001"
+        assert result.structuredContent["payload"]["store"]["id"] == "1001"
         assert persisted["payload"]["selectedCustomer"]["id"] == "cust_000001"
         assert persisted["payload"]["store"]["id"] == "1001"
         assert persisted["payload"]["widgetSessionId"] == token
         assert persisted["payload"]["selectedProductIds"]
         assert "<style>" in html
         assert "attachHostListeners();" in html
-        assert 'widgetSessionId: null' in html
+        assert f'widgetSessionId: "{token}"' in html
+        assert "initialPayload:" in html
+        assert '"selectedCustomer"' in html
 
 
 def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
@@ -454,9 +461,15 @@ def test_render_sms_review_and_merch_board_return_widget_templates(monkeypatch):
 
         sms_token = sms_result.meta["openai/widgetSessionId"]
         merch_token = merch_result.meta["openai/widgetSessionId"]
-        assert sms_result.structuredContent == {"kind": "sms", "widgetSessionId": sms_token}
+        assert sms_result.meta["openai/outputTemplate"] == f"ui://widgets/sms/review/{sms_token}.html"
+        assert sms_result.structuredContent["kind"] == "sms"
+        assert sms_result.structuredContent["payload"]["widgetSessionId"] == sms_token
+        assert sms_result.structuredContent["payload"]["message"]["id"] == draft.message.id
         assert sms_token
-        assert merch_result.structuredContent == {"kind": "merch", "widgetSessionId": merch_token}
+        assert merch_result.meta["openai/outputTemplate"] == f"ui://widgets/merch/board/{merch_token}.html"
+        assert merch_result.structuredContent["kind"] == "merch"
+        assert merch_result.structuredContent["payload"]["widgetSessionId"] == merch_token
+        assert merch_result.structuredContent["payload"]["store"]["id"] == "1001"
         assert merch_token
 
 

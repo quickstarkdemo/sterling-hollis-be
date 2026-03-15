@@ -51,7 +51,7 @@ from app.schemas import (
     TwilioSmokeTestResponse,
     VectorStatusResponse,
 )
-from app.services.apps_ui import register_widget_state, render_widget_html
+from app.services.apps_ui import get_widget_state, register_widget_state, render_widget_html
 from app.services.communications import (
     customer_message_history,
     get_customer_message,
@@ -114,6 +114,9 @@ _MERCH_WIDGET_TEMPLATE_BASE = "ui://widgets/merch/board"
 _ASSOCIATE_WIDGET_RESOURCE_URI = _ASSOCIATE_WIDGET_TEMPLATE_BASE + ".html"
 _SMS_WIDGET_RESOURCE_URI = _SMS_WIDGET_TEMPLATE_BASE + ".html"
 _MERCH_WIDGET_RESOURCE_URI = _MERCH_WIDGET_TEMPLATE_BASE + ".html"
+_ASSOCIATE_WIDGET_SESSION_RESOURCE_URI = _ASSOCIATE_WIDGET_TEMPLATE_BASE + "/{session_token}.html"
+_SMS_WIDGET_SESSION_RESOURCE_URI = _SMS_WIDGET_TEMPLATE_BASE + "/{session_token}.html"
+_MERCH_WIDGET_SESSION_RESOURCE_URI = _MERCH_WIDGET_TEMPLATE_BASE + "/{session_token}.html"
 
 
 class LatestRunResponse(BaseModel):
@@ -150,6 +153,13 @@ def _render_tool_meta(resource_uri: str, invoking: str, invoked: str) -> dict:
     }
 
 
+def _widget_result_meta(resource_uri: str, session_token: str, invoking: str, invoked: str) -> dict:
+    return {
+        **_render_tool_meta(resource_uri, invoking, invoked),
+        "openai/widgetSessionId": session_token,
+    }
+
+
 def _calltool_result(text: str, payload: dict | None = None, meta: dict | None = None) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
@@ -157,6 +167,17 @@ def _calltool_result(text: str, payload: dict | None = None, meta: dict | None =
         _meta=meta,
         isError=False,
     )
+
+
+def _session_widget_resource_uri(base_uri: str, session_token: str) -> str:
+    return f"{base_uri}/{session_token}.html"
+
+
+def _load_widget_payload(session_token: str) -> dict:
+    try:
+        return get_widget_state(session_token)["payload"]
+    except ValueError:
+        return {"widgetSessionId": session_token}
 
 
 def _resolve_associate_context(
@@ -483,6 +504,20 @@ def associate_widget_resource() -> str:
 
 
 @mcp.resource(
+    _ASSOCIATE_WIDGET_SESSION_RESOURCE_URI,
+    mime_type="text/html+skybridge",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Interactive associate workspace for customer search, recommendations, and SMS drafting."},
+)
+def associate_widget_session_resource(session_token: str) -> str:
+    return render_widget_html(
+        "Associate Workspace",
+        "associate_workspace",
+        widget_session_id=session_token,
+        initial_payload=_load_widget_payload(session_token),
+    )
+
+
+@mcp.resource(
     _SMS_WIDGET_RESOURCE_URI,
     mime_type="text/html+skybridge",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
@@ -492,12 +527,40 @@ def sms_widget_resource() -> str:
 
 
 @mcp.resource(
+    _SMS_WIDGET_SESSION_RESOURCE_URI,
+    mime_type="text/html+skybridge",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "SMS draft review and send board."},
+)
+def sms_widget_session_resource(session_token: str) -> str:
+    return render_widget_html(
+        "SMS Draft Review",
+        "sms",
+        widget_session_id=session_token,
+        initial_payload=_load_widget_payload(session_token),
+    )
+
+
+@mcp.resource(
     _MERCH_WIDGET_RESOURCE_URI,
     mime_type="text/html+skybridge",
     meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
 )
 def merch_widget_resource() -> str:
     return render_widget_html("Merchandising Action Board", "merch")
+
+
+@mcp.resource(
+    _MERCH_WIDGET_SESSION_RESOURCE_URI,
+    mime_type="text/html+skybridge",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising action board."},
+)
+def merch_widget_session_resource(session_token: str) -> str:
+    return render_widget_html(
+        "Merchandising Action Board",
+        "merch",
+        widget_session_id=session_token,
+        initial_payload=_load_widget_payload(session_token),
+    )
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -1140,10 +1203,17 @@ def fashion_render_associate_workspace(
     }
     opened_for = bootstrap.selected_customer.full_name if bootstrap.selected_customer else bootstrap.store.name
     token = register_widget_state("associate_workspace", payload)
+    resource_uri = _session_widget_resource_uri(_ASSOCIATE_WIDGET_TEMPLATE_BASE, token)
+    structured_payload = {"kind": "associate_workspace", "payload": {**payload, "widgetSessionId": token}}
     return _calltool_result(
         text=f"Opened the associate workspace for {opened_for}.",
-        payload={"kind": "associate_workspace", "widgetSessionId": token},
-        meta={"openai/widgetSessionId": token},
+        payload=structured_payload,
+        meta=_widget_result_meta(
+            resource_uri,
+            token,
+            invoking="Opening associate workspace...",
+            invoked="Associate workspace ready.",
+        ),
     )
 
 
@@ -1168,10 +1238,17 @@ def fashion_render_sms_review(message_id: str) -> CallToolResult:
         "history": [row.model_dump(mode="json") for row in bootstrap.history],
     }
     token = register_widget_state("sms", payload)
+    resource_uri = _session_widget_resource_uri(_SMS_WIDGET_TEMPLATE_BASE, token)
+    structured_payload = {"kind": "sms", "payload": {**payload, "widgetSessionId": token}}
     return _calltool_result(
         text=f"Opened SMS draft review for message {message_id}.",
-        payload={"kind": "sms", "widgetSessionId": token},
-        meta={"openai/widgetSessionId": token},
+        payload=structured_payload,
+        meta=_widget_result_meta(
+            resource_uri,
+            token,
+            invoking="Opening SMS review...",
+            invoked="SMS review ready.",
+        ),
     )
 
 
@@ -1222,10 +1299,17 @@ def fashion_render_merch_board(
         "lastTool": bootstrap.last_tool,
     }
     token = register_widget_state("merch", payload)
+    resource_uri = _session_widget_resource_uri(_MERCH_WIDGET_TEMPLATE_BASE, token)
+    structured_payload = {"kind": "merch", "payload": {**payload, "widgetSessionId": token}}
     return _calltool_result(
         text=f"Opened the merchandising board for {bootstrap.store.name}.",
-        payload={"kind": "merch", "widgetSessionId": token},
-        meta={"openai/widgetSessionId": token},
+        payload=structured_payload,
+        meta=_widget_result_meta(
+            resource_uri,
+            token,
+            invoking="Opening merchandising board...",
+            invoked="Merchandising board ready.",
+        ),
     )
 
 
