@@ -45,6 +45,14 @@ function normalizeWorkspacePayload(raw) {
   if (!isObject(raw)) {
     return null;
   }
+  const hasWorkspaceFields =
+    Object.prototype.hasOwnProperty.call(raw, "mode") ||
+    Object.prototype.hasOwnProperty.call(raw, "results") ||
+    Object.prototype.hasOwnProperty.call(raw, "resolved") ||
+    Object.prototype.hasOwnProperty.call(raw, "uiHints");
+  if (!hasWorkspaceFields) {
+    return null;
+  }
 
   const next = {
     query: typeof raw.query === "string" ? raw.query : "",
@@ -76,6 +84,25 @@ function applyWorkspacePayload(raw) {
     state.ui.query = payload.query;
   }
   return true;
+}
+
+function applyUiWidgetState(raw) {
+  if (!isObject(raw)) {
+    return false;
+  }
+  let changed = false;
+  if (typeof raw.query === "string" && raw.query !== state.ui.query) {
+    state.ui.query = raw.query;
+    changed = true;
+  }
+  if (
+    typeof raw.selectedCustomerId === "string" &&
+    raw.selectedCustomerId !== state.ui.selectedCustomerId
+  ) {
+    state.ui.selectedCustomerId = raw.selectedCustomerId;
+    changed = true;
+  }
+  return changed;
 }
 
 function loadWidgetState() {
@@ -397,7 +424,9 @@ window.addEventListener(
   "openai:set_globals",
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
-    if (applyWorkspacePayload(globals.toolOutput) || applyWorkspacePayload(globals.widgetState)) {
+    const payloadChanged = applyWorkspacePayload(globals.toolOutput);
+    const uiChanged = applyUiWidgetState(globals.widgetState);
+    if (payloadChanged || uiChanged) {
       render();
     }
   },
