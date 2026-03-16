@@ -428,6 +428,7 @@ Human-first examples:
 - `fashion_resolve_store(store_query="Dallas downtown")`
 - `fashion_find_customers(query="avery 1234", limit=10)`
 - `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel"],"exclude_categories":["athleticwear"],"target_genders":["male"],"style_keywords":["tailored","micro-check"]})`
+- `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", initial_email_draft_id="msg_123abc", initial_email_subject="Canvas draft subject", initial_email_body="Hi Jorgen, ...")`
 - `fashion_resolve_customer(email="avery.parker.1@example-fashion.test")`
 - `fashion_resolve_customer(phone_last4="1234")`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
@@ -450,6 +451,7 @@ Render-tool examples for ChatGPT Apps:
 
 - `fashion_render_customer_search_workspace(query="avery", limit=10)`
 - `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel"],"target_genders":["male"],"style_keywords":["tailored"]})`
+- `fashion_render_customer_search_workspace(selected_customer_id="cust_000001", initial_email_draft_id="msg_123abc")`
 
 ### Manual local MCP testing with Inspector
 
@@ -550,8 +552,9 @@ Implementation notes:
 - widget HTML is now a thin shell that loads a bundled JS/CSS UI from `/ui-assets`
 - widget runtime uses `window.openai.callTool` directly (no custom parent RPC fallback)
 - email delivery now supports a draft lifecycle: prepare -> update/get -> send by `message_id`
-- workspace uses a draft-first path (`Compose in Canvas`, `Refresh Draft`, `Send Draft Email`) while legacy direct-send email tool remains available for compatibility
-- Canvas handoff is best-effort via host `ui/message`; send authority stays in persisted backend draft state
+- workspace uses a draft-first path (`Copy Draft`, `Copy Canvas Prompt`, `Refresh Draft`, `Send Draft Email`) while legacy direct-send email tool remains available for compatibility
+- chat-first handoff is supported by workspace hydration fields: `initial_email_draft_id` plus optional `initial_email_subject` and `initial_email_body`
+- send authority stays in persisted backend draft state
 - widget state persisted with optional `window.openai.setWidgetState` includes `query`, selected customer, filters, selected products, style constraints, and draft fields (`emailTo`, `emailSubject`, `emailBody`, `emailDraftId`)
 - legacy multi-workspace UI assets are archived under `app/static/chatgpt-ui/archive/legacy-workspaces`
 

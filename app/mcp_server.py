@@ -638,6 +638,9 @@ def _customer_search_workspace_payload(
     selected_customer_id: str | None = None,
     initial_style_constraints: StyleConstraints | None = None,
     initial_notice: str | None = None,
+    initial_email_draft_id: str | None = None,
+    initial_email_subject: str | None = None,
+    initial_email_body: str | None = None,
 ) -> dict:
     normalized_query = (query or "").strip()
     initial_constraints_payload = (
@@ -659,6 +662,9 @@ def _customer_search_workspace_payload(
             "selected_customer_id": selected_customer_id,
             "initial_style_constraints": initial_constraints_payload,
             "initial_notice": initial_notice,
+            "initial_email_draft_id": initial_email_draft_id,
+            "initial_email_subject": initial_email_subject,
+            "initial_email_body": initial_email_body,
             "uiHints": {
                 "searchPlaceholder": "Search by name, email, or phone",
                 "emptyState": "Type a customer name, email, or phone number and run search.",
@@ -679,6 +685,9 @@ def _customer_search_workspace_payload(
         "selected_customer_id": selected_customer_id,
         "initial_style_constraints": initial_constraints_payload,
         "initial_notice": initial_notice,
+        "initial_email_draft_id": initial_email_draft_id,
+        "initial_email_subject": initial_email_subject,
+        "initial_email_body": initial_email_body,
         "uiHints": {
             "searchPlaceholder": "Search by name, email, or phone",
             "emptyState": "No customers matched the current query.",
@@ -702,11 +711,15 @@ def fashion_render_customer_search_workspace(
     selected_customer_id: str | None = None,
     initial_style_constraints: StyleConstraints | None = None,
     initial_notice: str | None = None,
+    initial_email_draft_id: str | None = None,
+    initial_email_subject: str | None = None,
+    initial_email_body: str | None = None,
 ) -> CallToolResult:
     """Render the customer workspace inside ChatGPT.
 
     Optional hydration fields (`selected_customer_id`, `initial_style_constraints`,
-    and `initial_notice`) can seed the UI state from prior model/tool context.
+    `initial_notice`, and initial email draft fields) can seed the UI state from
+    prior model/tool context.
     """
     effective_limit = max(1, min(limit, 25))
     workspace_payload = _customer_search_workspace_payload(
@@ -715,6 +728,9 @@ def fashion_render_customer_search_workspace(
         selected_customer_id=selected_customer_id,
         initial_style_constraints=initial_style_constraints,
         initial_notice=initial_notice,
+        initial_email_draft_id=initial_email_draft_id,
+        initial_email_subject=initial_email_subject,
+        initial_email_body=initial_email_body,
     )
     structured_payload = {"kind": "customer_search_workspace", "payload": workspace_payload}
     summary = (
@@ -747,12 +763,17 @@ def fashion_open_customer_workspace(
     customer_query: str,
     style_constraints: StyleConstraints | None = None,
     initial_notice: str | None = None,
+    initial_email_draft_id: str | None = None,
+    initial_email_subject: str | None = None,
+    initial_email_body: str | None = None,
     limit: int = 10,
 ) -> CallToolResult:
     """Resolve customer query and open a hydrated customer workspace in one call.
 
     Prefer this as the default workspace entrypoint for chat flows. When an image
     is uploaded in chat, extract cues and pass them as `style_constraints`.
+    For chat-first email flows, pass `initial_email_draft_id` (and optional
+    `initial_email_subject`/`initial_email_body`) to hydrate draft context.
     """
     normalized_query = customer_query.strip()
     if not normalized_query:
@@ -780,6 +801,9 @@ def fashion_open_customer_workspace(
         selected_customer_id=selected_customer_id,
         initial_style_constraints=style_constraints,
         initial_notice=notice,
+        initial_email_draft_id=initial_email_draft_id,
+        initial_email_subject=initial_email_subject,
+        initial_email_body=initial_email_body,
     )
 
 

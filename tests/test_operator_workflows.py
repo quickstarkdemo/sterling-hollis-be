@@ -635,6 +635,9 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
                 style_keywords=["tailored", "minimal"],
             ),
             initial_notice="Image guidance loaded from this chat turn.",
+            initial_email_draft_id="msg_demo_draft_001",
+            initial_email_subject="A few picks from your stylist",
+            initial_email_body="Hi Avery,\n\nHere are a few tailored options.",
         )
         html = mcp_server.customer_search_widget_resource()
         template_uri = result.meta["openai/outputTemplate"]
@@ -651,6 +654,9 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert result.structuredContent["payload"]["initial_notice"] == "Image guidance loaded from this chat turn."
         assert result.structuredContent["payload"]["initial_style_constraints"]["constraint_source"] == "chat_image"
         assert result.structuredContent["payload"]["initial_style_constraints"]["target_categories"] == ["mens_apparel"]
+        assert result.structuredContent["payload"]["initial_email_draft_id"] == "msg_demo_draft_001"
+        assert result.structuredContent["payload"]["initial_email_subject"] == "A few picks from your stylist"
+        assert result.structuredContent["payload"]["initial_email_body"] == "Hi Avery,\n\nHere are a few tailored options."
         assert "<style>" in html
         assert "Customer Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
@@ -667,6 +673,9 @@ def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypat
                 target_genders=["male"],
                 style_keywords=["tailored"],
             ),
+            initial_email_draft_id="msg_canvas_001",
+            initial_email_subject="Draft from Canvas",
+            initial_email_body="Hi Avery,\n\nThis draft started in Canvas.",
             limit=10,
         )
 
@@ -676,6 +685,9 @@ def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypat
         assert payload["resolved"]["id"] == "cust_000001"
         assert payload["initial_style_constraints"]["constraint_source"] == "chat_image"
         assert payload["initial_notice"] == "Image guidance loaded from this chat turn."
+        assert payload["initial_email_draft_id"] == "msg_canvas_001"
+        assert payload["initial_email_subject"] == "Draft from Canvas"
+        assert payload["initial_email_body"] == "Hi Avery,\n\nThis draft started in Canvas."
 
 
 def test_open_customer_workspace_keeps_candidates_when_query_is_ambiguous(monkeypatch):

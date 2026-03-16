@@ -10,6 +10,9 @@ const state = {
     selected_customer_id: null,
     initial_style_constraints: null,
     initial_notice: null,
+    initial_email_draft_id: null,
+    initial_email_subject: null,
+    initial_email_body: null,
     uiHints: {
       searchPlaceholder: "Search by name, email, or phone",
       emptyState: "Type a customer name, email, or phone number and run search.",
@@ -46,6 +49,7 @@ const state = {
   runtime: {
     toolOutputApplied: false,
     userInteracted: false,
+    draftHydrationRequestedForId: null,
   },
 };
 
@@ -112,6 +116,9 @@ function normalizeWorkspacePayload(raw) {
     selected_customer_id: typeof raw.selected_customer_id === "string" ? raw.selected_customer_id : null,
     initial_style_constraints: normalizeStyleConstraints(raw.initial_style_constraints),
     initial_notice: typeof raw.initial_notice === "string" ? raw.initial_notice : null,
+    initial_email_draft_id: typeof raw.initial_email_draft_id === "string" ? raw.initial_email_draft_id : null,
+    initial_email_subject: typeof raw.initial_email_subject === "string" ? raw.initial_email_subject : null,
+    initial_email_body: typeof raw.initial_email_body === "string" ? raw.initial_email_body : null,
     uiHints: {
       searchPlaceholder:
         raw.uiHints && typeof raw.uiHints.searchPlaceholder === "string"
@@ -140,11 +147,21 @@ function applyWorkspacePayload(raw) {
   if (payload.selected_customer_id) {
     state.ui.selectedCustomerId = payload.selected_customer_id;
   }
-  if (payload.initial_style_constraints && !state.ui.styleConstraints) {
+  if (payload.initial_style_constraints) {
     state.ui.styleConstraints = payload.initial_style_constraints;
   }
-  if (payload.initial_notice && !state.ui.notice) {
+  if (payload.initial_notice) {
     setNotice(payload.initial_notice);
+  }
+  if (payload.initial_email_draft_id) {
+    state.ui.emailDraftId = payload.initial_email_draft_id;
+    state.runtime.draftHydrationRequestedForId = null;
+  }
+  if (payload.initial_email_subject) {
+    state.ui.emailSubject = payload.initial_email_subject;
+  }
+  if (payload.initial_email_body) {
+    state.ui.emailBody = payload.initial_email_body;
   }
   return true;
 }
@@ -445,6 +462,7 @@ function clearRecommendationState() {
   state.recommendation.selectedProductIds = [];
   state.recommendation.seedAttemptedCustomerId = null;
   state.recommendation.seedAttemptedDraftCustomerId = null;
+  state.runtime.draftHydrationRequestedForId = null;
   state.ui.emailDraftId = null;
   state.ui.emailSubject = "";
   state.ui.emailBody = "";
@@ -781,6 +799,43 @@ function applyEmailDraftResponse(selected, response) {
   return true;
 }
 
+async function copyTextToClipboard(text) {
+  const content = String(text || "");
+  if (!content) {
+    return false;
+  }
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(content);
+      return true;
+    } catch {
+      // Fall through to legacy path.
+    }
+  }
+  const scratch = document.createElement("textarea");
+  scratch.value = content;
+  scratch.setAttribute("readonly", "true");
+  scratch.style.position = "fixed";
+  scratch.style.left = "-9999px";
+  document.body.appendChild(scratch);
+  scratch.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  document.body.removeChild(scratch);
+  return copied;
+}
+
+function buildEmailDraftClipboardText(selected) {
+  const destination = (state.ui.emailTo || selected.email || "").trim();
+  const subject = (state.ui.emailSubject || "").trim();
+  const body = state.ui.emailBody || "";
+  return [`To: ${destination}`, `Subject: ${subject}`, "", body].join("\n");
+}
+
 function buildEmailDraftArgs(selected, options = {}) {
   const rows = recommendationRows(state.recommendation.response);
   const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
@@ -811,6 +866,44 @@ function buildEmailDraftArgs(selected, options = {}) {
     args.subject = subject;
   }
   return args;
+}
+
+async function hydrateDraftById(selected, messageId, options = {}) {
+  if (!selected || !messageId) {
+    return null;
+  }
+  if (!options.quiet) {
+    state.recommendation.isRefreshingEmailDraft = true;
+    if (!options.silent) {
+      setNotice(`Refreshing draft ${messageId}...`);
+    }
+    render();
+  }
+  const result = await callTool("fashion_get_customer_email_draft", { message_id: messageId });
+  if (!options.quiet) {
+    state.recommendation.isRefreshingEmailDraft = false;
+  }
+  if (result.__toolError) {
+    if (!options.silent) {
+      setNotice(result.__toolError, "error");
+    }
+    render();
+    return null;
+  }
+  const response = normalizeEmailDraftResponse(result);
+  if (!response) {
+    if (!options.silent) {
+      setNotice("Draft refresh returned an unexpected payload.", "error");
+    }
+    render();
+    return null;
+  }
+  applyEmailDraftResponse(selected, response);
+  if (!options.silent) {
+    setNotice(`Refreshed draft ${response.message.id}.`);
+  }
+  render();
+  return response;
 }
 
 async function prepareEmailDraft(selected, options = {}) {
@@ -871,25 +964,8 @@ async function refreshEmailDraft(selected) {
     return;
   }
   state.recommendation.isRefreshingEmailDraft = true;
-  setNotice(`Refreshing draft ${state.ui.emailDraftId}...`);
-  render();
-  const result = await callTool("fashion_get_customer_email_draft", { message_id: state.ui.emailDraftId });
+  await hydrateDraftById(selected, state.ui.emailDraftId);
   state.recommendation.isRefreshingEmailDraft = false;
-  if (result.__toolError) {
-    setNotice(result.__toolError, "error");
-    render();
-    return;
-  }
-  const response = normalizeEmailDraftResponse(result);
-  if (!response) {
-    setNotice("Draft refresh returned an unexpected payload.", "error");
-    render();
-    return;
-  }
-  if (selected) {
-    applyEmailDraftResponse(selected, response);
-  }
-  setNotice(`Refreshed draft ${response.message.id}.`);
   render();
 }
 
@@ -932,24 +1008,6 @@ async function syncEmailDraftEdits(selected) {
   return response;
 }
 
-function postUiMessage(text) {
-  if (!window.parent || typeof window.parent.postMessage !== "function") {
-    return false;
-  }
-  window.parent.postMessage(
-    {
-      jsonrpc: "2.0",
-      method: "ui/message",
-      params: {
-        role: "user",
-        content: [{ type: "text", text }],
-      },
-    },
-    "*",
-  );
-  return true;
-}
-
 function buildCanvasHandoffPrompt(selected, draftResponse) {
   const products = Array.isArray(draftResponse?.selected_products) ? draftResponse.selected_products : [];
   const productLines = products.length
@@ -983,10 +1041,33 @@ function buildCanvasHandoffPrompt(selected, draftResponse) {
   ].join("\n");
 }
 
-async function composeInCanvas(selected) {
+async function copyEmailDraft(selected) {
   markUserInteraction();
   if (!selected) {
-    setNotice("Select a customer before composing in Canvas.", "error");
+    setNotice("Select a customer before copying the draft.", "error");
+    render();
+    return;
+  }
+  if (!state.ui.emailBody.trim()) {
+    const seeded = await syncEmailDraftEdits(selected);
+    if (!seeded) {
+      return;
+    }
+  }
+  const copied = await copyTextToClipboard(buildEmailDraftClipboardText(selected));
+  if (!copied) {
+    setNotice("Clipboard copy failed in this browser.", "error");
+    render();
+    return;
+  }
+  setNotice("Copied draft email to clipboard.");
+  render();
+}
+
+async function copyCanvasPrompt(selected) {
+  markUserInteraction();
+  if (!selected) {
+    setNotice("Select a customer before copying a Canvas prompt.", "error");
     render();
     return;
   }
@@ -998,14 +1079,13 @@ async function composeInCanvas(selected) {
     }
   }
   const prompt = buildCanvasHandoffPrompt(selected, draft);
-  if (!postUiMessage(prompt)) {
-    setNotice("Canvas handoff is unavailable in this host.", "error");
+  const copied = await copyTextToClipboard(prompt);
+  if (!copied) {
+    setNotice("Clipboard copy failed in this browser.", "error");
     render();
     return;
   }
-  setNotice(
-    `Posted Canvas handoff for draft ${draft.message.id}. If Canvas does not open automatically, ask chat: "Open canvas for draft ${draft.message.id}".`,
-  );
+  setNotice(`Copied Canvas prompt for draft ${draft.message.id}. Paste it into chat to open Canvas.`);
   render();
 }
 
@@ -1095,6 +1175,12 @@ function queueSeedEmailDraft(selected) {
   if (state.ui.emailDraftId) {
     return;
   }
+  const initialDraftId = typeof state.payload.initial_email_draft_id === "string"
+    ? state.payload.initial_email_draft_id.trim()
+    : "";
+  if (initialDraftId) {
+    return;
+  }
   const response = state.recommendation.customerId === selected.id ? state.recommendation.response : null;
   if (!response || !recommendationRows(response).length) {
     return;
@@ -1116,6 +1202,45 @@ function queueSeedEmailDraft(selected) {
       return;
     }
     void prepareEmailDraft(activeSelected, { includeMessageId: false, silent: true, quiet: true });
+  }, 0);
+}
+
+function queueHydrateInitialEmailDraft(selected) {
+  if (!selected || !selected.id) {
+    return;
+  }
+  const draftId = typeof state.payload.initial_email_draft_id === "string"
+    ? state.payload.initial_email_draft_id.trim()
+    : "";
+  if (!draftId) {
+    return;
+  }
+  if (state.runtime.draftHydrationRequestedForId === draftId) {
+    return;
+  }
+  if (
+    state.recommendation.isPreparingEmailDraft ||
+    state.recommendation.isRefreshingEmailDraft ||
+    state.recommendation.isUpdatingEmailDraft ||
+    state.recommendation.isSendingEmailDraft
+  ) {
+    return;
+  }
+  state.runtime.draftHydrationRequestedForId = draftId;
+  window.setTimeout(() => {
+    const activeSelected = selectedCustomer(Array.isArray(state.payload.results) ? state.payload.results : []);
+    if (!activeSelected || activeSelected.id !== selected.id) {
+      return;
+    }
+    state.ui.emailDraftId = draftId;
+    if (state.payload.initial_email_subject && !state.ui.emailSubject) {
+      state.ui.emailSubject = state.payload.initial_email_subject;
+    }
+    if (state.payload.initial_email_body && !state.ui.emailBody) {
+      state.ui.emailBody = state.payload.initial_email_body;
+    }
+    persistWidgetState();
+    void hydrateDraftById(activeSelected, draftId, { silent: true, quiet: true });
   }, 0);
 }
 
@@ -1585,10 +1710,22 @@ function render() {
                       type: "button",
                       disabled: emailDraftBusy || !selectedProductCount || !state.ui.emailTo.trim() ? "true" : null,
                       onClick: () => {
-                        void composeInCanvas(selected);
+                        void copyEmailDraft(selected);
                       },
                     },
-                    state.recommendation.isPreparingEmailDraft ? "Preparing..." : "Compose in Canvas",
+                    "Copy Draft",
+                  ),
+                  el(
+                    "button",
+                    {
+                      className: "fw-button secondary",
+                      type: "button",
+                      disabled: emailDraftBusy || !selectedProductCount || !state.ui.emailTo.trim() ? "true" : null,
+                      onClick: () => {
+                        void copyCanvasPrompt(selected);
+                      },
+                    },
+                    "Copy Canvas Prompt",
                   ),
                   el(
                     "button",
@@ -1654,6 +1791,7 @@ function render() {
   );
   if (selected) {
     queueSeedRecommendations(selected);
+    queueHydrateInitialEmailDraft(selected);
     queueSeedEmailDraft(selected);
   }
 }
