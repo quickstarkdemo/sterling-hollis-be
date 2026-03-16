@@ -499,6 +499,37 @@ body {
   line-height: 1.4;
 }
 
+.fw-trend-chart-panel {
+  gap: 10px;
+}
+
+.fw-trend-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fw-trend-chart {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.fw-trend-axis {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  margin-top: -2px;
+}
+
+.fw-axis-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
 @media (max-width: 760px) {
   .fashion-widget-shell {
     padding: 10px;

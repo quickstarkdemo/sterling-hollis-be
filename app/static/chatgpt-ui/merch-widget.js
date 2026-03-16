@@ -14,6 +14,7 @@ const DEFAULT_PAYLOAD = {
     lookback_days: 90,
     compare_mode: "peer_and_prior_period",
     peer_mode: "state_and_profile",
+    compare_store_id: null,
     top_k: 9,
   },
   initial_result: null,
@@ -21,9 +22,10 @@ const DEFAULT_PAYLOAD = {
   last_tool: "fashion_merch_action_recommendations",
   initial_notice: null,
   uiHints: {
-    questionPlaceholder: "What should this store feature, promote, or deprioritize?",
-    emptyState: "Run Actions, Diagnostics, or Trends to populate this workspace.",
+    questionPlaceholder: "What should this store prioritize, promote, or deprioritize?",
+    emptyState: "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
     categoryOptions: [],
+    compareStoreOptions: [{ value: "", label: "Auto peer set" }],
     actionDefinitions: {
       feature: "High-confidence winners for full-price visibility.",
       promote: "Inventory where campaign/offer can accelerate sell-through.",
@@ -44,6 +46,7 @@ const state = {
     lookbackDays: "90",
     compareMode: "peer_and_prior_period",
     peerMode: "state_and_profile",
+    compareStoreId: "",
     topK: "9",
     csvText: "",
     notice: "",
@@ -104,6 +107,31 @@ function normalizeActionDefinitions(raw) {
   return defaults;
 }
 
+function normalizeCompareStoreOptions(raw) {
+  const defaults = [{ value: "", label: "Auto peer set" }];
+  if (!Array.isArray(raw)) {
+    return defaults;
+  }
+  const options = [];
+  const seen = new Set();
+  raw.forEach((item) => {
+    if (!isObject(item)) {
+      return;
+    }
+    const value = typeof item.value === "string" ? item.value.trim() : "";
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    if (!label || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    options.push({ value, label });
+  });
+  if (!seen.has("")) {
+    options.unshift(defaults[0]);
+  }
+  return options.length ? options : defaults;
+}
+
 function parseJsonContentPayload(raw) {
   if (!raw || !Array.isArray(raw.content)) {
     return null;
@@ -162,6 +190,7 @@ function normalizeWorkspacePayload(raw) {
           : 90,
       compare_mode: typeof rawFilters.compare_mode === "string" ? rawFilters.compare_mode : "peer_and_prior_period",
       peer_mode: typeof rawFilters.peer_mode === "string" ? rawFilters.peer_mode : "state_and_profile",
+      compare_store_id: typeof rawFilters.compare_store_id === "string" ? rawFilters.compare_store_id : null,
       top_k:
         Number.isFinite(Number(rawFilters.top_k)) && Number(rawFilters.top_k) > 0
           ? Number(rawFilters.top_k)
@@ -186,6 +215,7 @@ function normalizeWorkspacePayload(raw) {
           ? raw.uiHints.emptyState
           : DEFAULT_PAYLOAD.uiHints.emptyState,
       categoryOptions: normalizeCategoryOptions(raw.uiHints && raw.uiHints.categoryOptions),
+      compareStoreOptions: normalizeCompareStoreOptions(raw.uiHints && raw.uiHints.compareStoreOptions),
       actionDefinitions: normalizeActionDefinitions(raw.uiHints && raw.uiHints.actionDefinitions),
     },
   };
@@ -234,6 +264,7 @@ function hydrateUiFromFilters(filters) {
   state.ui.lookbackDays = String(filters.lookback_days || 90);
   state.ui.compareMode = typeof filters.compare_mode === "string" ? filters.compare_mode : "peer_and_prior_period";
   state.ui.peerMode = typeof filters.peer_mode === "string" ? filters.peer_mode : "state_and_profile";
+  state.ui.compareStoreId = typeof filters.compare_store_id === "string" ? filters.compare_store_id : "";
   state.ui.topK = String(filters.top_k || 9);
 }
 
@@ -242,7 +273,20 @@ function applyUiWidgetState(raw) {
     return false;
   }
   let changed = false;
-  const textFields = ["question", "objective", "category", "brand", "priceBand", "occasion", "lookbackDays", "compareMode", "peerMode", "topK", "csvText"];
+  const textFields = [
+    "question",
+    "objective",
+    "category",
+    "brand",
+    "priceBand",
+    "occasion",
+    "lookbackDays",
+    "compareMode",
+    "peerMode",
+    "compareStoreId",
+    "topK",
+    "csvText",
+  ];
   for (const key of textFields) {
     if (typeof raw[key] === "string" && raw[key] !== state.ui[key]) {
       state.ui[key] = raw[key];
@@ -279,6 +323,7 @@ function persistWidgetState() {
       lookbackDays: state.ui.lookbackDays,
       compareMode: state.ui.compareMode,
       peerMode: state.ui.peerMode,
+      compareStoreId: state.ui.compareStoreId,
       topK: state.ui.topK,
       csvText: state.ui.csvText,
       lastTool: state.payload.last_tool,
@@ -364,6 +409,7 @@ function buildModelContextPayload() {
     lookback_days: Number(state.ui.lookbackDays || 90),
     compare_mode: state.ui.compareMode,
     peer_mode: state.ui.peerMode,
+    compare_store_id: state.ui.compareStoreId || null,
     top_k: Number(state.ui.topK || 9),
     row_count: rowCountForResult(active),
     csv_hash: stableTextHash(state.ui.csvText),
@@ -470,7 +516,7 @@ function toolLabel(toolName) {
   if (toolName === "fashion_merch_trend_summary") {
     return "Trends";
   }
-  return "Actions";
+  return "Prioritize";
 }
 
 function viewFromTool(toolName) {
@@ -529,6 +575,7 @@ function currentFilters() {
     lookback_days: parsePositiveInt(state.ui.lookbackDays, 90, 7, 730),
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
     peer_mode: state.ui.peerMode || "state_and_profile",
+    compare_store_id: state.ui.compareStoreId.trim() || null,
     top_k: parsePositiveInt(state.ui.topK, 9, 1, 50),
   };
 }
@@ -549,6 +596,7 @@ function buildToolArgs(toolName) {
     occasion: filters.occasion,
     compare_mode: filters.compare_mode,
     peer_mode: filters.peer_mode,
+    compare_store_id: filters.compare_store_id,
   };
   if (toolName === "fashion_merch_action_recommendations") {
     args.objective = filters.objective;
@@ -709,6 +757,7 @@ function resultHeader(result) {
   return el(
     "div",
     { className: "fw-kpi-strip" },
+    kpi("Baseline", result.compare_mode === "prior_period" ? "Prior Period" : result.compare_store_name || "Peer Set"),
     kpi("Compare", humanizeToken(result.compare_mode || state.ui.compareMode)),
     kpi("Peers", String((result.peer_store_ids || []).length || 0)),
     kpi("Window", `${result.lookback_days || parsePositiveInt(state.ui.lookbackDays, 90, 7, 730)}d`),
@@ -853,6 +902,98 @@ function renderDiagnostics(result) {
           kpi("Peer", compactNumber(item.peer_value)),
           kpi("Prior", compactNumber(item.prior_value)),
         ),
+        el(
+          "div",
+          { className: "fw-kpi-strip" },
+          kpi("Current Units", compactNumber(item.current_units)),
+          kpi("Peer Units", compactNumber(item.peer_units)),
+          kpi("Prior Units", compactNumber(item.prior_units)),
+        ),
+        el(
+          "div",
+          { className: "fw-kpi-strip" },
+          kpi("Current Margin", compactNumber(item.current_margin_pct)),
+          kpi("Peer Margin", compactNumber(item.peer_margin_pct)),
+          kpi("Prior Margin", compactNumber(item.prior_margin_pct)),
+        ),
+      ),
+    ),
+  );
+}
+
+function renderTrendChart(result) {
+  const points = Array.isArray(result?.time_series) ? result.time_series : [];
+  if (!points.length) {
+    return null;
+  }
+  const width = 760;
+  const height = 220;
+  const pad = 24;
+  const currentValues = points.map((point) => Number(point.current_revenue || 0));
+  const baselineValues = points
+    .map((point) => (point.baseline_revenue === null || point.baseline_revenue === undefined ? null : Number(point.baseline_revenue)))
+    .filter((value) => value !== null && Number.isFinite(value));
+  const allValues = [...currentValues, ...baselineValues];
+  const minValue = Math.min(...allValues);
+  const maxValue = Math.max(...allValues);
+  const span = Math.max(maxValue - minValue, 1);
+
+  const xFor = (idx) => {
+    if (points.length <= 1) {
+      return pad;
+    }
+    return pad + (idx / (points.length - 1)) * (width - pad * 2);
+  };
+  const yFor = (value) => {
+    const normalized = (Number(value || 0) - minValue) / span;
+    return height - pad - normalized * (height - pad * 2);
+  };
+
+  const currentPath = points
+    .map((point, idx) => `${idx === 0 ? "M" : "L"} ${xFor(idx).toFixed(2)} ${yFor(point.current_revenue).toFixed(2)}`)
+    .join(" ");
+  let baselineStarted = false;
+  const baselinePath = points
+    .map((point, idx) => {
+      const value = point.baseline_revenue;
+      if (value === null || value === undefined) {
+        return null;
+      }
+      const command = baselineStarted ? "L" : "M";
+      baselineStarted = true;
+      return `${command} ${xFor(idx).toFixed(2)} ${yFor(value).toFixed(2)}`;
+    })
+    .filter(Boolean)
+    .join(" ");
+
+  return el(
+    "section",
+    { className: "fw-panel fw-trend-chart-panel" },
+    el("h3", { className: "fw-panel-title", text: "Weekly Revenue Trend" }),
+    el(
+      "div",
+      { className: "fw-trend-legend" },
+      el("span", { className: "fw-chip", text: "Current Store" }),
+      baselinePath ? el("span", { className: "fw-chip subtle", text: "Baseline" }) : null,
+    ),
+    el(
+      "svg",
+      {
+        className: "fw-trend-chart",
+        viewBox: `0 0 ${width} ${height}`,
+        role: "img",
+        "aria-label": "Weekly trend chart for current store and baseline",
+      },
+      el("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: "#cbd8e4", "stroke-width": "1" }),
+      el("line", { x1: pad, y1: pad, x2: pad, y2: height - pad, stroke: "#cbd8e4", "stroke-width": "1" }),
+      baselinePath ? el("path", { d: baselinePath, fill: "none", stroke: "#6f8498", "stroke-width": "2.2", "stroke-linecap": "round" }) : null,
+      el("path", { d: currentPath, fill: "none", stroke: "#1f5d8f", "stroke-width": "2.8", "stroke-linecap": "round" }),
+    ),
+    el(
+      "div",
+      { className: "fw-trend-axis" },
+      ...points.map((point, idx) =>
+        el("span", { className: "fw-axis-label", text: idx === 0 || idx === points.length - 1 ? point.period_start : "·" }),
       ),
     ),
   );
@@ -860,12 +1001,14 @@ function renderDiagnostics(result) {
 
 function renderTrends(result) {
   const items = Array.isArray(result?.highlights) ? result.highlights : [];
-  if (!items.length) {
+  const trendChart = renderTrendChart(result);
+  if (!items.length && !trendChart) {
     return el("p", { className: "fw-empty", text: state.payload.uiHints.emptyState });
   }
   return el(
     "div",
     { className: "fw-list" },
+    trendChart,
     ...items.map((item) =>
       el(
         "article",
@@ -1015,6 +1158,16 @@ function render() {
     },
   );
 
+  const compareStoreSelect = buildSelect(
+    state.ui.compareStoreId,
+    Array.isArray(state.payload.uiHints.compareStoreOptions) && state.payload.uiHints.compareStoreOptions.length
+      ? state.payload.uiHints.compareStoreOptions
+      : [{ label: "Auto peer set", value: "" }],
+    (value) => {
+      state.ui.compareStoreId = value;
+    },
+  );
+
   const controlsPanel = el(
     "section",
     { className: "fw-panel" },
@@ -1091,6 +1244,7 @@ function render() {
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare Mode" }), compareModeSelect),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Peer Mode" }), peerModeSelect),
+      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare To Store" }), compareStoreSelect),
       el(
         "div",
         { className: "fw-field" },
@@ -1122,7 +1276,7 @@ function render() {
             void refreshMerch("fashion_merch_action_recommendations");
           },
         },
-        state.ui.isLoading && activeTool === "fashion_merch_action_recommendations" ? "Loading..." : "Actions",
+        state.ui.isLoading && activeTool === "fashion_merch_action_recommendations" ? "Loading..." : "Prioritize",
       ),
       el(
         "button",

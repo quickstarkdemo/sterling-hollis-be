@@ -210,6 +210,21 @@ def _merch_category_options() -> list[dict[str, str]]:
     return rows
 
 
+def _merch_compare_store_options(store_id: str) -> list[dict[str, str]]:
+    with SessionLocal() as db:
+        stores = db.scalars(select(Store).where(Store.id != store_id).order_by(Store.name.asc(), Store.id.asc())).all()
+        return [
+            {"value": "", "label": "Auto peer set"},
+            *[
+                {
+                    "value": store.id,
+                    "label": f"{store.name} ({store.city}, {store.state})",
+                }
+                for store in stores
+            ],
+        ]
+
+
 def _apply_inventory_filters(
     query,
     *,
@@ -481,7 +496,7 @@ def fashion_generate_synthetic(
     seed: int = 20260313,
     trailing_months: int = 24,
     stores: int = 36,
-    products: int = 4000,
+    products: int = 6000,
     customers: int = 12000,
     orders: int = 80000,
     profile_overrides: dict[str, float] | None = None,
@@ -801,6 +816,7 @@ def _merch_workspace_payload(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
     initial_notice: str | None = None,
 ) -> dict:
     bounded_lookback = max(7, min(lookback_days, 730))
@@ -818,7 +834,9 @@ def _merch_workspace_payload(
         occasion=occasion,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
+        compare_store_id=compare_store_id,
     )
+    compare_store_options = _merch_compare_store_options(initial_result.store.id)
     return {
         "store": initial_result.store.model_dump(mode="json"),
         "filters": MerchWorkspaceFilters(
@@ -831,6 +849,7 @@ def _merch_workspace_payload(
             lookback_days=bounded_lookback,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
             top_k=bounded_top_k,
         ).model_dump(mode="json"),
         "initial_result": initial_result.model_dump(mode="json"),
@@ -838,9 +857,10 @@ def _merch_workspace_payload(
         "last_tool": "fashion_merch_action_recommendations",
         "initial_notice": initial_notice,
         "uiHints": {
-            "questionPlaceholder": "What should this store feature, promote, or deprioritize?",
-            "emptyState": "Run Actions, Diagnostics, or Trends to populate this workspace.",
+            "questionPlaceholder": "What should this store prioritize, promote, or deprioritize?",
+            "emptyState": "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
             "categoryOptions": _merch_category_options(),
+            "compareStoreOptions": compare_store_options,
             "actionDefinitions": {
                 "feature": "High-confidence winners to prioritize in full-price placement.",
                 "promote": "Inventory with margin headroom where campaigns/offers can accelerate sell-through.",
@@ -868,11 +888,14 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 occasion=params.occasion,
                 compare_mode=params.compare_mode,
                 peer_mode=params.peer_mode,
+                compare_store_id=params.compare_store_id,
             )
             headers = [
                 "store_id",
                 "store_name",
                 "view",
+                "compare_store_id",
+                "compare_store_name",
                 "action",
                 "product_id",
                 "title",
@@ -896,6 +919,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     "store_id": result.store.id,
                     "store_name": result.store.name,
                     "view": MerchWorkspaceView.actions.value,
+                    "compare_store_id": _as_scalar(result.compare_store_id),
+                    "compare_store_name": _as_scalar(result.compare_store_name),
                     "action": _as_scalar(item.action),
                     "product_id": _as_scalar(item.product_id),
                     "title": _as_scalar(item.title),
@@ -930,11 +955,14 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 occasion=params.occasion,
                 compare_mode=params.compare_mode,
                 peer_mode=params.peer_mode,
+                compare_store_id=params.compare_store_id,
             )
             headers = [
                 "store_id",
                 "store_name",
                 "view",
+                "compare_store_id",
+                "compare_store_name",
                 "dimension",
                 "subject",
                 "status",
@@ -942,6 +970,12 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 "peer_value",
                 "prior_value",
                 "delta",
+                "current_units",
+                "peer_units",
+                "prior_units",
+                "current_margin_pct",
+                "peer_margin_pct",
+                "prior_margin_pct",
                 "compare_mode",
                 "peer_mode",
                 "lookback_days",
@@ -952,6 +986,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     "store_id": result.store.id,
                     "store_name": result.store.name,
                     "view": MerchWorkspaceView.diagnostics.value,
+                    "compare_store_id": _as_scalar(result.compare_store_id),
+                    "compare_store_name": _as_scalar(result.compare_store_name),
                     "dimension": _as_scalar(item.dimension),
                     "subject": _as_scalar(item.subject),
                     "status": _as_scalar(item.status),
@@ -959,6 +995,12 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     "peer_value": _as_scalar(item.peer_value),
                     "prior_value": _as_scalar(item.prior_value),
                     "delta": _as_scalar(item.delta),
+                    "current_units": _as_scalar(item.current_units),
+                    "peer_units": _as_scalar(item.peer_units),
+                    "prior_units": _as_scalar(item.prior_units),
+                    "current_margin_pct": _as_scalar(item.current_margin_pct),
+                    "peer_margin_pct": _as_scalar(item.peer_margin_pct),
+                    "prior_margin_pct": _as_scalar(item.prior_margin_pct),
                     "compare_mode": _as_scalar(result.compare_mode),
                     "peer_mode": _as_scalar(result.peer_mode),
                     "lookback_days": _as_scalar(result.lookback_days),
@@ -980,16 +1022,25 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 occasion=params.occasion,
                 compare_mode=params.compare_mode,
                 peer_mode=params.peer_mode,
+                compare_store_id=params.compare_store_id,
             )
             headers = [
                 "store_id",
                 "store_name",
                 "view",
+                "row_type",
+                "compare_store_id",
+                "compare_store_name",
                 "subject",
+                "period_start",
                 "current_value",
                 "peer_value",
                 "prior_value",
                 "pct_change",
+                "current_revenue",
+                "baseline_revenue",
+                "current_units",
+                "baseline_units",
                 "compare_mode",
                 "peer_mode",
                 "lookback_days",
@@ -1000,11 +1051,19 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     "store_id": result.store.id,
                     "store_name": result.store.name,
                     "view": MerchWorkspaceView.trends.value,
+                    "row_type": "highlight",
+                    "compare_store_id": _as_scalar(result.compare_store_id),
+                    "compare_store_name": _as_scalar(result.compare_store_name),
                     "subject": _as_scalar(item.subject),
+                    "period_start": "",
                     "current_value": _as_scalar(item.current_value),
                     "peer_value": _as_scalar(item.peer_value),
                     "prior_value": _as_scalar(item.prior_value),
                     "pct_change": _as_scalar(item.pct_change),
+                    "current_revenue": "",
+                    "baseline_revenue": "",
+                    "current_units": "",
+                    "baseline_units": "",
                     "compare_mode": _as_scalar(result.compare_mode),
                     "peer_mode": _as_scalar(result.peer_mode),
                     "lookback_days": _as_scalar(result.lookback_days),
@@ -1012,6 +1071,31 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 }
                 for item in result.highlights
             ]
+            rows.extend(
+                {
+                    "store_id": result.store.id,
+                    "store_name": result.store.name,
+                    "view": MerchWorkspaceView.trends.value,
+                    "row_type": "timeseries",
+                    "compare_store_id": _as_scalar(result.compare_store_id),
+                    "compare_store_name": _as_scalar(result.compare_store_name),
+                    "subject": "",
+                    "period_start": _as_scalar(point.period_start),
+                    "current_value": "",
+                    "peer_value": "",
+                    "prior_value": "",
+                    "pct_change": "",
+                    "current_revenue": _as_scalar(point.current_revenue),
+                    "baseline_revenue": _as_scalar(point.baseline_revenue),
+                    "current_units": _as_scalar(point.current_units),
+                    "baseline_units": _as_scalar(point.baseline_units),
+                    "compare_mode": _as_scalar(result.compare_mode),
+                    "peer_mode": _as_scalar(result.peer_mode),
+                    "lookback_days": _as_scalar(result.lookback_days),
+                    "rationale": "Weekly trend point.",
+                }
+                for point in result.time_series
+            )
             store = result.store
 
     csv_payload = _csv_text(headers, rows)
@@ -1163,6 +1247,7 @@ def fashion_render_merch_workspace(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Render the merchandising workspace inside ChatGPT."""
@@ -1182,6 +1267,7 @@ def fashion_render_merch_workspace(
         occasion=occasion,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
+        compare_store_id=compare_store_id,
         initial_notice=initial_notice,
     )
     structured_payload = {"kind": "merch_workspace", "payload": workspace_payload}
@@ -1219,6 +1305,7 @@ def fashion_open_merch_workspace(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Resolve a store query and open a hydrated merchandising workspace in one call."""
@@ -1243,6 +1330,7 @@ def fashion_open_merch_workspace(
         occasion=occasion,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
+        compare_store_id=compare_store_id,
         initial_notice=notice,
     )
 
@@ -1568,6 +1656,7 @@ def fashion_merch_action_recommendations(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchActionRecommendationsResponse:
     """Recommend what a merchandiser should feature, deprioritize, or promote for a store."""
     with SessionLocal() as db:
@@ -1585,6 +1674,7 @@ def fashion_merch_action_recommendations(
             occasion=occasion,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
         )
 
 
@@ -1604,6 +1694,7 @@ def fashion_merch_diagnostics(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchDiagnosticsResponse:
     """Explain why a store, category, or brand is overperforming or underperforming versus peers."""
     with SessionLocal() as db:
@@ -1619,6 +1710,7 @@ def fashion_merch_diagnostics(
             occasion=occasion,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
         )
 
 
@@ -1638,6 +1730,7 @@ def fashion_merch_trend_summary(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchTrendSummaryResponse:
     """Summarize store-category revenue trends for a merchandiser over a selected time window."""
     with SessionLocal() as db:
@@ -1653,6 +1746,7 @@ def fashion_merch_trend_summary(
             occasion=occasion,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
         )
 
 
@@ -1830,6 +1924,7 @@ def fashion_merch_export_csv(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchExportCsvResponse:
     """Export merch workspace results as deterministic CSV text for copy/paste into spreadsheets."""
     params = MerchExportCsvRequest(
@@ -1846,6 +1941,7 @@ def fashion_merch_export_csv(
         occasion=occasion,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
+        compare_store_id=compare_store_id,
     )
     return _merch_export_csv_impl(params)
 

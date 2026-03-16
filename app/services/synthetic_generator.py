@@ -31,20 +31,49 @@ from app.services.demo_customer import (
 )
 
 FIRST_NAMES = [
-    "Avery", "Jordan", "Taylor", "Emerson", "Morgan", "Riley", "Parker", "Casey", "Alex", "Sydney",
-    "Elliot", "Harper", "Reese", "Rowan", "Quinn", "Cameron", "Dakota", "Sawyer", "Finley", "Logan",
+    "Aaliyah", "Adrian", "Aisha", "Alan", "Alana", "Alessia", "Alex", "Alexis", "Alina", "Amara",
+    "Amelia", "Andre", "Anika", "Annalise", "Anthony", "Aria", "Arjun", "Asher", "Aubrey", "Audrey",
+    "Bianca", "Blair", "Brielle", "Caleb", "Camila", "Camille", "Carmen", "Carson", "Cassidy", "Celeste",
+    "Charlotte", "Chase", "Chloe", "Claire", "Clara", "Cole", "Connor", "Cora", "Daniel", "Daphne",
+    "Delilah", "Diego", "Dominic", "Eden", "Elena", "Elias", "Elise", "Elliot", "Emery", "Emilia",
+    "Emma", "Ethan", "Eva", "Evan", "Felix", "Fiona", "Gabriel", "Gemma", "Georgia", "Gianna",
+    "Grayson", "Hailey", "Hannah", "Harper", "Hugo", "Iris", "Isabella", "Isaiah", "Jade", "Jalen",
+    "James", "Jasmine", "Javier", "Jordan", "Josephine", "Julian", "Kai", "Katherine", "Kendall", "Laila",
+    "Landon", "Leah", "Lena", "Leo", "Lila", "Lily", "Logan", "Lucas", "Lucia", "Madeline",
+    "Maeve", "Mason", "Maya", "Mia", "Micah", "Mila", "Naomi", "Natalia", "Noah", "Nora",
+    "Olivia", "Omar", "Owen", "Parker", "Penelope", "Quinn", "Rafael", "Reese", "Riley", "Roman",
+    "Ruby", "Sage", "Samuel", "Sasha", "Scarlett", "Sebastian", "Sienna", "Sofia", "Stella", "Sydney",
+    "Talia", "Theo", "Valentina", "Vera", "Victoria", "Violet", "Wesley", "Willow", "Xavier", "Zara",
 ]
 LAST_NAMES = [
-    "Parker", "Sullivan", "Hughes", "Bennett", "Montgomery", "Reed", "Coleman", "Prescott", "Hayes", "Warren",
-    "Kensington", "Foster", "Dalton", "Whitman", "Bishop", "Caldwell", "Sinclair", "Monroe", "Barrett", "Callahan",
+    "Abbott", "Adler", "Albright", "Alford", "Alvarez", "Anderson", "Archer", "Armstrong", "Atkins", "Baldwin",
+    "Barrera", "Barrett", "Barton", "Becker", "Bennett", "Bishop", "Blackwell", "Bowman", "Boyd", "Bradford",
+    "Brady", "Briggs", "Brooks", "Buchanan", "Burke", "Burnett", "Calder", "Callahan", "Campbell", "Carlisle",
+    "Carpenter", "Carroll", "Chandler", "Chapman", "Clark", "Clayton", "Clements", "Cohen", "Coleman", "Collins",
+    "Connelly", "Cook", "Crawford", "Cruz", "Dalton", "Davidson", "Dawson", "Delgado", "Donovan", "Doyle",
+    "Duncan", "Ellis", "Erickson", "Farley", "Ferguson", "Fisher", "Fletcher", "Foster", "Franklin", "Gaines",
+    "Garcia", "Gardner", "Garrett", "Gibson", "Goodwin", "Grady", "Grant", "Greene", "Griffin", "Hall",
+    "Hamilton", "Hansen", "Harlow", "Harrison", "Hart", "Hayes", "Henderson", "Holloway", "Hudson", "Hughes",
+    "Hunter", "Irving", "Jackson", "Jameson", "Jenkins", "Jordan", "Keller", "Kensington", "King", "Knox",
+    "Lang", "Larson", "Lawson", "Lee", "Lewis", "Livingston", "Long", "Maddox", "Manning", "Marshall",
+    "Martin", "Mason", "Matthews", "McCarthy", "McKay", "Meyer", "Mitchell", "Monroe", "Montgomery", "Morales",
+    "Morgan", "Morris", "Murray", "Nash", "Nolan", "Norman", "Ortiz", "Owens", "Palmer", "Park",
+    "Parker", "Patel", "Patterson", "Payne", "Pierce", "Porter", "Prescott", "Price", "Quinn", "Ramirez",
+    "Reed", "Reeves", "Reynolds", "Rhodes", "Richardson", "Rivera", "Roberts", "Robinson", "Rogers", "Rose",
+    "Ross", "Russell", "Sanchez", "Sanders", "Schneider", "Scott", "Shaw", "Sinclair", "Sloan", "Spencer",
+    "Steele", "Stevens", "Sullivan", "Taylor", "Thomas", "Thompson", "Turner", "Valdez", "Vega", "Wade",
+    "Walker", "Wallace", "Walsh", "Warren", "Watkins", "Webb", "Wells", "West", "Whitman", "Wilder",
+    "Williams", "Wilson", "Wong", "Wright", "Young", "Zimmerman",
 ]
 LOYALTY_TIERS = ["standard", "silver", "gold", "platinum"]
 CHANNELS = ["in_store", "online", "hybrid"]
 OCCASIONS = ["wedding", "vacation", "workwear", "holiday_party", "everyday_luxury"]
+
+
 @dataclass
 class GenerationVolumes:
     stores: int = 36
-    products: int = 4000
+    products: int = 6000
     customers: int = 12000
     orders: int = 80000
 
@@ -91,6 +120,22 @@ def _synthetic_phone_e164(idx: int) -> str:
 def _pick_category_for_profile(rng: random.Random, profile_type: str) -> str:
     profile = STORE_ASSORTMENT_PROFILES.get(profile_type, STORE_ASSORTMENT_PROFILES["suburban_affluent"])
     return _weighted_choice(rng, list(profile.items()))
+
+
+def _customer_name_for_index(idx: int) -> tuple[str, str]:
+    first = FIRST_NAMES[idx % len(FIRST_NAMES)]
+    last = LAST_NAMES[(idx // len(FIRST_NAMES)) % len(LAST_NAMES)]
+    return first, last
+
+
+def _store_inventory_multiplier(profile_type: str) -> float:
+    multipliers = {
+        "flagship_urban": 1.35,
+        "resort_luxury": 1.10,
+        "texas_core": 1.00,
+        "suburban_affluent": 0.88,
+    }
+    return multipliers.get(profile_type, 1.0)
 
 
 def _occasion_for_month(rng: random.Random, month: int) -> str:
@@ -156,8 +201,7 @@ def generate_customers(
 
     for idx in range(max(count - 1, 0)):
         cid = f"cust_{idx + 1:06d}"
-        first = rng.choice(FIRST_NAMES)
-        last = rng.choice(LAST_NAMES)
+        first, last = _customer_name_for_index(idx)
         store = rng.choice(stores)
 
         loyalty = _weighted_choice(rng, [("standard", 0.46), ("silver", 0.28), ("gold", 0.18), ("platinum", 0.08)])
@@ -235,39 +279,94 @@ def generate_products(
     stores: list[dict],
     count: int,
 ) -> list[dict]:
+    if count <= 0 or not stores:
+        return []
+
     products: list[dict] = []
     brands = REAL_BRANDS + SYNTHETIC_BRANDS
-
-    base_per_store = count // len(stores)
-    extra = count % len(stores)
-
     product_idx = 1
-    for sidx, store in enumerate(stores):
-        target = base_per_store + (1 if sidx < extra else 0)
-        for _ in range(target):
-            category_key = _pick_category_for_profile(rng, store["profile_type"])
-            cat_cfg = CATEGORY_TAXONOMY[category_key]
+    family_idx = 1
 
-            item = rng.choice(cat_cfg["items"])
-            material = rng.choice(cat_cfg["materials"])
-            color = rng.choice(KNOWN_COLORS)
-            gender = rng.choice(cat_cfg["genders"])
-            season = rng.choice(KNOWN_SEASONS)
+    while len(products) < count:
+        anchor_store = stores[(family_idx - 1) % len(stores)]
+        category_key = _pick_category_for_profile(rng, anchor_store["profile_type"])
+        cat_cfg = CATEGORY_TAXONOMY[category_key]
 
-            price_min, price_max = cat_cfg["price"]
-            price = round(rng.uniform(price_min, price_max), 2)
+        item = rng.choice(cat_cfg["items"])
+        material = rng.choice(cat_cfg["materials"])
+        color = rng.choice(KNOWN_COLORS)
+        gender = rng.choice(cat_cfg["genders"])
+        season = rng.choice(KNOWN_SEASONS)
+        brand = rng.choice(brands)
+        title = f"{brand} {color} {item}"
+        style_code = f"style_{family_idx:06d}"
 
-            brand = rng.choice(brands)
-            title = f"{brand} {color} {item}"
+        coverage = int(
+            _weighted_choice(
+                rng,
+                [
+                    ("1", 0.10),
+                    ("2", 0.19),
+                    ("3", 0.20),
+                    ("4", 0.18),
+                    ("5", 0.13),
+                    ("6", 0.10),
+                    ("8", 0.07),
+                    ("10", 0.03),
+                ],
+            )
+        )
+        coverage = max(1, min(coverage, len(stores), count - len(products)))
+
+        selected_stores = [anchor_store]
+        if coverage > 1:
+            candidates = [store for store in stores if store["id"] != anchor_store["id"]]
+            selected_stores.extend(rng.sample(candidates, k=min(coverage - 1, len(candidates))))
+
+        depth_class = _weighted_choice(rng, [("core", 0.30), ("seasonal", 0.45), ("test", 0.25)])
+        if depth_class == "core":
+            availability_weights = [("in stock", 0.93), ("preorder", 0.05), ("out of stock", 0.02)]
+            base_inventory_low, base_inventory_high = 16, 82
+            objective_low, objective_high = 0.58, 1.0
+        elif depth_class == "seasonal":
+            availability_weights = [("in stock", 0.85), ("preorder", 0.10), ("out of stock", 0.05)]
+            base_inventory_low, base_inventory_high = 7, 44
+            objective_low, objective_high = 0.30, 0.86
+        else:
+            availability_weights = [("in stock", 0.72), ("preorder", 0.13), ("out of stock", 0.15)]
+            base_inventory_low, base_inventory_high = 2, 20
+            objective_low, objective_high = 0.08, 0.62
+
+        price_min, price_max = cat_cfg["price"]
+        base_price = round(rng.uniform(price_min, price_max), 2)
+
+        for store in selected_stores:
+            if len(products) >= count:
+                break
+
+            price = round(base_price * rng.uniform(0.94, 1.06), 2)
             description = (
                 f"{cat_cfg['label']} piece in {material}. Crafted for {season} dressing and occasion-led styling "
                 f"across {store['city']} and online clients."
             )
 
-            availability = _weighted_choice(rng, [("in stock", 0.82), ("out of stock", 0.08), ("preorder", 0.10)])
-            inventory_qty = 0 if availability == "out of stock" else rng.randint(2, 40)
+            availability = _weighted_choice(rng, availability_weights)
+            profile_multiplier = _store_inventory_multiplier(store["profile_type"])
+            inventory_base = rng.randint(base_inventory_low, base_inventory_high)
+            inventory_qty = int(round(inventory_base * profile_multiplier * rng.uniform(0.88, 1.12)))
+            if availability == "out of stock":
+                inventory_qty = 0
+            elif availability == "preorder":
+                inventory_qty = max(1, int(round(inventory_qty * 0.35)))
+            else:
+                inventory_qty = max(1, inventory_qty)
+
             margin_pct = round(rng.uniform(0.35, 0.72), 4)
-            objective_weight = round(rng.uniform(0.1, 1.0), 4)
+            objective_weight = round(rng.uniform(objective_low, objective_high), 4)
+            if category_key in {"handbags", "beauty", "home", "jewelry_accessories"}:
+                size = "One Size"
+            else:
+                size = rng.choice([size_token for size_token in KNOWN_SIZES if size_token != "One Size"])
 
             pid = f"prod_{product_idx:06d}"
             products.append(
@@ -284,7 +383,7 @@ def generate_products(
                     "brand": brand,
                     "category": category_key,
                     "color": color,
-                    "size": rng.choice(KNOWN_SIZES),
+                    "size": size,
                     "material": material,
                     "gender": gender,
                     "season": season,
@@ -295,11 +394,16 @@ def generate_products(
                         {
                             "profile": store["profile_type"],
                             "feed_label": cat_cfg["label"],
+                            "style_code": style_code,
+                            "depth_class": depth_class,
+                            "coverage": coverage,
                         }
                     ),
                 }
             )
             product_idx += 1
+
+        family_idx += 1
 
     return products
 

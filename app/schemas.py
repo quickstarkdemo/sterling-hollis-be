@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class SyntheticVolumes(BaseModel):
     stores: int = 36
-    products: int = 4000
+    products: int = 6000
     customers: int = 12000
     orders: int = 80000
 
@@ -439,6 +439,7 @@ class MerchWorkspaceFilters(BaseModel):
     lookback_days: int = 90
     compare_mode: CompareMode = CompareMode.peer_and_prior_period
     peer_mode: PeerMode = PeerMode.state_and_profile
+    compare_store_id: str | None = None
     top_k: int = 9
 
 
@@ -482,6 +483,8 @@ class MerchActionRecommendationsResponse(BaseModel):
     price_band: PriceBand | None = None
     occasion: str | None = None
     peer_store_ids: list[str]
+    compare_store_id: str | None = None
+    compare_store_name: str | None = None
     parsed_intent: str
     recommendations: list[MerchActionRecommendationItem]
 
@@ -494,6 +497,12 @@ class MerchDiagnosticInsight(BaseModel):
     peer_value: float | None = None
     prior_value: float | None = None
     delta: float
+    current_units: float | None = None
+    peer_units: float | None = None
+    prior_units: float | None = None
+    current_margin_pct: float | None = None
+    peer_margin_pct: float | None = None
+    prior_margin_pct: float | None = None
     rationale: str
 
 
@@ -507,6 +516,8 @@ class MerchDiagnosticsResponse(BaseModel):
     price_band: PriceBand | None = None
     occasion: str | None = None
     peer_store_ids: list[str]
+    compare_store_id: str | None = None
+    compare_store_name: str | None = None
     summary: str
     insights: list[MerchDiagnosticInsight]
 
@@ -520,6 +531,14 @@ class MerchTrendHighlight(BaseModel):
     rationale: str
 
 
+class MerchTrendPoint(BaseModel):
+    period_start: str
+    current_revenue: float
+    baseline_revenue: float | None = None
+    current_units: float
+    baseline_units: float | None = None
+
+
 class MerchTrendSummaryResponse(BaseModel):
     store: ResolvedStore
     compare_mode: CompareMode
@@ -529,8 +548,12 @@ class MerchTrendSummaryResponse(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    peer_store_ids: list[str] = Field(default_factory=list)
+    compare_store_id: str | None = None
+    compare_store_name: str | None = None
     summary: str
     highlights: list[MerchTrendHighlight]
+    time_series: list[MerchTrendPoint] = Field(default_factory=list)
 
 
 class MerchWorkspaceBootstrapResponse(BaseModel):
@@ -555,6 +578,7 @@ class MerchExportCsvRequest(BaseModel):
     occasion: str | None = None
     compare_mode: CompareMode = CompareMode.peer_and_prior_period
     peer_mode: PeerMode = PeerMode.state_and_profile
+    compare_store_id: str | None = None
 
     @model_validator(mode="after")
     def validate_store_target(self) -> "MerchExportCsvRequest":

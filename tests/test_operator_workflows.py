@@ -600,6 +600,7 @@ def test_merchandising_supports_expanded_slices(monkeypatch):
             category="womens_apparel",
             compare_mode=CompareMode.peer_and_prior_period,
             peer_mode=PeerMode.profile_type,
+            compare_store_id="1002",
         )
         trends = merchandising_trend_summary(
             session,
@@ -608,6 +609,7 @@ def test_merchandising_supports_expanded_slices(monkeypatch):
             category="womens_apparel",
             compare_mode=CompareMode.peer_and_prior_period,
             peer_mode=PeerMode.profile_type,
+            compare_store_id="1002",
         )
 
         assert actions.category == "womens_apparel"
@@ -619,6 +621,9 @@ def test_merchandising_supports_expanded_slices(monkeypatch):
         assert all(item.image_url for item in actions.recommendations)
         assert diagnostics.insights
         assert trends.highlights
+        assert diagnostics.compare_store_id == "1002"
+        assert trends.compare_store_id == "1002"
+        assert trends.time_series
 
 
 def test_merch_action_recommendations_do_not_repeat_products_across_actions(monkeypatch):
@@ -640,6 +645,39 @@ def test_merch_action_recommendations_do_not_repeat_products_across_actions(monk
         promote_items = [item for item in actions.recommendations if item.action.value == "promote"]
         if promote_items:
             assert any("campaign or offer" in item.rationale for item in promote_items)
+
+
+def test_merch_compare_store_overrides_peer_set(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+
+        actions = merchandising_action_recommendations(
+            session,
+            store_query="Dallas",
+            objective=Objective.margin,
+            compare_mode=CompareMode.peer_and_prior_period,
+            compare_store_id="1002",
+            top_k=6,
+        )
+        diagnostics = merchandising_diagnostics(
+            session,
+            store_query="Dallas",
+            compare_mode=CompareMode.peer_and_prior_period,
+            compare_store_id="1002",
+        )
+        trends = merchandising_trend_summary(
+            session,
+            store_query="Dallas",
+            compare_mode=CompareMode.peer_and_prior_period,
+            compare_store_id="1002",
+        )
+
+        assert actions.compare_store_id == "1002"
+        assert diagnostics.compare_store_id == "1002"
+        assert trends.compare_store_id == "1002"
+        assert actions.peer_store_ids == ["1002"]
+        assert diagnostics.peer_store_ids == ["1002"]
+        assert trends.peer_store_ids == ["1002"]
 
 
 def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
@@ -706,6 +744,7 @@ def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
         assert payload["filters"]["objective"] == "margin"
         assert payload["filters"]["peer_mode"] == "profile_type"
         assert payload["uiHints"]["categoryOptions"]
+        assert payload["uiHints"]["compareStoreOptions"]
         assert payload["uiHints"]["actionDefinitions"]["feature"]
         assert payload["initial_result"]["recommendations"]
         assert payload["last_tool"] == "fashion_merch_action_recommendations"
@@ -754,13 +793,13 @@ def test_merch_export_csv_supports_all_views(monkeypatch):
         )
 
         assert actions.row_count > 0
-        assert actions.csv_text.splitlines()[0].startswith("store_id,store_name,view,action,product_id")
+        assert actions.csv_text.splitlines()[0].startswith("store_id,store_name,view,compare_store_id,compare_store_name,action,product_id")
         assert actions.view.value == "actions"
         assert diagnostics.row_count > 0
-        assert diagnostics.csv_text.splitlines()[0].startswith("store_id,store_name,view,dimension,subject")
+        assert diagnostics.csv_text.splitlines()[0].startswith("store_id,store_name,view,compare_store_id,compare_store_name,dimension,subject")
         assert diagnostics.view.value == "diagnostics"
         assert trends.row_count > 0
-        assert trends.csv_text.splitlines()[0].startswith("store_id,store_name,view,subject,current_value")
+        assert trends.csv_text.splitlines()[0].startswith("store_id,store_name,view,row_type,compare_store_id,compare_store_name,subject,period_start")
         assert trends.view.value == "trends"
 
 

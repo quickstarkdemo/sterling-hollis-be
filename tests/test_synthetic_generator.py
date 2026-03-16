@@ -203,3 +203,59 @@ def test_product_gender_filtering_respects_customer_sex():
     assert not product_allowed_for_sex("women", "womens_apparel", "male")
     assert product_allowed_for_sex("women", "womens_apparel", "female")
     assert not product_allowed_for_sex("men", "mens_apparel", "female")
+
+
+def test_customer_names_are_broadly_unique(tmp_path: Path):
+    run_id = "run_test_6"
+    stores = _sample_stores(run_id)
+    volumes = GenerationVolumes(stores=2, products=40, customers=600, orders=80)
+
+    artifacts = generate_synthetic_dataset(
+        seed=2026,
+        run_id=run_id,
+        stores=stores,
+        volumes=volumes,
+        trailing_months=6,
+        output_root=tmp_path,
+        raw_snapshot={"stores": []},
+        now=datetime(2026, 3, 13, tzinfo=timezone.utc),
+    )
+
+    customers = _read_csv(artifacts.output_dir / "customers.csv")
+    full_names = [f"{row['first_name']} {row['last_name']}" for row in customers]
+    unique_ratio = len(set(full_names)) / max(len(full_names), 1)
+
+    first_name_counts: dict[str, int] = {}
+    for row in customers:
+        first_name = row["first_name"]
+        first_name_counts[first_name] = first_name_counts.get(first_name, 0) + 1
+    largest_bucket = max(first_name_counts.values())
+
+    assert unique_ratio >= 0.95
+    assert largest_bucket / len(customers) < 0.05
+
+
+def test_products_are_distributed_across_multiple_stores(tmp_path: Path):
+    run_id = "run_test_7"
+    stores = _sample_stores(run_id)
+    volumes = GenerationVolumes(stores=2, products=120, customers=80, orders=120)
+
+    artifacts = generate_synthetic_dataset(
+        seed=31415,
+        run_id=run_id,
+        stores=stores,
+        volumes=volumes,
+        trailing_months=6,
+        output_root=tmp_path,
+        raw_snapshot={"stores": []},
+        now=datetime(2026, 3, 13, tzinfo=timezone.utc),
+    )
+
+    products = _read_csv(artifacts.output_dir / "products.csv")
+    title_store_map: dict[str, set[str]] = {}
+    for row in products:
+        title_store_map.setdefault(row["title"], set()).add(row["store_id"])
+
+    multi_store_titles = [title for title, store_ids in title_store_map.items() if len(store_ids) > 1]
+    assert multi_store_titles
+    assert len(multi_store_titles) / max(len(title_store_map), 1) >= 0.25

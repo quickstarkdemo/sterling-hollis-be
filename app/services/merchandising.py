@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import math
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Order, OrderItem, Product, Store
@@ -16,6 +17,7 @@ from app.schemas import (
     MerchDiagnosticInsight,
     MerchDiagnosticsResponse,
     MerchTrendHighlight,
+    MerchTrendPoint,
     MerchTrendSummaryResponse,
     Objective,
     PeerMode,
@@ -205,6 +207,24 @@ def peer_store_ids(session: Session, store_id: str, peer_mode: PeerMode = PeerMo
     return result
 
 
+def _comparison_peers(
+    session: Session,
+    *,
+    store_id: str,
+    peer_mode: PeerMode,
+    compare_store_id: str | None = None,
+) -> tuple[list[str], str | None, str | None]:
+    normalized_compare = (compare_store_id or "").strip()
+    if normalized_compare and normalized_compare != store_id:
+        explicit_peer = session.get(Store, normalized_compare)
+        if not explicit_peer:
+            raise ValueError(f"Compare store {normalized_compare} was not found.")
+        return [explicit_peer.id], explicit_peer.id, explicit_peer.name
+
+    peers = peer_store_ids(session, store_id, peer_mode=peer_mode)
+    return peers, None, None
+
+
 def _base_query(
     store_ids: list[str],
     since: datetime,
@@ -332,6 +352,78 @@ def _dimension_aggregates(
     ).all()
 
 
+def _sales_events(
+    session: Session,
+    store_ids: list[str],
+    since: datetime,
+    until: datetime,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+):
+    query = (
+        select(
+            Order.store_id.label("store_id"),
+            Order.ordered_at.label("ordered_at"),
+            OrderItem.quantity.label("quantity"),
+            OrderItem.line_total.label("line_total"),
+        )
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(Order.store_id.in_(store_ids), Order.ordered_at >= since, Order.ordered_at < until)
+    )
+    if category:
+        query = query.where(Product.category == category)
+    if brand:
+        query = query.where(func.lower(Product.brand) == brand.lower())
+    if occasion:
+        query = query.where(Order.occasion == occasion)
+    floor, ceiling = _price_band_bounds(price_band)
+    if floor is not None:
+        query = query.where(Product.price >= floor)
+    if ceiling is not None:
+        query = query.where(Product.price < ceiling)
+    return session.execute(query).all()
+
+
+def _weekly_rollup(
+    rows,
+    *,
+    origin: datetime,
+    horizon_days: int,
+    divide_by: float = 1.0,
+) -> dict[int, dict[str, float | str]]:
+    buckets: dict[int, dict[str, float | str]] = {}
+    for row in rows:
+        ordered_at = row.ordered_at
+        if isinstance(ordered_at, str):
+            ordered_at = datetime.fromisoformat(ordered_at.replace("Z", "+00:00"))
+        day_offset = (ordered_at.date() - origin.date()).days
+        if day_offset < 0:
+            continue
+        idx = day_offset // 7
+        bucket_start = origin + timedelta(days=idx * 7)
+        entry = buckets.setdefault(
+            idx,
+            {
+                "period_start": bucket_start.date().isoformat(),
+                "revenue": 0.0,
+                "units": 0.0,
+            },
+        )
+        entry["revenue"] = float(entry["revenue"]) + (float(row.line_total or 0.0) / max(divide_by, 1.0))
+        entry["units"] = float(entry["units"]) + (float(row.quantity or 0.0) / max(divide_by, 1.0))
+
+    max_idx = max(0, math.ceil(horizon_days / 7) - 1)
+    for idx in range(max_idx + 1):
+        if idx in buckets:
+            continue
+        bucket_start = origin + timedelta(days=idx * 7)
+        buckets[idx] = {"period_start": bucket_start.date().isoformat(), "revenue": 0.0, "units": 0.0}
+    return buckets
+
+
 def _by_key(rows, key_fn, value_fn):
     mapped = {}
     for row in rows:
@@ -361,6 +453,7 @@ def merchandising_action_recommendations(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchActionRecommendationsResponse:
     resolved_store = _resolved_store(session, store_query=store_query, store_id=store_id)
     parsed = parse_merch_query(
@@ -375,10 +468,23 @@ def merchandising_action_recommendations(
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=parsed.lookback_days)
     prior_since = since - timedelta(days=parsed.lookback_days)
-    peers = peer_store_ids(session, resolved_store.id, peer_mode=peer_mode)
+    peer_ids: list[str] = []
+    resolved_compare_store_id: str | None = None
+    resolved_compare_store_name: str | None = None
+    if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period}:
+        peer_ids, resolved_compare_store_id, resolved_compare_store_name = _comparison_peers(
+            session,
+            store_id=resolved_store.id,
+            peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
+        )
 
     store_rows = _product_metrics(session, [resolved_store.id], since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
-    peer_rows = _product_metrics(session, peers, since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    peer_rows = (
+        _product_metrics(session, peer_ids, since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+        if peer_ids
+        else []
+    )
     prior_rows = _product_metrics(session, [resolved_store.id], prior_since, since, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
 
     peer_baselines = defaultdict(lambda: {"revenue": 0.0, "units": 0.0, "count": 0})
@@ -494,7 +600,9 @@ def merchandising_action_recommendations(
         brand=parsed.brand,
         price_band=parsed.price_band,
         occasion=parsed.occasion,
-        peer_store_ids=peers,
+        peer_store_ids=peer_ids,
+        compare_store_id=resolved_compare_store_id,
+        compare_store_name=resolved_compare_store_name,
         parsed_intent=parsed.intent,
         recommendations=limited,
     )
@@ -512,6 +620,7 @@ def merchandising_diagnostics(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchDiagnosticsResponse:
     resolved_store = _resolved_store(session, store_query=store_query, store_id=store_id)
     parsed = parse_merch_query(
@@ -526,33 +635,119 @@ def merchandising_diagnostics(
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=parsed.lookback_days)
     prior_since = since - timedelta(days=parsed.lookback_days)
-    peers = peer_store_ids(session, resolved_store.id, peer_mode=peer_mode)
+    peer_ids: list[str] = []
+    resolved_compare_store_id: str | None = None
+    resolved_compare_store_name: str | None = None
+    if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period}:
+        peer_ids, resolved_compare_store_id, resolved_compare_store_name = _comparison_peers(
+            session,
+            store_id=resolved_store.id,
+            peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
+        )
 
     dimension = "brand" if parsed.brand else "category"
-    current_rows = _dimension_aggregates(session, [resolved_store.id], since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
-    peer_rows = _dimension_aggregates(session, peers, since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
-    prior_rows = _dimension_aggregates(session, [resolved_store.id], prior_since, since, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    current_rows = _dimension_aggregates(
+        session,
+        [resolved_store.id],
+        since,
+        now,
+        dimension,
+        parsed.category,
+        parsed.brand,
+        parsed.price_band,
+        parsed.occasion,
+    )
+    peer_rows = (
+        _dimension_aggregates(
+            session,
+            peer_ids,
+            since,
+            now,
+            dimension,
+            parsed.category,
+            parsed.brand,
+            parsed.price_band,
+            parsed.occasion,
+        )
+        if peer_ids
+        else []
+    )
+    prior_rows = _dimension_aggregates(
+        session,
+        [resolved_store.id],
+        prior_since,
+        since,
+        dimension,
+        parsed.category,
+        parsed.brand,
+        parsed.price_band,
+        parsed.occasion,
+    )
 
-    peer_by_subject = _by_key(peer_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
-    prior_by_subject = _by_key(prior_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
+    peer_divisor = max(len(peer_ids), 1)
+    peer_by_subject = _by_key(
+        peer_rows,
+        lambda row: row.subject,
+        lambda row: (
+            float(row.revenue or 0.0) / peer_divisor,
+            float(row.units or 0.0) / peer_divisor,
+            float(row.margin_pct or 0.0),
+        ),
+    )
+    prior_by_subject = _by_key(
+        prior_rows,
+        lambda row: row.subject,
+        lambda row: (
+            float(row.revenue or 0.0),
+            float(row.units or 0.0),
+            float(row.margin_pct or 0.0),
+        ),
+    )
 
     insights: list[MerchDiagnosticInsight] = []
     for row in current_rows:
         current_value = float(row.revenue or 0.0)
-        peer_value = peer_by_subject.get(row.subject) if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} else None
-        prior_value = prior_by_subject.get(row.subject) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else None
-        if peer_value is not None:
-            delta = current_value - peer_value
-            status = "overperforming" if delta >= 0 else "underperforming"
-            rationale = f"Current revenue is {'above' if delta >= 0 else 'below'} peer average."
-        elif prior_value is not None:
-            delta = current_value - prior_value
-            status = "improving" if delta >= 0 else "declining"
-            rationale = f"Current revenue is {'above' if delta >= 0 else 'below'} the prior period."
+        current_units = float(row.units or 0.0)
+        current_margin = float(row.margin_pct or 0.0)
+
+        peer_tuple = peer_by_subject.get(row.subject) if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} else None
+        prior_tuple = prior_by_subject.get(row.subject) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else None
+
+        peer_value = peer_tuple[0] if peer_tuple else None
+        peer_units = peer_tuple[1] if peer_tuple else None
+        peer_margin = peer_tuple[2] if peer_tuple else None
+        prior_value = prior_tuple[0] if prior_tuple else None
+        prior_units = prior_tuple[1] if prior_tuple else None
+        prior_margin = prior_tuple[2] if prior_tuple else None
+
+        baseline_value = peer_value if peer_value is not None else prior_value
+        baseline_units = peer_units if peer_units is not None else prior_units
+        baseline_margin = peer_margin if peer_margin is not None else prior_margin
+
+        if baseline_value is not None:
+            delta = current_value - baseline_value
+            units_delta = current_units - float(baseline_units or 0.0)
+            margin_delta = current_margin - float(baseline_margin or 0.0)
+            if delta < 0 and margin_delta < 0:
+                status = "margin_risk"
+                rationale = "Revenue and margin are both below baseline; investigate markdown pressure and mix quality."
+            elif delta < 0 and units_delta < 0:
+                status = "velocity_gap"
+                rationale = "Units and revenue trail baseline; demand is softer and floor placement may need adjustment."
+            elif delta < 0:
+                status = "conversion_gap"
+                rationale = "Revenue trails baseline despite stable units, suggesting lower ASP or promo leakage."
+            elif margin_delta < 0:
+                status = "discount_led_growth"
+                rationale = "Revenue is ahead of baseline but margin rate is lower; growth appears promo-led."
+            else:
+                status = "healthy_momentum"
+                rationale = "Revenue, units, and margin are holding above baseline."
         else:
             delta = current_value
             status = "observed"
-            rationale = "Current period observation."
+            rationale = "Current period diagnostic with no peer/prior baseline."
         insights.append(
             MerchDiagnosticInsight(
                 dimension=dimension,
@@ -562,14 +757,21 @@ def merchandising_diagnostics(
                 peer_value=round(peer_value, 4) if peer_value is not None else None,
                 prior_value=round(prior_value, 4) if prior_value is not None else None,
                 delta=round(delta, 4),
+                current_units=round(current_units, 4),
+                peer_units=round(peer_units, 4) if peer_units is not None else None,
+                prior_units=round(prior_units, 4) if prior_units is not None else None,
+                current_margin_pct=round(current_margin, 4),
+                peer_margin_pct=round(peer_margin, 4) if peer_margin is not None else None,
+                prior_margin_pct=round(prior_margin, 4) if prior_margin is not None else None,
                 rationale=rationale,
             )
         )
 
     insights.sort(key=lambda item: abs(item.delta), reverse=True)
-    summary = (
-        f"Diagnostics for {resolved_store.name} over the last {parsed.lookback_days} days with {dimension}-level comparison."
+    comparison_label = "peer/prior baseline" if compare_mode == CompareMode.peer_and_prior_period else (
+        "peer baseline" if compare_mode == CompareMode.peer else "prior-period baseline"
     )
+    summary = f"Diagnostics for {resolved_store.name} over the last {parsed.lookback_days} days with {dimension}-level drivers versus {comparison_label}."
     return MerchDiagnosticsResponse(
         store=resolved_store,
         compare_mode=compare_mode,
@@ -579,7 +781,9 @@ def merchandising_diagnostics(
         brand=parsed.brand,
         price_band=parsed.price_band,
         occasion=parsed.occasion,
-        peer_store_ids=peers,
+        peer_store_ids=peer_ids,
+        compare_store_id=resolved_compare_store_id,
+        compare_store_name=resolved_compare_store_name,
         summary=summary,
         insights=insights[:10],
     )
@@ -597,6 +801,7 @@ def merchandising_trend_summary(
     occasion: str | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
 ) -> MerchTrendSummaryResponse:
     resolved_store = _resolved_store(session, store_query=store_query, store_id=store_id)
     parsed = parse_merch_query(
@@ -611,14 +816,58 @@ def merchandising_trend_summary(
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=parsed.lookback_days)
     prior_since = since - timedelta(days=parsed.lookback_days)
-    peers = peer_store_ids(session, resolved_store.id, peer_mode=peer_mode)
+    peer_ids: list[str] = []
+    resolved_compare_store_id: str | None = None
+    resolved_compare_store_name: str | None = None
+    if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period}:
+        peer_ids, resolved_compare_store_id, resolved_compare_store_name = _comparison_peers(
+            session,
+            store_id=resolved_store.id,
+            peer_mode=peer_mode,
+            compare_store_id=compare_store_id,
+        )
 
     dimension = "brand" if parsed.brand else "category"
-    current_rows = _dimension_aggregates(session, [resolved_store.id], since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
-    peer_rows = _dimension_aggregates(session, peers, since, now, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
-    prior_rows = _dimension_aggregates(session, [resolved_store.id], prior_since, since, dimension, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    current_rows = _dimension_aggregates(
+        session,
+        [resolved_store.id],
+        since,
+        now,
+        dimension,
+        parsed.category,
+        parsed.brand,
+        parsed.price_band,
+        parsed.occasion,
+    )
+    peer_rows = (
+        _dimension_aggregates(
+            session,
+            peer_ids,
+            since,
+            now,
+            dimension,
+            parsed.category,
+            parsed.brand,
+            parsed.price_band,
+            parsed.occasion,
+        )
+        if peer_ids
+        else []
+    )
+    prior_rows = _dimension_aggregates(
+        session,
+        [resolved_store.id],
+        prior_since,
+        since,
+        dimension,
+        parsed.category,
+        parsed.brand,
+        parsed.price_band,
+        parsed.occasion,
+    )
 
-    peer_by_subject = _by_key(peer_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
+    peer_divisor = max(len(peer_ids), 1)
+    peer_by_subject = _by_key(peer_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0) / peer_divisor)
     prior_by_subject = _by_key(prior_rows, lambda row: row.subject, lambda row: float(row.revenue or 0.0))
 
     highlights: list[MerchTrendHighlight] = []
@@ -626,9 +875,16 @@ def merchandising_trend_summary(
         current_value = float(row.revenue or 0.0)
         prior_value = prior_by_subject.get(row.subject) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else None
         peer_value = peer_by_subject.get(row.subject) if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} else None
-        baseline = prior_value if prior_value is not None else peer_value if peer_value is not None else 0.0
+        baseline = peer_value if peer_value is not None else prior_value if prior_value is not None else 0.0
         pct_change = ((current_value - baseline) / baseline * 100.0) if baseline else 0.0
-        rationale = "Change versus peer baseline." if prior_value is None else "Change versus prior period."
+        if peer_value is not None and prior_value is not None:
+            rationale = "Change versus peer baseline, with prior-period context included."
+        elif prior_value is not None:
+            rationale = "Change versus prior-period baseline."
+        elif peer_value is not None:
+            rationale = "Change versus peer baseline."
+        else:
+            rationale = "Current trend with no baseline."
         highlights.append(
             MerchTrendHighlight(
                 subject=row.subject,
@@ -641,7 +897,77 @@ def merchandising_trend_summary(
         )
 
     highlights.sort(key=lambda item: abs(item.pct_change), reverse=True)
-    summary = f"Trend summary for {resolved_store.name} over the last {parsed.lookback_days} days."
+    current_events = _sales_events(
+        session,
+        [resolved_store.id],
+        since,
+        now,
+        parsed.category,
+        parsed.brand,
+        parsed.price_band,
+        parsed.occasion,
+    )
+    baseline_events = []
+    baseline_divisor = 1.0
+    if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period} and peer_ids:
+        baseline_events = _sales_events(
+            session,
+            peer_ids,
+            since,
+            now,
+            parsed.category,
+            parsed.brand,
+            parsed.price_band,
+            parsed.occasion,
+        )
+        baseline_divisor = float(max(len(peer_ids), 1))
+        baseline_origin = since
+    elif compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period}:
+        baseline_events = _sales_events(
+            session,
+            [resolved_store.id],
+            prior_since,
+            since,
+            parsed.category,
+            parsed.brand,
+            parsed.price_band,
+            parsed.occasion,
+        )
+        baseline_origin = prior_since
+    else:
+        baseline_origin = since
+
+    current_buckets = _weekly_rollup(current_events, origin=since, horizon_days=parsed.lookback_days)
+    baseline_buckets = (
+        _weekly_rollup(
+            baseline_events,
+            origin=baseline_origin,
+            horizon_days=parsed.lookback_days,
+            divide_by=baseline_divisor,
+        )
+        if baseline_events
+        else {}
+    )
+
+    time_series: list[MerchTrendPoint] = []
+    for idx in sorted(current_buckets.keys()):
+        current_bucket = current_buckets[idx]
+        baseline_bucket = baseline_buckets.get(idx)
+        time_series.append(
+            MerchTrendPoint(
+                period_start=str(current_bucket["period_start"]),
+                current_revenue=round(float(current_bucket["revenue"]), 4),
+                baseline_revenue=(
+                    round(float(baseline_bucket["revenue"]), 4) if baseline_bucket is not None else None
+                ),
+                current_units=round(float(current_bucket["units"]), 4),
+                baseline_units=(
+                    round(float(baseline_bucket["units"]), 4) if baseline_bucket is not None else None
+                ),
+            )
+        )
+
+    summary = f"Trend summary for {resolved_store.name} over the last {parsed.lookback_days} days with weekly time-series."
     return MerchTrendSummaryResponse(
         store=resolved_store,
         compare_mode=compare_mode,
@@ -651,6 +977,10 @@ def merchandising_trend_summary(
         brand=parsed.brand,
         price_band=parsed.price_band,
         occasion=parsed.occasion,
+        peer_store_ids=peer_ids,
+        compare_store_id=resolved_compare_store_id,
+        compare_store_name=resolved_compare_store_name,
         summary=summary,
         highlights=highlights[:10],
+        time_series=time_series,
     )
