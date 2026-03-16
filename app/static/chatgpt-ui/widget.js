@@ -18,6 +18,7 @@ const state = {
   ui: {
     query: "",
     selectedCustomerId: null,
+    resultsExpanded: false,
     occasion: "",
     budgetMax: "",
     emailTo: "",
@@ -125,6 +126,7 @@ function applyWorkspacePayload(raw) {
     return false;
   }
   state.payload = payload;
+  state.ui.resultsExpanded = Array.isArray(payload.results) && payload.results.length > 0 && !payload.selected_customer_id;
   if (!state.ui.query && payload.query) {
     state.ui.query = payload.query;
   }
@@ -410,12 +412,20 @@ function clearRecommendationState() {
   state.recommendation.seedAttemptedCustomerId = null;
 }
 
-function selectCustomerId(customerId) {
+function selectCustomerId(customerId, options = {}) {
+  const collapseResults = options.collapseResults === true;
+  const keepStyleConstraints = options.keepStyleConstraints === true;
   markUserInteraction();
   if (customerId !== state.ui.selectedCustomerId) {
     state.ui.selectedCustomerId = customerId;
     state.ui.emailTo = "";
+    if (!keepStyleConstraints) {
+      state.ui.styleConstraints = null;
+    }
     clearRecommendationState();
+  }
+  if (collapseResults) {
+    state.ui.resultsExpanded = false;
   }
   persistWidgetState();
 }
@@ -423,13 +433,14 @@ function selectCustomerId(customerId) {
 function resolveRowSelection(results) {
   if (!results.length) {
     state.ui.selectedCustomerId = null;
+    state.ui.resultsExpanded = false;
     clearRecommendationState();
     return;
   }
   if (state.ui.selectedCustomerId && results.some((customer) => customer.id === state.ui.selectedCustomerId)) {
     return;
   }
-  selectCustomerId(results[0].id);
+  selectCustomerId(results[0].id, { collapseResults: false });
 }
 
 async function runSearch() {
@@ -466,9 +477,11 @@ async function runSearch() {
   if (lookup.mode === "resolved" && lookup.resolved) {
     resolved = lookup.resolved;
     nextResults = [lookup.resolved];
+    state.ui.resultsExpanded = false;
     setNotice(`Resolved customer ${lookup.resolved.full_name || lookup.resolved.id}.`);
   } else {
     nextResults = Array.isArray(lookup.candidates) ? lookup.candidates : [];
+    state.ui.resultsExpanded = nextResults.length > 0;
     if (nextResults.length) {
       setNotice(`Found ${nextResults.length} matching customer(s).`);
     } else {
@@ -486,13 +499,14 @@ async function runSearch() {
   clearRecommendationState();
 
   if (resolved && resolved.id) {
-    selectCustomerId(resolved.id);
+    selectCustomerId(resolved.id, { collapseResults: true });
   } else if (nextResults.length) {
     if (!nextResults.some((row) => row.id === state.ui.selectedCustomerId)) {
-      selectCustomerId(nextResults[0].id);
+      selectCustomerId(nextResults[0].id, { collapseResults: false });
     }
   } else {
     state.ui.selectedCustomerId = null;
+    state.ui.resultsExpanded = false;
     state.ui.emailTo = "";
   }
 
@@ -508,7 +522,7 @@ function renderCustomerRow(customer) {
       className: `fw-result ${selected ? "selected" : ""}`,
       type: "button",
       onClick: () => {
-        selectCustomerId(customer.id);
+        selectCustomerId(customer.id, { collapseResults: true });
         render();
       },
     },
@@ -1059,7 +1073,26 @@ function render() {
     : null;
 
   const resultList = results.length
-    ? el("div", { className: "fw-list" }, ...results.map(renderCustomerRow))
+    ? state.ui.resultsExpanded
+      ? el("div", { className: "fw-list" }, ...results.map(renderCustomerRow))
+      : el(
+          "div",
+          { className: "fw-toolbar" },
+          el("p", { className: "fw-empty", text: `${results.length} result(s) hidden after selection.` }),
+          el(
+            "button",
+            {
+              className: "fw-button secondary",
+              type: "button",
+              onClick: () => {
+                markUserInteraction();
+                state.ui.resultsExpanded = true;
+                render();
+              },
+            },
+            "Show Results",
+          ),
+        )
     : el("div", { className: "fw-empty", text: state.payload.uiHints.emptyState });
 
   const detailPanel = selected
