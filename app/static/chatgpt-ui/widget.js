@@ -280,6 +280,13 @@ function money(value) {
   return `$${numberValue.toFixed(2)}`;
 }
 
+function humanizeToken(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value).replace(/[_-]+/g, " ").trim();
+}
+
 function parseBudgetMax(value) {
   if (!value || !value.trim()) {
     return null;
@@ -879,8 +886,40 @@ function render() {
           { className: "fw-chip-row" },
           selected.home_store_name ? el("span", { className: "fw-chip", text: selected.home_store_name }) : null,
           selected.loyalty_tier ? el("span", { className: "fw-chip subtle", text: selected.loyalty_tier }) : null,
+          selected.sex ? el("span", { className: "fw-chip subtle", text: `sex: ${humanizeToken(selected.sex)}` }) : null,
+          ...(Array.isArray(selected.preferred_categories)
+            ? selected.preferred_categories
+                .slice(0, 2)
+                .map((category) =>
+                  el("span", { className: "fw-chip subtle", text: `pref: ${humanizeToken(category)}` }),
+                )
+            : []),
           selected.match_reason ? el("span", { className: "fw-chip subtle", text: selected.match_reason }) : null,
         ),
+        selected.preferred_occasions && selected.preferred_occasions.length
+          ? el(
+              "p",
+              {
+                className: "fw-empty",
+                text: `Occasion preferences: ${selected.preferred_occasions
+                  .slice(0, 3)
+                  .map((item) => humanizeToken(item))
+                  .join(", ")}`,
+              },
+            )
+          : null,
+        selected.size_preferences && Object.keys(selected.size_preferences).length
+          ? el(
+              "p",
+              {
+                className: "fw-empty",
+                text: `Size preferences: ${Object.entries(selected.size_preferences)
+                  .slice(0, 4)
+                  .map(([key, value]) => `${humanizeToken(key)} ${value}`)
+                  .join(", ")}`,
+              },
+            )
+          : null,
         recommendationControls,
       )
     : el(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from copy import deepcopy
@@ -14,6 +15,7 @@ from app.services.demo_customer import (
     DEMO_CUSTOMER_FIRST_NAME,
     DEMO_CUSTOMER_ID,
     DEMO_CUSTOMER_LAST_NAME,
+    DEMO_CUSTOMER_SEX,
 )
 from app.services.operator_cache import store_resolution_cache
 
@@ -59,14 +61,44 @@ def _mask_phone(phone_e164: str) -> str:
     return f"(***) ***-{digits[-4:]}"
 
 
+def _json_dict(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _top_keys(raw: dict, limit: int = 3) -> list[str]:
+    pairs: list[tuple[str, float]] = []
+    for key, value in raw.items():
+        try:
+            numeric = float(value)
+        except Exception:
+            continue
+        pairs.append((str(key), numeric))
+    pairs.sort(key=lambda item: item[1], reverse=True)
+    return [key for key, _ in pairs[:limit]]
+
+
 def _resolved_customer(customer: Customer, home_store: Store | None, match_reason: str) -> ResolvedCustomer:
     first_name = customer.first_name
     last_name = customer.last_name
     email = customer.email
+    sex = customer.sex
     if customer.id == DEMO_CUSTOMER_ID:
         first_name = DEMO_CUSTOMER_FIRST_NAME
         last_name = DEMO_CUSTOMER_LAST_NAME
         email = DEMO_CUSTOMER_EMAIL
+        sex = DEMO_CUSTOMER_SEX
+    style_vector = _json_dict(customer.style_vector)
+    occasion_affinity = _json_dict(customer.occasion_affinity)
+    size_preferences = _json_dict(customer.size_preferences)
+    cleaned_size_preferences = {str(key): str(value) for key, value in size_preferences.items() if value is not None}
     return ResolvedCustomer(
         id=customer.id,
         email=email,
@@ -77,6 +109,10 @@ def _resolved_customer(customer: Customer, home_store: Store | None, match_reaso
         home_store_id=customer.home_store_id,
         home_store_name=home_store.name if home_store else customer.home_store_id,
         loyalty_tier=customer.loyalty_tier,
+        sex=sex,
+        preferred_categories=_top_keys(style_vector, limit=3),
+        preferred_occasions=_top_keys(occasion_affinity, limit=3),
+        size_preferences=cleaned_size_preferences,
         match_reason=match_reason,
     )
 

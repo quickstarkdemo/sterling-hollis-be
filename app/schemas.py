@@ -202,6 +202,10 @@ class ResolvedCustomer(BaseModel):
     home_store_id: str
     home_store_name: str
     loyalty_tier: str
+    sex: str | None = None
+    preferred_categories: list[str] = Field(default_factory=list)
+    preferred_occasions: list[str] = Field(default_factory=list)
+    size_preferences: dict[str, str] = Field(default_factory=dict)
     match_reason: str
 
 

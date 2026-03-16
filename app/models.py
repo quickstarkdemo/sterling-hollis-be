@@ -69,6 +69,7 @@ class Customer(Base):
     state: Mapped[str] = mapped_column(String(64), nullable=False)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     loyalty_tier: Mapped[str] = mapped_column(String(32), nullable=False)
+    sex: Mapped[str | None] = mapped_column(String(16))
     price_sensitivity: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
     occasion_affinity: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     style_vector: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

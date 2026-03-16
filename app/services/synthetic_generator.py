@@ -27,6 +27,7 @@ from app.services.demo_customer import (
     DEMO_CUSTOMER_ID,
     DEMO_CUSTOMER_LAST_NAME,
     DEMO_CUSTOMER_PHONE_E164,
+    DEMO_CUSTOMER_SEX,
 )
 
 FIRST_NAMES = [
@@ -130,9 +131,23 @@ def generate_customers(
             "state": demo_store["state"],
             "joined_at": _iso(demo_joined_at),
             "loyalty_tier": "gold",
+            "sex": DEMO_CUSTOMER_SEX,
             "price_sensitivity": 0.38,
             "occasion_affinity": _json({"wedding": 0.95, "vacation": 0.55, "workwear": 0.35, "holiday_party": 0.82, "everyday_luxury": 0.74}),
-            "style_vector": _json({cat: (0.85 if cat == "womens_apparel" else 0.45) for cat in CATEGORY_TAXONOMY.keys()}),
+            "style_vector": _json(
+                {
+                    cat: (
+                        0.95
+                        if cat == "mens_apparel"
+                        else 0.78
+                        if cat == "shoes"
+                        else 0.62
+                        if cat == "jewelry_accessories"
+                        else 0.28
+                    )
+                    for cat in CATEGORY_TAXONOMY.keys()
+                }
+            ),
             "size_preferences": _json({"top": "M", "bottom": "8", "shoe": "8"}),
             "channel_preference": "hybrid",
             "pii_token": _hash_token(DEMO_CUSTOMER_EMAIL),
@@ -146,6 +161,7 @@ def generate_customers(
         store = rng.choice(stores)
 
         loyalty = _weighted_choice(rng, [("standard", 0.46), ("silver", 0.28), ("gold", 0.18), ("platinum", 0.08)])
+        sex = _weighted_choice(rng, [("female", 0.52), ("male", 0.46), ("nonbinary", 0.02)])
         tier_ps = {
             "standard": (0.60, 0.95),
             "silver": (0.45, 0.82),
@@ -160,6 +176,12 @@ def generate_customers(
 
         occ_affinity = {occ: round(rng.uniform(0.05, 1.0), 4) for occ in OCCASIONS}
         style_vector = {cat: round(rng.uniform(0.05, 1.0), 4) for cat in CATEGORY_TAXONOMY.keys()}
+        if sex == "male":
+            style_vector["mens_apparel"] = round(max(style_vector.get("mens_apparel", 0.0), rng.uniform(0.65, 0.98)), 4)
+            style_vector["womens_apparel"] = round(min(style_vector.get("womens_apparel", 1.0), rng.uniform(0.05, 0.45)), 4)
+        elif sex == "female":
+            style_vector["womens_apparel"] = round(max(style_vector.get("womens_apparel", 0.0), rng.uniform(0.65, 0.98)), 4)
+            style_vector["mens_apparel"] = round(min(style_vector.get("mens_apparel", 1.0), rng.uniform(0.05, 0.45)), 4)
         size_preferences = {
             "top": rng.choice(KNOWN_SIZES),
             "bottom": rng.choice(KNOWN_SIZES),
@@ -183,6 +205,7 @@ def generate_customers(
                 "state": store["state"],
                 "joined_at": _iso(joined_at),
                 "loyalty_tier": loyalty,
+                "sex": sex,
                 "price_sensitivity": price_sensitivity,
                 "occasion_affinity": _json(occ_affinity),
                 "style_vector": _json(style_vector),

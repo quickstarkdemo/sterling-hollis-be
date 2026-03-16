@@ -5,6 +5,7 @@ DEMO_CUSTOMER_PHONE_E164 = "+12146932322"
 DEMO_CUSTOMER_EMAIL = "djn12313@gmail.com"
 DEMO_CUSTOMER_FIRST_NAME = "Jorgen"
 DEMO_CUSTOMER_LAST_NAME = "Nielsen"
+DEMO_CUSTOMER_SEX = "male"
 
 
 def demo_customer_full_name() -> str:

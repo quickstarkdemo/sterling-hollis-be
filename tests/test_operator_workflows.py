@@ -108,9 +108,10 @@ def _seed_data(session):
         state="TX",
         joined_at=now - timedelta(days=365),
         loyalty_tier="gold",
+        sex="male",
         price_sensitivity=Decimal("0.4200"),
-        occasion_affinity={"wedding": 0.8},
-        style_vector={"womens_apparel": 0.9, "shoes": 0.5},
+        occasion_affinity={"wedding": 0.8, "workwear": 0.9, "vacation": 0.6},
+        style_vector={"mens_apparel": 0.95, "shoes": 0.7, "jewelry_accessories": 0.5, "womens_apparel": 0.2},
         size_preferences={"top": "M", "bottom": "8", "shoe": "8"},
         channel_preference="hybrid",
         pii_token="token-1",
@@ -127,6 +128,7 @@ def _seed_data(session):
         state="TX",
         joined_at=now - timedelta(days=210),
         loyalty_tier="silver",
+        sex="female",
         price_sensitivity=Decimal("0.5100"),
         occasion_affinity={"wedding": 0.5},
         style_vector={"womens_apparel": 0.6, "handbags": 0.7},
@@ -247,6 +249,28 @@ def _seed_data(session):
             objective_weight=Decimal("0.7000"),
             metadata_json={},
         ),
+        Product(
+            id="prod_4",
+            seed_run_id="run_test",
+            store_id="1001",
+            title="Tom Ford Midnight Sport Coat",
+            description="Tailored jacket for formal work events",
+            link="https://fashion.example/products/prod_4",
+            image_link="https://fashion.example/images/prod_4.jpg",
+            price=Decimal("820.00"),
+            availability="in stock",
+            brand="Tom Ford",
+            category="mens_apparel",
+            color="Navy",
+            size="M",
+            material="wool",
+            gender="men",
+            season="all-season",
+            margin_pct=Decimal("0.5800"),
+            inventory_qty=20,
+            objective_weight=Decimal("0.8800"),
+            metadata_json={},
+        ),
     ]
     session.add_all(products)
 
@@ -325,7 +349,30 @@ def test_customer_lookup_supports_name_email_and_phone(monkeypatch):
         assert resolved_by_email.id == "cust_000001"
         assert resolved_by_phone.id == "cust_000001"
         assert resolved_by_last4.phone_e164 == "+12145551234"
+        assert resolved_by_email.sex == "male"
+        assert resolved_by_email.preferred_categories[:2] == ["mens_apparel", "shoes"]
+        assert resolved_by_email.preferred_occasions[:2] == ["workwear", "wedding"]
+        assert resolved_by_email.size_preferences["top"] == "M"
         assert store.id == "1001"
+
+
+def test_recommendations_respect_customer_sex_and_preferences(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            occasion="workwear",
+            budget_max=900,
+            retrieval_mode=RetrievalMode.fast,
+            top_k=4,
+        )
+
+        recs = response.recommendation.recommendations
+        assert recs
+        assert recs[0].product_id == "prod_4"
+        assert any("matched male profile" in reason for reason in recs[0].reasons)
 
 
 def test_prepare_update_send_history_and_smoke(monkeypatch):

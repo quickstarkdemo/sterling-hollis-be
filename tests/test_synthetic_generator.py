@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from app.services.synthetic_generator import (
     DEMO_CUSTOMER_ID,
     DEMO_CUSTOMER_LAST_NAME,
     DEMO_CUSTOMER_PHONE_E164,
+    DEMO_CUSTOMER_SEX,
     GenerationVolumes,
     generate_synthetic_dataset,
 )
@@ -171,6 +173,11 @@ def test_customers_include_unique_phones_and_demo_customer(tmp_path: Path):
         and customer["email"] == DEMO_CUSTOMER_EMAIL
         and customer["first_name"] == DEMO_CUSTOMER_FIRST_NAME
         and customer["last_name"] == DEMO_CUSTOMER_LAST_NAME
+        and customer["sex"] == DEMO_CUSTOMER_SEX
         for customer in customers
     )
     assert sum(1 for customer in customers if customer["phone_e164"] == DEMO_CUSTOMER_PHONE_E164) == 1
+
+    demo_customer = next(customer for customer in customers if customer["id"] == DEMO_CUSTOMER_ID)
+    style_vector = json.loads(demo_customer["style_vector"])
+    assert style_vector["mens_apparel"] > style_vector["womens_apparel"]

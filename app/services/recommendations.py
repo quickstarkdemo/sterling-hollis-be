@@ -29,6 +29,43 @@ def _safe_json(raw: str | None) -> dict:
         return {}
 
 
+def _normalize_sex(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"male", "man", "m"}:
+        return "male"
+    if normalized in {"female", "woman", "f"}:
+        return "female"
+    if normalized in {"nonbinary", "non-binary", "nb", "other"}:
+        return "nonbinary"
+    return normalized or None
+
+
+def _gender_alignment_score(customer_sex: str | None, product_gender: str | None) -> tuple[float, str | None]:
+    if not customer_sex or not product_gender:
+        return 0.0, None
+    gender = product_gender.strip().lower()
+    if customer_sex == "male":
+        if gender in {"men", "male", "boys"}:
+            return 0.24, "matched male profile"
+        if gender == "unisex":
+            return 0.08, "matched unisex product"
+        if gender in {"women", "female", "girls"}:
+            return -0.34, "reduced due to gender mismatch"
+    if customer_sex == "female":
+        if gender in {"women", "female", "girls"}:
+            return 0.24, "matched female profile"
+        if gender == "unisex":
+            return 0.08, "matched unisex product"
+        if gender in {"men", "male", "boys"}:
+            return -0.34, "reduced due to gender mismatch"
+    if customer_sex == "nonbinary":
+        if gender == "unisex":
+            return 0.12, "matched nonbinary profile"
+    return 0.0, None
+
+
 def _build_customer_query_context(db: Session, req: CustomerRecommendationRequest) -> str:
     parts = [f"Store: {req.store_id}"]
     if req.occasion:
@@ -41,10 +78,20 @@ def _build_customer_query_context(db: Session, req: CustomerRecommendationReques
         if customer:
             parts.append(f"Loyalty tier: {customer.loyalty_tier}")
             parts.append(f"Price sensitivity: {customer.price_sensitivity}")
+            customer_sex = _normalize_sex(customer.sex)
+            if customer_sex:
+                parts.append(f"Customer sex: {customer_sex}")
             style = customer.style_vector if isinstance(customer.style_vector, dict) else _safe_json(customer.style_vector)
             if style:
                 top_style = sorted(style.items(), key=lambda x: x[1], reverse=True)[:3]
                 parts.append("Style affinity: " + ", ".join(k for k, _ in top_style))
+            occasions = customer.occasion_affinity if isinstance(customer.occasion_affinity, dict) else _safe_json(customer.occasion_affinity)
+            if occasions:
+                top_occasions = sorted(occasions.items(), key=lambda x: x[1], reverse=True)[:2]
+                parts.append("Occasion affinity: " + ", ".join(k for k, _ in top_occasions))
+            sizes = customer.size_preferences if isinstance(customer.size_preferences, dict) else _safe_json(customer.size_preferences)
+            if sizes:
+                parts.append("Size preferences: " + ", ".join(f"{k}={v}" for k, v in sizes.items()))
 
         recent_categories = db.execute(
             select(Product.category, func.count(OrderItem.id).label("cnt"))
@@ -61,7 +108,14 @@ def _build_customer_query_context(db: Session, req: CustomerRecommendationReques
     return "\n".join(parts)
 
 
-def _rule_rerank(product: Product, req: CustomerRecommendationRequest, base_score: float, customer_brand_prefs: set[str]) -> tuple[float, list[str]]:
+def _rule_rerank(
+    product: Product,
+    req: CustomerRecommendationRequest,
+    base_score: float,
+    customer_brand_prefs: set[str],
+    preferred_categories: set[str],
+    customer_sex: str | None,
+) -> tuple[float, list[str]]:
     score = float(base_score)
     reasons: list[str] = []
 
@@ -86,6 +140,16 @@ def _rule_rerank(product: Product, req: CustomerRecommendationRequest, base_scor
         score += 0.11
         reasons.append("aligned with prior brand purchases")
 
+    if preferred_categories and product.category in preferred_categories:
+        score += 0.1
+        reasons.append("aligned with category preferences")
+
+    sex_delta, sex_reason = _gender_alignment_score(customer_sex, product.gender)
+    if sex_delta != 0:
+        score += sex_delta
+    if sex_reason:
+        reasons.append(sex_reason)
+
     score += float(product.objective_weight) * 0.05
     return score, reasons
 
@@ -104,7 +168,14 @@ def customer_recommendations(
     pinecone = PineconeService() if use_semantic else None
 
     customer_brand_prefs: set[str] = set()
+    preferred_categories: set[str] = set()
+    customer_sex: str | None = None
     if req.customer_id:
+        customer = db.get(Customer, req.customer_id)
+        if customer:
+            customer_sex = _normalize_sex(customer.sex)
+            style = customer.style_vector if isinstance(customer.style_vector, dict) else _safe_json(customer.style_vector)
+            preferred_categories = {str(category) for category, _ in sorted(style.items(), key=lambda x: x[1], reverse=True)[:3]}
         brand_rows = db.execute(
             select(Product.brand, func.count(OrderItem.id).label("cnt"))
             .join(OrderItem, OrderItem.product_id == Product.id)
@@ -141,7 +212,14 @@ def customer_recommendations(
             p = product_map.get(pid)
             if not p:
                 continue
-            score, reasons = _rule_rerank(p, req, scores.get(pid, 0.0), customer_brand_prefs)
+            score, reasons = _rule_rerank(
+                p,
+                req,
+                scores.get(pid, 0.0),
+                customer_brand_prefs,
+                preferred_categories,
+                customer_sex,
+            )
             ranked.append((score, p, reasons))
 
         # External vector stores can contain ids that are stale relative to the SQL source of truth.
@@ -180,7 +258,14 @@ def customer_recommendations(
     products = db.scalars(query.order_by(desc(Product.objective_weight)).limit(req.top_k * 4)).all()
     ranked = []
     for p in products:
-        score, reasons = _rule_rerank(p, req, 0.4, customer_brand_prefs)
+        score, reasons = _rule_rerank(
+            p,
+            req,
+            0.4,
+            customer_brand_prefs,
+            preferred_categories,
+            customer_sex,
+        )
         ranked.append((score, p, reasons))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
