@@ -15,7 +15,7 @@ from app.services.synthetic_generator import (
     GenerationVolumes,
     generate_synthetic_dataset,
 )
-from app.services.customer_preferences import top_style_categories
+from app.services.customer_preferences import product_allowed_for_sex, top_style_categories
 
 
 def _sample_stores(run_id: str) -> list[dict]:
@@ -195,3 +195,11 @@ def test_customers_include_unique_phones_and_demo_customer(tmp_path: Path):
             assert "womens_apparel" not in top
         if sex == "female":
             assert "mens_apparel" not in top
+
+
+def test_product_gender_filtering_respects_customer_sex():
+    assert product_allowed_for_sex("men", "mens_apparel", "male")
+    assert product_allowed_for_sex("unisex", "home", "male")
+    assert not product_allowed_for_sex("women", "womens_apparel", "male")
+    assert product_allowed_for_sex("women", "womens_apparel", "female")
+    assert not product_allowed_for_sex("men", "mens_apparel", "female")

@@ -58,3 +58,34 @@ def top_style_categories(style_vector: dict, customer_sex: str | None, limit: in
     ranked.sort(key=lambda item: item[1], reverse=True)
     allowed = [category for category, _ in ranked if category_allowed_for_sex(category, customer_sex)]
     return allowed[:limit]
+
+
+def _normalize_product_gender(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"men", "male", "man", "boys", "boy"}:
+        return "male"
+    if normalized in {"women", "female", "woman", "girls", "girl"}:
+        return "female"
+    if normalized in {"unisex"}:
+        return "unisex"
+    return None
+
+
+def product_allowed_for_sex(product_gender: str | None, category: str | None, customer_sex: str | None) -> bool:
+    normalized_sex = normalize_customer_sex(customer_sex)
+    if normalized_sex is None:
+        return True
+
+    normalized_product_gender = _normalize_product_gender(product_gender)
+    if normalized_product_gender == "unisex":
+        return True
+    if normalized_product_gender == "male":
+        return normalized_sex == "male"
+    if normalized_product_gender == "female":
+        return normalized_sex == "female"
+
+    if category:
+        return category_allowed_for_sex(category, normalized_sex)
+    return True

@@ -14,7 +14,8 @@ from app.schemas import (
     ProductRecommendation,
     RetrievalMode,
 )
-from app.services.customer_preferences import normalize_customer_sex, top_style_categories
+from app.services.customer_preferences import normalize_customer_sex, product_allowed_for_sex, top_style_categories
+from app.services.demo_customer import DEMO_CUSTOMER_ID, DEMO_CUSTOMER_SEX
 from app.services.embeddings import EmbeddingService
 from app.services.demo_assets import demo_image_url
 from app.services.pinecone_service import PineconeService
@@ -66,7 +67,8 @@ def _build_customer_query_context(db: Session, req: CustomerRecommendationReques
         if customer:
             parts.append(f"Loyalty tier: {customer.loyalty_tier}")
             parts.append(f"Price sensitivity: {customer.price_sensitivity}")
-            customer_sex = normalize_customer_sex(customer.sex)
+            raw_customer_sex = DEMO_CUSTOMER_SEX if customer.id == DEMO_CUSTOMER_ID else customer.sex
+            customer_sex = normalize_customer_sex(raw_customer_sex)
             if customer_sex:
                 parts.append(f"Customer sex: {customer_sex}")
             style = customer.style_vector if isinstance(customer.style_vector, dict) else _safe_json(customer.style_vector)
@@ -142,6 +144,16 @@ def _rule_rerank(
     return score, reasons
 
 
+def _filter_products_for_customer_sex(products: list[Product], customer_sex: str | None) -> list[Product]:
+    if not customer_sex:
+        return products
+    return [
+        product
+        for product in products
+        if product_allowed_for_sex(product.gender, product.category, customer_sex)
+    ]
+
+
 def customer_recommendations(
     db: Session, req: CustomerRecommendationRequest, retrieval_mode: RetrievalMode = RetrievalMode.semantic
 ) -> tuple[list[ProductRecommendation], str]:
@@ -161,7 +173,8 @@ def customer_recommendations(
     if req.customer_id:
         customer = db.get(Customer, req.customer_id)
         if customer:
-            customer_sex = normalize_customer_sex(customer.sex)
+            raw_customer_sex = DEMO_CUSTOMER_SEX if customer.id == DEMO_CUSTOMER_ID else customer.sex
+            customer_sex = normalize_customer_sex(raw_customer_sex)
             style = customer.style_vector if isinstance(customer.style_vector, dict) else _safe_json(customer.style_vector)
             preferred_categories = set(top_style_categories(style, customer_sex, limit=3))
         brand_rows = db.execute(
@@ -194,6 +207,7 @@ def customer_recommendations(
         scores = {pid: score for pid, score in vector_candidates}
 
         products = db.scalars(select(Product).where(Product.id.in_(ids))).all()
+        products = _filter_products_for_customer_sex(products, customer_sex)
         product_map = {p.id: p for p in products}
         ranked = []
         for pid in ids:
@@ -235,15 +249,21 @@ def customer_recommendations(
 
     # SQL fallback path for local mode or when vector hits cannot be resolved against Postgres.
     strategy = "sql_rules_fast_path"
-    query = select(Product).where(Product.store_id == req.store_id, Product.availability != "out of stock")
-    if req.occasion and req.occasion in OCCASION_TO_CATEGORY:
-        query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))
-    if req.budget_max is not None:
-        query = query.where(Product.price <= req.budget_max)
-    if req.budget_min is not None:
-        query = query.where(Product.price >= req.budget_min)
+    def _sql_candidate_products(include_occasion_filter: bool) -> list[Product]:
+        query = select(Product).where(Product.store_id == req.store_id, Product.availability != "out of stock")
+        if include_occasion_filter and req.occasion and req.occasion in OCCASION_TO_CATEGORY:
+            query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))
+        if req.budget_max is not None:
+            query = query.where(Product.price <= req.budget_max)
+        if req.budget_min is not None:
+            query = query.where(Product.price >= req.budget_min)
+        return db.scalars(query.order_by(desc(Product.objective_weight)).limit(req.top_k * 8)).all()
 
-    products = db.scalars(query.order_by(desc(Product.objective_weight)).limit(req.top_k * 4)).all()
+    products = _sql_candidate_products(include_occasion_filter=True)
+    products = _filter_products_for_customer_sex(products, customer_sex)
+    if not products and req.occasion:
+        products = _sql_candidate_products(include_occasion_filter=False)
+        products = _filter_products_for_customer_sex(products, customer_sex)
     ranked = []
     for p in products:
         score, reasons = _rule_rerank(

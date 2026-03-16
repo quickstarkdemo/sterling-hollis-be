@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -22,6 +22,7 @@ from app.services.communications import (
 from app.services.index_jobs import process_next_index_job
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.merchandising import merchandising_action_recommendations, merchandising_diagnostics, merchandising_trend_summary
+from app.services.demo_customer import DEMO_CUSTOMER_ID
 
 
 class _DummyPineconeService:
@@ -378,6 +379,52 @@ def test_recommendations_respect_customer_sex_and_preferences(monkeypatch):
         assert recs
         assert recs[0].product_id == "prod_4"
         assert any("matched male profile" in reason for reason in recs[0].reasons)
+        product_ids = [item.product_id for item in recs]
+        products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+        assert products
+        assert all((product.gender or "").lower() not in {"women", "female", "girls"} for product in products)
+
+
+def test_demo_customer_uses_sex_fallback_for_filtering(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        session.add(
+            Customer(
+                id=DEMO_CUSTOMER_ID,
+                seed_run_id="run_test",
+                home_store_id="1001",
+                first_name="Demo",
+                last_name="User",
+                email="demo.user.sex-fallback@example-fashion.test",
+                phone_e164="+12145559999",
+                city="Dallas",
+                state="TX",
+                joined_at=datetime.now(timezone.utc) - timedelta(days=90),
+                loyalty_tier="gold",
+                sex=None,
+                price_sensitivity=Decimal("0.4100"),
+                occasion_affinity={"wedding": 0.8},
+                style_vector={"womens_apparel": 0.99, "mens_apparel": 0.5, "beauty": 0.7},
+                size_preferences={"top": "M"},
+                channel_preference="hybrid",
+                pii_token="demo-sex-fallback",
+            )
+        )
+        session.commit()
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id=DEMO_CUSTOMER_ID,
+            retrieval_mode=RetrievalMode.fast,
+            top_k=5,
+        )
+
+        recs = response.recommendation.recommendations
+        assert recs
+        product_ids = [item.product_id for item in recs]
+        products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+        assert products
+        assert all((product.gender or "").lower() not in {"women", "female", "girls"} for product in products)
 
 
 def test_prepare_update_send_history_and_smoke(monkeypatch):
