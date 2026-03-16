@@ -889,7 +889,7 @@ function draftMatchesCurrentWorkspace(response) {
 }
 
 function applyEmailDraftResponse(selected, response) {
-  if (!selected || !response || !isObject(response.message)) {
+  if (!response || !isObject(response.message)) {
     return false;
   }
   state.ui.emailDraftId = typeof response.message.id === "string" ? response.message.id : state.ui.emailDraftId;
@@ -1932,13 +1932,27 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
-    if (payloadChanged) {
-      render();
-      return;
+    let draftChanged = false;
+    const incomingDraft = normalizeEmailDraftResponse(globals.toolOutput);
+    if (incomingDraft && draftMatchesCurrentWorkspace(incomingDraft)) {
+      const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+      const selected = selectedCustomer(results);
+      if (applyEmailDraftResponse(selected, incomingDraft)) {
+        draftChanged = true;
+        const incomingStatus = typeof incomingDraft.message?.status === "string" ? incomingDraft.message.status : "";
+        if (incomingStatus === "sent") {
+          state.ui.emailDraftId = null;
+          setNotice("Draft was sent from chat. Workspace draft state updated.");
+        } else {
+          setNotice(`Draft ${incomingDraft.message.id} updated from chat.`);
+        }
+      }
     }
     const uiChanged = applyUiWidgetState(globals.widgetState);
     if (uiChanged) {
       queueModelContextUpdate();
+    }
+    if (payloadChanged || draftChanged || uiChanged) {
       render();
     }
   },
@@ -1967,7 +1981,7 @@ window.addEventListener(
     if (incomingDraft && draftMatchesCurrentWorkspace(incomingDraft)) {
       const results = Array.isArray(state.payload.results) ? state.payload.results : [];
       const selected = selectedCustomer(results);
-      if (selected && applyEmailDraftResponse(selected, incomingDraft)) {
+      if (applyEmailDraftResponse(selected, incomingDraft)) {
         draftChanged = true;
         const incomingStatus = typeof incomingDraft.message?.status === "string" ? incomingDraft.message.status : "";
         if (incomingStatus === "sent") {
