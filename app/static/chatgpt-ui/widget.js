@@ -1,5 +1,8 @@
 const root = document.getElementById("fashion-widget-root");
 const meta = window.__FASHION_WIDGET__ || {};
+const MODEL_CONTEXT_SUBJECT_MAX_CHARS = 200;
+const MODEL_CONTEXT_BODY_MAX_CHARS = 2000;
+const MODEL_CONTEXT_UPDATE_DEBOUNCE_MS = 600;
 
 const state = {
   payload: {
@@ -82,6 +85,27 @@ function normalizeProductIds(raw) {
     unique.push(productId);
   }
   return unique;
+}
+
+function truncateForModelContext(raw, maxChars) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return { text: null, truncated: false, length: 0 };
+  }
+  if (text.length <= maxChars) {
+    return { text, truncated: false, length: text.length };
+  }
+  return { text: `${text.slice(0, maxChars)}...`, truncated: true, length: text.length };
+}
+
+function stableTextHash(raw) {
+  const text = String(raw || "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
 }
 
 function normalizeWorkspacePayload(raw) {
@@ -306,6 +330,9 @@ function persistWidgetState() {
 function buildModelContextPayload() {
   const results = Array.isArray(state.payload.results) ? state.payload.results : [];
   const selected = selectedCustomer(results);
+  const draftSubject = truncateForModelContext(state.ui.emailSubject, MODEL_CONTEXT_SUBJECT_MAX_CHARS);
+  const draftBody = truncateForModelContext(state.ui.emailBody, MODEL_CONTEXT_BODY_MAX_CHARS);
+  const emailTo = (state.ui.emailTo || selected?.email || "").trim();
   return {
     workspace: "customer_search",
     selected_customer_id: selected?.id || null,
@@ -315,6 +342,13 @@ function buildModelContextPayload() {
     selected_product_ids: normalizeProductIds(state.recommendation.selectedProductIds),
     style_constraints: normalizeStyleConstraints(state.ui.styleConstraints),
     email_draft_id: state.ui.emailDraftId || null,
+    email_draft_to: emailTo || null,
+    email_draft_subject: draftSubject.text,
+    email_draft_subject_truncated: draftSubject.truncated,
+    email_draft_body: draftBody.text,
+    email_draft_body_truncated: draftBody.truncated,
+    email_draft_body_length: draftBody.length,
+    email_draft_body_hash: stableTextHash(state.ui.emailBody),
   };
 }
 
@@ -352,7 +386,7 @@ function queueModelContextUpdate(options = {}) {
     send();
     return;
   }
-  state.runtime.modelContextTimer = window.setTimeout(send, 300);
+  state.runtime.modelContextTimer = window.setTimeout(send, MODEL_CONTEXT_UPDATE_DEBOUNCE_MS);
 }
 
 function setNotice(message, tone = "info") {
