@@ -307,6 +307,7 @@ class CustomerCommunicationRecord(BaseModel):
     channel: str
     status: CustomerCommunicationStatus
     destination_e164: str
+    subject: str | None = None
     body_text: str
     product_ids: list[str]
     twilio_message_sid: str | None = None
@@ -354,6 +355,17 @@ class CustomerEmailSendResponse(BaseModel):
     subject: str
     selected_products: list[UiProductCard] = Field(default_factory=list)
     provider_message_id: str | None = None
+
+
+class CustomerEmailDraftResponse(BaseModel):
+    message: CustomerCommunicationRecord
+    store: ResolvedStore
+    customer: ResolvedCustomer
+    destination_email: str
+    subject: str
+    selected_products: list[UiProductCard] = Field(default_factory=list)
+    recommendation: CustomerRecommendationResponse | None = None
+    retrieval_mode: RetrievalMode = RetrievalMode.auto
 
 
 class TwilioSmokeTestRecord(BaseModel):

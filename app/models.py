@@ -219,6 +219,7 @@ class CustomerCommunication(Base):
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default="sms")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     destination_e164: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject: Mapped[str | None] = mapped_column(String(255))
     body_text: Mapped[str] = mapped_column(Text, nullable=False)
     product_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     recommendation_context: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

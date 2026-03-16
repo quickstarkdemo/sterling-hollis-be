@@ -134,7 +134,22 @@ body {
   font: inherit;
 }
 
+.fw-textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  resize: vertical;
+  min-height: 140px;
+}
+
 .fw-input:focus {
+  outline: 2px solid #cde3f5;
+  border-color: var(--accent);
+}
+
+.fw-textarea:focus {
   outline: 2px solid #cde3f5;
   border-color: var(--accent);
 }
@@ -328,6 +343,22 @@ body {
   gap: 10px;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: end;
+}
+
+.fw-draft-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.fw-draft-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fw-draft-meta .fw-empty {
+  margin: 0;
 }
 
 @media (max-width: 760px) {

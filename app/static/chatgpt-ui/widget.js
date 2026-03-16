@@ -22,6 +22,9 @@ const state = {
     occasion: "",
     budgetMax: "",
     emailTo: "",
+    emailSubject: "",
+    emailBody: "",
+    emailDraftId: null,
     styleConstraints: null,
     notice: "",
     noticeTone: "info",
@@ -32,7 +35,10 @@ const state = {
     response: null,
     error: "",
     isLoading: false,
-    isSendingEmail: false,
+    isPreparingEmailDraft: false,
+    isSendingEmailDraft: false,
+    isRefreshingEmailDraft: false,
+    isUpdatingEmailDraft: false,
     selectedProductIds: [],
     seedAttemptedCustomerId: null,
   },
@@ -186,6 +192,18 @@ function applyUiWidgetState(raw) {
     state.ui.emailTo = raw.emailTo;
     changed = true;
   }
+  if (typeof raw.emailSubject === "string" && raw.emailSubject !== state.ui.emailSubject) {
+    state.ui.emailSubject = raw.emailSubject;
+    changed = true;
+  }
+  if (typeof raw.emailBody === "string" && raw.emailBody !== state.ui.emailBody) {
+    state.ui.emailBody = raw.emailBody;
+    changed = true;
+  }
+  if (typeof raw.emailDraftId === "string" && raw.emailDraftId !== state.ui.emailDraftId) {
+    state.ui.emailDraftId = raw.emailDraftId;
+    changed = true;
+  }
   if (isObject(raw.styleConstraints) || raw.styleConstraints === null) {
     const nextConstraints = normalizeStyleConstraints(raw.styleConstraints);
     if (JSON.stringify(nextConstraints) !== JSON.stringify(state.ui.styleConstraints)) {
@@ -223,6 +241,15 @@ function loadWidgetState() {
   if (typeof widgetState.emailTo === "string") {
     state.ui.emailTo = widgetState.emailTo;
   }
+  if (typeof widgetState.emailSubject === "string") {
+    state.ui.emailSubject = widgetState.emailSubject;
+  }
+  if (typeof widgetState.emailBody === "string") {
+    state.ui.emailBody = widgetState.emailBody;
+  }
+  if (typeof widgetState.emailDraftId === "string") {
+    state.ui.emailDraftId = widgetState.emailDraftId;
+  }
   if (isObject(widgetState.styleConstraints) || widgetState.styleConstraints === null) {
     state.ui.styleConstraints = normalizeStyleConstraints(widgetState.styleConstraints);
   }
@@ -242,6 +269,9 @@ function persistWidgetState() {
       occasion: state.ui.occasion,
       budgetMax: state.ui.budgetMax,
       emailTo: state.ui.emailTo,
+      emailSubject: state.ui.emailSubject,
+      emailBody: state.ui.emailBody,
+      emailDraftId: state.ui.emailDraftId,
       styleConstraints: state.ui.styleConstraints,
       selectedProductIds: state.recommendation.selectedProductIds,
     });
@@ -407,9 +437,15 @@ function clearRecommendationState() {
   state.recommendation.customerId = null;
   state.recommendation.response = null;
   state.recommendation.error = "";
-  state.recommendation.isSendingEmail = false;
+  state.recommendation.isPreparingEmailDraft = false;
+  state.recommendation.isSendingEmailDraft = false;
+  state.recommendation.isRefreshingEmailDraft = false;
+  state.recommendation.isUpdatingEmailDraft = false;
   state.recommendation.selectedProductIds = [];
   state.recommendation.seedAttemptedCustomerId = null;
+  state.ui.emailDraftId = null;
+  state.ui.emailSubject = "";
+  state.ui.emailBody = "";
 }
 
 function selectCustomerId(customerId, options = {}) {
@@ -706,38 +742,56 @@ function toggleSelectedProduct(productId) {
   persistWidgetState();
 }
 
-async function sendRecommendationsEmail(selected, response) {
-  markUserInteraction();
-  if (!selected) {
-    setNotice("Select a customer before sending email.", "error");
-    render();
-    return;
+function normalizeEmailDraftResponse(raw) {
+  if (isObject(raw?.structuredContent)) {
+    return normalizeEmailDraftResponse(raw.structuredContent);
   }
-  const rows = recommendationRows(response);
-  if (!rows.length) {
-    setNotice("No recommendation items are available to send.", "error");
-    render();
-    return;
+  if (!isObject(raw)) {
+    return null;
   }
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
-  if (!selectedIds.length) {
-    setNotice("Select at least one recommendation before sending email.", "error");
-    render();
-    return;
+  if (isObject(raw.message) && isObject(raw.customer) && isObject(raw.store)) {
+    return raw;
   }
-  const destination = (state.ui.emailTo || selected.email || "").trim();
-  if (!destination) {
-    setNotice("Enter a destination email before sending recommendations.", "error");
-    render();
-    return;
+  const parsed = parseJsonContentPayload(raw);
+  if (parsed) {
+    return normalizeEmailDraftResponse(parsed);
   }
+  return null;
+}
 
+function applyEmailDraftResponse(selected, response) {
+  if (!selected || !response || !isObject(response.message)) {
+    return false;
+  }
+  state.ui.emailDraftId = typeof response.message.id === "string" ? response.message.id : state.ui.emailDraftId;
+  const destination = typeof response.destination_email === "string" ? response.destination_email : response.message.destination_e164;
+  if (typeof destination === "string" && destination.trim()) {
+    state.ui.emailTo = destination.trim();
+  }
+  const subject = typeof response.subject === "string" ? response.subject : response.message.subject;
+  state.ui.emailSubject = typeof subject === "string" ? subject : state.ui.emailSubject;
+  if (typeof response.message.body_text === "string") {
+    state.ui.emailBody = response.message.body_text;
+  }
+  const rows = recommendationRows(state.recommendation.response);
+  state.recommendation.selectedProductIds = syncSelectedProducts(rows, response.message.product_ids || []);
+  persistWidgetState();
+  return true;
+}
+
+function buildEmailDraftArgs(selected, options = {}) {
+  const rows = recommendationRows(state.recommendation.response);
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  const destination = (state.ui.emailTo || selected.email || "").trim();
   const args = {
     store_id: selected.home_store_id,
     customer_id: selected.id,
     selected_product_ids: selectedIds,
-    to_email: destination,
+    to_email: destination || undefined,
   };
+  if (options.includeMessageId && state.ui.emailDraftId) {
+    args.message_id = state.ui.emailDraftId;
+  }
   const occasion = state.ui.occasion.trim();
   if (occasion) {
     args.occasion = occasion;
@@ -746,32 +800,242 @@ async function sendRecommendationsEmail(selected, response) {
   if (budgetMax !== null) {
     args.budget_max = budgetMax;
   }
+  const styleConstraints = normalizeStyleConstraints(state.ui.styleConstraints);
+  if (styleConstraints) {
+    args.style_constraints = styleConstraints;
+  }
+  const subject = state.ui.emailSubject.trim();
+  if (subject) {
+    args.subject = subject;
+  }
+  return args;
+}
 
-  state.recommendation.isSendingEmail = true;
+async function prepareEmailDraft(selected, options = {}) {
+  if (!selected) {
+    setNotice("Select a customer before preparing an email draft.", "error");
+    render();
+    return null;
+  }
+  const rows = recommendationRows(state.recommendation.response);
+  if (!rows.length) {
+    setNotice("Load recommendations before preparing an email draft.", "error");
+    render();
+    return null;
+  }
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
   state.recommendation.selectedProductIds = selectedIds;
-  setNotice(`Sending recommendations email to ${destination}...`);
+  const destination = (state.ui.emailTo || selected.email || "").trim();
+  if (!destination) {
+    setNotice("Enter a destination email before preparing draft.", "error");
+    render();
+    return null;
+  }
+
+  state.recommendation.isPreparingEmailDraft = true;
+  setNotice(options.silent ? "Preparing draft..." : `Preparing draft for ${selected.full_name || selected.id}...`);
   persistWidgetState();
   render();
 
-  const result = await callTool("fashion_send_customer_recommendations_email", args);
-  state.recommendation.isSendingEmail = false;
+  const result = await callTool("fashion_prepare_customer_email_draft", buildEmailDraftArgs(selected, options));
+  state.recommendation.isPreparingEmailDraft = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return null;
+  }
+  const response = normalizeEmailDraftResponse(result);
+  if (!response) {
+    setNotice("Email draft tool returned an unexpected payload.", "error");
+    render();
+    return null;
+  }
+  applyEmailDraftResponse(selected, response);
+  if (!options.silent) {
+    setNotice(`Prepared email draft ${response.message.id}.`);
+  }
+  render();
+  return response;
+}
+
+async function refreshEmailDraft(selected) {
+  markUserInteraction();
+  if (!state.ui.emailDraftId) {
+    setNotice("No draft available. Prepare a draft first.", "error");
+    render();
+    return;
+  }
+  state.recommendation.isRefreshingEmailDraft = true;
+  setNotice(`Refreshing draft ${state.ui.emailDraftId}...`);
+  render();
+  const result = await callTool("fashion_get_customer_email_draft", { message_id: state.ui.emailDraftId });
+  state.recommendation.isRefreshingEmailDraft = false;
   if (result.__toolError) {
     setNotice(result.__toolError, "error");
     render();
     return;
   }
-
-  const payload = isObject(result.structuredContent) ? result.structuredContent : result;
-  const status = typeof payload?.message?.status === "string" ? payload.message.status : null;
-  if (!status) {
-    setNotice("Email tool returned an unexpected payload.", "error");
+  const response = normalizeEmailDraftResponse(result);
+  if (!response) {
+    setNotice("Draft refresh returned an unexpected payload.", "error");
     render();
     return;
   }
+  if (selected) {
+    applyEmailDraftResponse(selected, response);
+  }
+  setNotice(`Refreshed draft ${response.message.id}.`);
+  render();
+}
 
-  const sentTo = typeof payload.destination_email === "string" ? payload.destination_email : destination;
+async function syncEmailDraftEdits(selected) {
+  if (!selected) {
+    return null;
+  }
+  if (!state.ui.emailDraftId) {
+    return prepareEmailDraft(selected, { includeMessageId: false, silent: true });
+  }
+  const rows = recommendationRows(state.recommendation.response);
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  const destination = (state.ui.emailTo || selected.email || "").trim();
+  if (!destination) {
+    setNotice("Enter a destination email before updating draft.", "error");
+    render();
+    return null;
+  }
+  state.recommendation.isUpdatingEmailDraft = true;
+  const result = await callTool("fashion_update_customer_email_draft", {
+    message_id: state.ui.emailDraftId,
+    subject: state.ui.emailSubject,
+    body_text: state.ui.emailBody,
+    to_email: destination,
+    selected_product_ids: selectedIds,
+  });
+  state.recommendation.isUpdatingEmailDraft = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return null;
+  }
+  const response = normalizeEmailDraftResponse(result);
+  if (!response) {
+    setNotice("Draft update returned an unexpected payload.", "error");
+    render();
+    return null;
+  }
+  applyEmailDraftResponse(selected, response);
+  return response;
+}
+
+function postUiMessage(text) {
+  if (!window.parent || typeof window.parent.postMessage !== "function") {
+    return false;
+  }
+  window.parent.postMessage(
+    {
+      jsonrpc: "2.0",
+      method: "ui/message",
+      params: {
+        role: "user",
+        content: [{ type: "text", text }],
+      },
+    },
+    "*",
+  );
+  return true;
+}
+
+function buildCanvasHandoffPrompt(selected, draftResponse) {
+  const products = Array.isArray(draftResponse?.selected_products) ? draftResponse.selected_products : [];
+  const productLines = products.length
+    ? products
+        .slice(0, 8)
+        .map((item) => `- ${item.title} (${item.brand || "brand n/a"}, ${money(item.price)}): ${item.link || "no link"}`)
+        .join("\n")
+    : "- Use selected products from draft context.";
+  const occasionText = state.ui.occasion.trim() || "none";
+  return [
+    "Open a Canvas document and draft an outbound customer recommendation email using the context below.",
+    "",
+    "After editing in Canvas, persist the final draft by calling `fashion_update_customer_email_draft` with:",
+    `- message_id: ${draftResponse.message.id}`,
+    "- subject: final subject",
+    "- body_text: final body",
+    `- to_email: ${draftResponse.destination_email}`,
+    `- selected_product_ids: ${JSON.stringify(draftResponse.message.product_ids || [])}`,
+    "",
+    `Customer: ${selected.full_name || selected.id} (${selected.email || "no email"})`,
+    `Store: ${selected.home_store_name || selected.home_store_id}`,
+    `Occasion: ${occasionText}`,
+    `Draft ID: ${draftResponse.message.id}`,
+    "",
+    "Selected products:",
+    productLines,
+    "",
+    `Current subject: ${draftResponse.subject}`,
+    "Current body:",
+    draftResponse.message.body_text || "",
+  ].join("\n");
+}
+
+async function composeInCanvas(selected) {
+  markUserInteraction();
+  if (!selected) {
+    setNotice("Select a customer before composing in Canvas.", "error");
+    render();
+    return;
+  }
+  let draft = await syncEmailDraftEdits(selected);
+  if (!draft) {
+    draft = await prepareEmailDraft(selected, { includeMessageId: true, silent: true });
+    if (!draft) {
+      return;
+    }
+  }
+  const prompt = buildCanvasHandoffPrompt(selected, draft);
+  if (!postUiMessage(prompt)) {
+    setNotice("Canvas handoff is unavailable in this host.", "error");
+    render();
+    return;
+  }
+  setNotice(`Sent draft ${draft.message.id} to chat for Canvas editing.`);
+  render();
+}
+
+async function sendEmailDraft(selected) {
+  markUserInteraction();
+  if (!selected) {
+    setNotice("Select a customer before sending email.", "error");
+    render();
+    return;
+  }
+  const synced = await syncEmailDraftEdits(selected);
+  if (!synced) {
+    return;
+  }
+
+  state.recommendation.isSendingEmailDraft = true;
+  setNotice(`Sending draft ${synced.message.id}...`);
+  render();
+  const result = await callTool("fashion_send_customer_email_draft", { message_id: synced.message.id });
+  state.recommendation.isSendingEmailDraft = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+  const payload = isObject(result.structuredContent) ? result.structuredContent : result;
+  const status = typeof payload?.message?.status === "string" ? payload.message.status : null;
+  if (!status) {
+    setNotice("Email send tool returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+  const sentTo = typeof payload.destination_email === "string" ? payload.destination_email : state.ui.emailTo;
   if (status === "sent") {
     const providerId = payload.provider_message_id ? ` (${payload.provider_message_id})` : "";
+    state.ui.emailDraftId = null;
+    persistWidgetState();
     setNotice(`Sent recommendations email to ${sentTo}${providerId}.`);
   } else {
     const errorMessage =
@@ -1175,6 +1439,11 @@ function render() {
             : typeof retrievalModeRaw?.value === "string"
               ? retrievalModeRaw.value
               : null;
+        const emailDraftBusy =
+          state.recommendation.isPreparingEmailDraft ||
+          state.recommendation.isRefreshingEmailDraft ||
+          state.recommendation.isUpdatingEmailDraft ||
+          state.recommendation.isSendingEmailDraft;
         return el(
           "section",
           { className: "fw-panel" },
@@ -1197,7 +1466,21 @@ function render() {
           response
             ? el(
                 "div",
-                { className: "fw-send-row" },
+                { className: "fw-draft-grid" },
+                el(
+                  "div",
+                  { className: "fw-draft-meta" },
+                  el(
+                    "p",
+                    {
+                      className: "fw-empty",
+                      text: state.ui.emailDraftId
+                        ? `Draft ID: ${state.ui.emailDraftId}`
+                        : "Draft ID: not created yet",
+                    },
+                  ),
+                  el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
+                ),
                 el(
                   "div",
                   { className: "fw-field" },
@@ -1214,21 +1497,77 @@ function render() {
                     },
                   }),
                 ),
-                el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
                 el(
-                  "button",
-                  {
-                    className: "fw-button",
-                    type: "button",
-                    disabled:
-                      state.recommendation.isSendingEmail || !selectedProductCount || !state.ui.emailTo.trim()
-                        ? "true"
-                        : null,
-                    onClick: () => {
-                      void sendRecommendationsEmail(selected, response);
+                  "div",
+                  { className: "fw-field" },
+                  el("label", { className: "fw-label", text: "Subject" }),
+                  el("input", {
+                    className: "fw-input",
+                    type: "text",
+                    value: state.ui.emailSubject,
+                    placeholder: "A few picks I thought you'd love",
+                    onInput: (event) => {
+                      markUserInteraction();
+                      state.ui.emailSubject = event.target.value;
+                      persistWidgetState();
                     },
-                  },
-                  state.recommendation.isSendingEmail ? "Sending..." : "Send Recommendations Email",
+                  }),
+                ),
+                el(
+                  "div",
+                  { className: "fw-field" },
+                  el("label", { className: "fw-label", text: "Body" }),
+                  el("textarea", {
+                    className: "fw-textarea",
+                    rows: "8",
+                    value: state.ui.emailBody,
+                    placeholder: "Draft body text...",
+                    onInput: (event) => {
+                      markUserInteraction();
+                      state.ui.emailBody = event.target.value;
+                      persistWidgetState();
+                    },
+                  }),
+                ),
+                el(
+                  "div",
+                  { className: "fw-toolbar" },
+                  el(
+                    "button",
+                    {
+                      className: "fw-button secondary",
+                      type: "button",
+                      disabled: emailDraftBusy || !selectedProductCount || !state.ui.emailTo.trim() ? "true" : null,
+                      onClick: () => {
+                        void composeInCanvas(selected);
+                      },
+                    },
+                    state.recommendation.isPreparingEmailDraft ? "Preparing..." : "Compose in Canvas",
+                  ),
+                  el(
+                    "button",
+                    {
+                      className: "fw-button secondary",
+                      type: "button",
+                      disabled: emailDraftBusy || !state.ui.emailDraftId ? "true" : null,
+                      onClick: () => {
+                        void refreshEmailDraft(selected);
+                      },
+                    },
+                    state.recommendation.isRefreshingEmailDraft ? "Refreshing..." : "Refresh Draft",
+                  ),
+                  el(
+                    "button",
+                    {
+                      className: "fw-button",
+                      type: "button",
+                      disabled: emailDraftBusy || !selectedProductCount || !state.ui.emailTo.trim() ? "true" : null,
+                      onClick: () => {
+                        void sendEmailDraft(selected);
+                      },
+                    },
+                    state.recommendation.isSendingEmailDraft ? "Sending..." : "Send Draft Email",
+                  ),
                 ),
               )
             : null,

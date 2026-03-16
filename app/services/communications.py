@@ -13,6 +13,7 @@ from app.schemas import (
     CustomerCommunicationHistoryResponse,
     CustomerCommunicationRecord,
     CustomerCommunicationStatus,
+    CustomerEmailDraftResponse,
     CustomerEmailSendResponse,
     CustomerCommunicationUpdateResponse,
     CustomerRecommendationRequest,
@@ -20,6 +21,7 @@ from app.schemas import (
     RetrievalMode,
     ResolvedCustomer,
     ResolvedStore,
+    StyleConstraints,
     TwilioSmokeTestRecord,
     TwilioSmokeTestResponse,
     UiProductCard,
@@ -41,6 +43,7 @@ def _record_from_model(record: CustomerCommunication, customer: ResolvedCustomer
         channel=record.channel,
         status=CustomerCommunicationStatus(record.status),
         destination_e164=record.destination_e164,
+        subject=record.subject,
         body_text=record.body_text,
         product_ids=list(record.product_ids or []),
         twilio_message_sid=record.twilio_message_sid,
@@ -127,6 +130,99 @@ def build_email_body(
         "Reply to this email if you'd like me to hold any of these or tailor another set of options.",
     ]
     return "\n".join(lines)
+
+
+def _resolve_email_context(
+    session: Session,
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+) -> tuple[ResolvedStore, ResolvedCustomer]:
+    resolved_customer = resolve_customer(
+        session,
+        email=customer_email,
+        customer_id=customer_id,
+        phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+    ).resolved
+    if store_id or store_query:
+        resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
+    else:
+        resolved_store = resolve_store(session, store_id=resolved_customer.home_store_id).resolved
+    return resolved_store, resolved_customer
+
+
+def _build_email_recommendation_snapshot(
+    session: Session,
+    *,
+    store_id: str,
+    customer_id: str,
+    occasion: str | None,
+    budget_min: float | None,
+    budget_max: float | None,
+    top_k: int,
+    retrieval_mode: RetrievalMode,
+    selected_product_ids: list[str] | None,
+    style_constraints: StyleConstraints | None = None,
+) -> tuple[list[str], str, CustomerRecommendationResponse | None]:
+    strategy = "selected_products_only"
+    recommendation: CustomerRecommendationResponse | None = None
+    resolved_product_ids = list(selected_product_ids or [])
+    if not resolved_product_ids:
+        req = CustomerRecommendationRequest(
+            store_id=store_id,
+            customer_id=customer_id,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=top_k,
+            style_constraints=style_constraints,
+        )
+        rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
+            session, req, retrieval_mode=retrieval_mode
+        )
+        recommendation = CustomerRecommendationResponse(
+            store_id=store_id,
+            strategy=strategy,
+            recommendations=rows,
+            applied_style_constraints=applied_constraints,
+            constraint_source=applied_constraints.constraint_source if applied_constraints else None,
+            constraint_stage=constraint_stage,
+        )
+        resolved_product_ids = [product.product_id for product in recommendation.recommendations[:3]]
+    if not resolved_product_ids:
+        raise ValueError("No recommendations available to send.")
+    return resolved_product_ids, strategy, recommendation
+
+
+def _email_draft_response_from_record(
+    session: Session,
+    *,
+    record: CustomerCommunication,
+    customer: ResolvedCustomer,
+    store: ResolvedStore,
+    recommendation: CustomerRecommendationResponse | None = None,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+) -> CustomerEmailDraftResponse:
+    destination_email = (record.destination_e164 or "").strip().lower()
+    selected_products = _selected_product_cards(session, list(record.product_ids or []))
+    resolved_subject = (record.subject or "").strip()
+    if not resolved_subject:
+        resolved_subject = _build_email_subject(store)
+    return CustomerEmailDraftResponse(
+        message=_record_from_model(record, customer),
+        store=store,
+        customer=customer,
+        destination_email=destination_email,
+        subject=resolved_subject,
+        selected_products=selected_products,
+        recommendation=recommendation,
+        retrieval_mode=retrieval_mode,
+    )
 
 
 def prepare_customer_sms(
@@ -264,6 +360,211 @@ def send_customer_sms(session: Session, message_id: str) -> CustomerCommunicatio
     return _record_from_model(record, customer)
 
 
+def prepare_customer_email_draft(
+    session: Session,
+    message_id: str | None = None,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 6,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    selected_product_ids: list[str] | None = None,
+    to_email: str | None = None,
+    subject: str | None = None,
+    style_constraints: StyleConstraints | None = None,
+) -> CustomerEmailDraftResponse:
+    resolved_store, resolved_customer = _resolve_email_context(
+        session,
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
+        customer_id=customer_id,
+        customer_phone_e164=customer_phone_e164,
+        phone_last4=phone_last4,
+    )
+
+    resolved_product_ids, strategy, recommendation = _build_email_recommendation_snapshot(
+        session,
+        store_id=resolved_store.id,
+        customer_id=resolved_customer.id,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+        retrieval_mode=retrieval_mode,
+        selected_product_ids=selected_product_ids,
+        style_constraints=style_constraints,
+    )
+
+    destination_email = (to_email or resolved_customer.email or "").strip().lower()
+    if not destination_email:
+        raise ValueError("Destination email is required.")
+
+    resolved_subject = (subject or _build_email_subject(resolved_store, occasion=occasion)).strip()
+    body_text = build_email_body(session, resolved_store, resolved_customer, selected_product_ids=resolved_product_ids)
+
+    record: CustomerCommunication | None = None
+    if message_id:
+        record = session.get(CustomerCommunication, message_id)
+        if not record:
+            raise ValueError(f"Message {message_id} was not found.")
+        if record.channel != "email":
+            raise ValueError("Only email drafts are supported by this endpoint.")
+        if record.status == CustomerCommunicationStatus.sent.value:
+            raise ValueError("Sent messages cannot be regenerated. Create a new draft.")
+
+    if record is None:
+        record = CustomerCommunication(
+            id=message_id or f"msg_{uuid.uuid4().hex[:12]}",
+            customer_id=resolved_customer.id,
+            store_id=resolved_store.id,
+            channel="email",
+            status=CustomerCommunicationStatus.draft.value,
+            destination_e164=destination_email,
+            subject=resolved_subject,
+            body_text=body_text,
+            product_ids=resolved_product_ids,
+            recommendation_context={},
+        )
+    else:
+        record.customer_id = resolved_customer.id
+        record.store_id = resolved_store.id
+        record.destination_e164 = destination_email
+        record.subject = resolved_subject
+        record.body_text = body_text
+        record.product_ids = resolved_product_ids
+        record.error_message = None
+
+    record.recommendation_context = {
+        "occasion": occasion,
+        "budget_min": budget_min,
+        "budget_max": budget_max,
+        "top_k": top_k,
+        "strategy": strategy,
+        "style_constraints": (
+            recommendation.applied_style_constraints.model_dump(mode="json")
+            if recommendation and recommendation.applied_style_constraints
+            else None
+        ),
+        "constraint_source": recommendation.constraint_source if recommendation else None,
+        "constraint_stage": recommendation.constraint_stage if recommendation else None,
+        "subject": resolved_subject,
+        "retrieval_mode": retrieval_mode.value if isinstance(retrieval_mode, RetrievalMode) else str(retrieval_mode),
+    }
+
+    session.add(record)
+    session.commit()
+    return _email_draft_response_from_record(
+        session,
+        record=record,
+        customer=resolved_customer,
+        store=resolved_store,
+        recommendation=recommendation,
+        retrieval_mode=retrieval_mode,
+    )
+
+
+def update_customer_email_draft(
+    session: Session,
+    message_id: str,
+    subject: str | None = None,
+    body_text: str | None = None,
+    to_email: str | None = None,
+    selected_product_ids: list[str] | None = None,
+) -> CustomerEmailDraftResponse:
+    record = session.get(CustomerCommunication, message_id)
+    if not record:
+        raise ValueError(f"Message {message_id} was not found.")
+    if record.channel != "email":
+        raise ValueError("Only email drafts are supported by this endpoint.")
+    if record.status == CustomerCommunicationStatus.sent.value:
+        raise ValueError("Sent messages cannot be edited.")
+
+    customer = resolve_customer(session, customer_id=record.customer_id).resolved
+    store = resolve_store(session, store_id=record.store_id).resolved
+    if subject is not None:
+        record.subject = subject.strip() or None
+    if body_text is not None:
+        record.body_text = body_text.strip()
+    if to_email is not None:
+        resolved_destination = to_email.strip().lower()
+        if not resolved_destination:
+            raise ValueError("Destination email is required.")
+        record.destination_e164 = resolved_destination
+    if selected_product_ids is not None:
+        record.product_ids = selected_product_ids
+    session.add(record)
+    session.commit()
+    return _email_draft_response_from_record(session, record=record, customer=customer, store=store)
+
+
+def get_customer_email_draft(session: Session, message_id: str) -> CustomerEmailDraftResponse:
+    record = session.get(CustomerCommunication, message_id)
+    if not record:
+        raise ValueError(f"Message {message_id} was not found.")
+    if record.channel != "email":
+        raise ValueError("Only email drafts are supported by this endpoint.")
+    customer = resolve_customer(session, customer_id=record.customer_id).resolved
+    store = resolve_store(session, store_id=record.store_id).resolved
+    return _email_draft_response_from_record(session, record=record, customer=customer, store=store)
+
+
+def send_customer_email_draft(session: Session, message_id: str) -> CustomerEmailSendResponse:
+    record = session.get(CustomerCommunication, message_id)
+    if not record:
+        raise ValueError(f"Message {message_id} was not found.")
+    if record.channel != "email":
+        raise ValueError("Only email drafts are supported by this endpoint.")
+    if record.status == CustomerCommunicationStatus.sent.value:
+        raise ValueError("Draft was already sent.")
+
+    customer = resolve_customer(session, customer_id=record.customer_id).resolved
+    store = resolve_store(session, store_id=record.store_id).resolved
+    destination_email = (record.destination_e164 or "").strip().lower()
+    if not destination_email:
+        raise ValueError("Destination email is required.")
+    resolved_subject = (record.subject or "").strip() or _build_email_subject(store)
+    record.subject = resolved_subject
+    if not record.body_text or not record.body_text.strip():
+        record.body_text = build_email_body(session, store, customer, selected_product_ids=list(record.product_ids or []))
+
+    email_service = SesEmailService()
+    provider_message_id = None
+    try:
+        payload = email_service.send_email(
+            to_email=destination_email,
+            subject=resolved_subject,
+            text_body=record.body_text,
+        )
+        provider_message_id = payload.get("message_id")
+        record.status = CustomerCommunicationStatus.sent.value
+        record.twilio_message_sid = provider_message_id
+        record.error_message = None
+        record.sent_at = datetime.now(timezone.utc)
+    except Exception as exc:
+        record.status = CustomerCommunicationStatus.failed.value
+        record.error_message = str(exc)[:2000]
+
+    session.add(record)
+    session.commit()
+
+    return CustomerEmailSendResponse(
+        message=_record_from_model(record, customer),
+        store=store,
+        customer=customer,
+        destination_email=destination_email,
+        subject=resolved_subject,
+        selected_products=_selected_product_cards(session, list(record.product_ids or [])),
+        provider_message_id=provider_message_id,
+    )
+
+
 def send_customer_recommendations_email(
     session: Session,
     store_query: str | None = None,
@@ -281,117 +582,24 @@ def send_customer_recommendations_email(
     to_email: str | None = None,
     subject: str | None = None,
 ) -> CustomerEmailSendResponse:
-    resolved_customer = resolve_customer(
+    draft = prepare_customer_email_draft(
         session,
-        email=customer_email,
+        store_query=store_query,
+        store_id=store_id,
+        customer_email=customer_email,
         customer_id=customer_id,
-        phone_e164=customer_phone_e164,
+        customer_phone_e164=customer_phone_e164,
         phone_last4=phone_last4,
-    ).resolved
-
-    if store_id or store_query:
-        resolved_store = resolve_store(session, store_query=store_query, store_id=store_id).resolved
-    else:
-        resolved_store = resolve_store(session, store_id=resolved_customer.home_store_id).resolved
-
-    strategy = "selected_products_only"
-    selected_product_ids = selected_product_ids or []
-    recommendation: CustomerRecommendationResponse | None = None
-    if not selected_product_ids:
-        req = CustomerRecommendationRequest(
-            store_id=resolved_store.id,
-            customer_id=resolved_customer.id,
-            occasion=occasion,
-            budget_min=budget_min,
-            budget_max=budget_max,
-            top_k=top_k,
-        )
-        rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
-            session, req, retrieval_mode=retrieval_mode
-        )
-        recommendation = CustomerRecommendationResponse(
-            store_id=resolved_store.id,
-            strategy=strategy,
-            recommendations=rows,
-            applied_style_constraints=applied_constraints,
-            constraint_source=applied_constraints.constraint_source if applied_constraints else None,
-            constraint_stage=constraint_stage,
-        )
-        selected_product_ids = [product.product_id for product in recommendation.recommendations[:3]]
-    if not selected_product_ids:
-        raise ValueError("No recommendations available to send.")
-
-    destination_email = (to_email or resolved_customer.email or "").strip().lower()
-    if not destination_email:
-        raise ValueError("Destination email is required.")
-
-    resolved_subject = (subject or _build_email_subject(resolved_store, occasion=occasion)).strip()
-    body_text = build_email_body(
-        session,
-        resolved_store,
-        resolved_customer,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=top_k,
+        retrieval_mode=retrieval_mode,
         selected_product_ids=selected_product_ids,
+        to_email=to_email,
+        subject=subject,
     )
-    selected_products = _selected_product_cards(session, selected_product_ids)
-
-    record = CustomerCommunication(
-        id=f"msg_{uuid.uuid4().hex[:12]}",
-        customer_id=resolved_customer.id,
-        store_id=resolved_store.id,
-        channel="email",
-        status=CustomerCommunicationStatus.draft.value,
-        destination_e164=destination_email,
-        body_text=body_text,
-        product_ids=selected_product_ids,
-        recommendation_context={
-            "occasion": occasion,
-            "budget_min": budget_min,
-            "budget_max": budget_max,
-            "top_k": top_k,
-            "strategy": strategy,
-            "style_constraints": (
-                recommendation.applied_style_constraints.model_dump(mode="json")
-                if recommendation and recommendation.applied_style_constraints
-                else None
-            ),
-            "constraint_source": recommendation.constraint_source if recommendation else None,
-            "constraint_stage": recommendation.constraint_stage if recommendation else None,
-            "subject": resolved_subject,
-            "retrieval_mode": retrieval_mode.value if isinstance(retrieval_mode, RetrievalMode) else str(retrieval_mode),
-        },
-    )
-    session.add(record)
-    session.commit()
-
-    email_service = SesEmailService()
-    provider_message_id = None
-    try:
-        payload = email_service.send_email(
-            to_email=destination_email,
-            subject=resolved_subject,
-            text_body=body_text,
-        )
-        provider_message_id = payload.get("message_id")
-        record.status = CustomerCommunicationStatus.sent.value
-        record.twilio_message_sid = provider_message_id
-        record.error_message = None
-        record.sent_at = datetime.now(timezone.utc)
-    except Exception as exc:
-        record.status = CustomerCommunicationStatus.failed.value
-        record.error_message = str(exc)[:2000]
-
-    session.add(record)
-    session.commit()
-
-    return CustomerEmailSendResponse(
-        message=_record_from_model(record, resolved_customer),
-        store=resolved_store,
-        customer=resolved_customer,
-        destination_email=destination_email,
-        subject=resolved_subject,
-        selected_products=selected_products,
-        provider_message_id=provider_message_id,
-    )
+    return send_customer_email_draft(session, draft.message.id)
 
 
 def customer_message_history(

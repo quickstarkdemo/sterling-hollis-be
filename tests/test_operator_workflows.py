@@ -13,10 +13,14 @@ from app.models import Customer, Order, OrderItem, Product, Store, SyntheticRun
 from app.schemas import CompareMode, CustomerRecommendationRequest, Objective, PeerMode, PriceBand, RetrievalMode, StyleConstraints
 from app.services.communications import (
     customer_message_history,
+    get_customer_email_draft,
+    prepare_customer_email_draft,
     prepare_customer_sms,
+    send_customer_email_draft,
     send_customer_recommendations_email,
     send_customer_sms,
     twilio_smoke_test,
+    update_customer_email_draft,
     update_customer_sms_draft,
 )
 from app.services.index_jobs import process_next_index_job
@@ -520,10 +524,57 @@ def test_prepare_update_send_history_and_smoke(monkeypatch):
         assert sent.twilio_message_sid == "SM123"
         assert email_sent.message.status.value == "sent"
         assert email_sent.message.channel == "email"
+        assert email_sent.message.subject == "Curated picks for you"
         assert email_sent.destination_email == "buyer@example.com"
         assert email_sent.provider_message_id == "SES123"
         assert len(history.messages) == 2
         assert smoke.result.status.value == "sent"
+
+
+def test_email_draft_lifecycle_service(monkeypatch):
+    import app.services.communications as communications
+
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+        monkeypatch.setattr(
+            communications.SesEmailService,
+            "send_email",
+            lambda self, to_email, subject, text_body, html_body=None: {"message_id": "SES_DRAFT_123"},
+        )
+
+        draft = prepare_customer_email_draft(
+            session,
+            store_id="1001",
+            customer_id="cust_000001",
+            selected_product_ids=["prod_4"],
+            to_email="draft@example.com",
+            subject="Initial Draft Subject",
+        )
+        updated = update_customer_email_draft(
+            session,
+            message_id=draft.message.id,
+            subject="Updated Draft Subject",
+            body_text="Updated draft body",
+            to_email="final@example.com",
+            selected_product_ids=["prod_4", "prod_2"],
+        )
+        fetched = get_customer_email_draft(session, draft.message.id)
+        sent = send_customer_email_draft(session, draft.message.id)
+
+        assert draft.message.channel == "email"
+        assert draft.message.status.value == "draft"
+        assert draft.destination_email == "draft@example.com"
+        assert draft.message.subject == "Initial Draft Subject"
+        assert updated.message.subject == "Updated Draft Subject"
+        assert updated.message.body_text == "Updated draft body"
+        assert updated.destination_email == "final@example.com"
+        assert updated.message.product_ids == ["prod_4", "prod_2"]
+        assert fetched.message.id == draft.message.id
+        assert fetched.message.body_text == "Updated draft body"
+        assert sent.message.status.value == "sent"
+        assert sent.destination_email == "final@example.com"
+        assert sent.subject == "Updated Draft Subject"
+        assert sent.provider_message_id == "SES_DRAFT_123"
 
 
 def test_merchandising_supports_expanded_slices(monkeypatch):
@@ -645,6 +696,10 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         tool_names = set(mcp_server.mcp._tool_manager._tools.keys())
         assert "fashion_render_customer_search_workspace" in tool_names
         assert "fashion_open_customer_workspace" in tool_names
+        assert "fashion_prepare_customer_email_draft" in tool_names
+        assert "fashion_update_customer_email_draft" in tool_names
+        assert "fashion_get_customer_email_draft" in tool_names
+        assert "fashion_send_customer_email_draft" in tool_names
 
         removed_tools = {
             "fashion_associate_workspace_bootstrap",
@@ -692,6 +747,47 @@ def test_send_customer_recommendations_email_tool(monkeypatch):
         assert response.destination_email == "buyer@example.com"
         assert response.provider_message_id == "SES_TOOL_123"
         assert response.selected_products
+
+
+def test_customer_email_draft_tools(monkeypatch):
+    import app.services.communications as communications
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        monkeypatch.setattr(
+            communications.SesEmailService,
+            "send_email",
+            lambda self, to_email, subject, text_body, html_body=None: {"message_id": "SES_TOOL_DRAFT_123"},
+        )
+
+        draft = mcp_server.fashion_prepare_customer_email_draft(
+            store_id="1001",
+            customer_id="cust_000001",
+            selected_product_ids=["prod_4", "prod_2"],
+            to_email="draft-tool@example.com",
+            subject="Draft Subject",
+        )
+        updated = mcp_server.fashion_update_customer_email_draft(
+            message_id=draft.message.id,
+            subject="Updated Subject",
+            body_text="Updated body from tool",
+            to_email="updated-tool@example.com",
+            selected_product_ids=["prod_4"],
+        )
+        fetched = mcp_server.fashion_get_customer_email_draft(message_id=draft.message.id)
+        sent = mcp_server.fashion_send_customer_email_draft(message_id=draft.message.id)
+
+        assert draft.message.status.value == "draft"
+        assert draft.destination_email == "draft-tool@example.com"
+        assert draft.message.subject == "Draft Subject"
+        assert updated.message.subject == "Updated Subject"
+        assert updated.message.body_text == "Updated body from tool"
+        assert fetched.message.id == draft.message.id
+        assert fetched.message.body_text == "Updated body from tool"
+        assert sent.message.status.value == "sent"
+        assert sent.destination_email == "updated-tool@example.com"
+        assert sent.subject == "Updated Subject"
+        assert sent.provider_message_id == "SES_TOOL_DRAFT_123"
 
 
 def test_fast_mode_skips_embedding(monkeypatch):

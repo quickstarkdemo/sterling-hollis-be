@@ -292,6 +292,10 @@ Operator/customer tools:
 - `fashion_prepare_customer_sms`
 - `fashion_update_customer_sms_draft`
 - `fashion_send_customer_sms`
+- `fashion_prepare_customer_email_draft`
+- `fashion_update_customer_email_draft`
+- `fashion_get_customer_email_draft`
+- `fashion_send_customer_email_draft`
 - `fashion_customer_message_history`
 - `fashion_twilio_smoke_test`
 
@@ -353,6 +357,10 @@ Human-first operator tools:
 - `fashion_prepare_customer_sms`
 - `fashion_update_customer_sms_draft`
 - `fashion_send_customer_sms`
+- `fashion_prepare_customer_email_draft`
+- `fashion_update_customer_email_draft`
+- `fashion_get_customer_email_draft`
+- `fashion_send_customer_email_draft`
 - `fashion_customer_message_history`
 - `fashion_twilio_smoke_test`
 - `fashion_merch_action_recommendations`
@@ -426,6 +434,10 @@ Human-first examples:
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5, retrieval_mode="auto")`
 - `fashion_store_associate_recommend(store_id="1001", customer_id="cust_000001", top_k=6, retrieval_mode="auto", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel","shoes"],"target_genders":["male"],"style_keywords":["tailored","minimal"]})`
 - `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
+- `fashion_prepare_customer_email_draft(store_id="1001", customer_id="cust_000001", selected_product_ids=["prod_000001","prod_000002"], to_email="buyer@example.com", subject="Curated picks from your stylist")`
+- `fashion_update_customer_email_draft(message_id="<MESSAGE_ID>", subject="Updated subject", body_text="Updated body copy", to_email="buyer@example.com")`
+- `fashion_get_customer_email_draft(message_id="<MESSAGE_ID>")`
+- `fashion_send_customer_email_draft(message_id="<MESSAGE_ID>")`
 - `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
 - `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
 - `fashion_customer_message_history(customer_email="avery.parker.1@example-fashion.test", status="sent", limit=10)`
@@ -537,7 +549,10 @@ This widget is mounted as an MCP resource and is intended for ChatGPT app usage.
 Implementation notes:
 - widget HTML is now a thin shell that loads a bundled JS/CSS UI from `/ui-assets`
 - widget runtime uses `window.openai.callTool` directly (no custom parent RPC fallback)
-- minimal widget state (`query`, selected customer) is persisted with optional `window.openai.setWidgetState`
+- email delivery now supports a draft lifecycle: prepare -> update/get -> send by `message_id`
+- workspace uses a draft-first path (`Compose in Canvas`, `Refresh Draft`, `Send Draft Email`) while legacy direct-send email tool remains available for compatibility
+- Canvas handoff is best-effort via host `ui/message`; send authority stays in persisted backend draft state
+- widget state persisted with optional `window.openai.setWidgetState` includes `query`, selected customer, filters, selected products, style constraints, and draft fields (`emailTo`, `emailSubject`, `emailBody`, `emailDraftId`)
 - legacy multi-workspace UI assets are archived under `app/static/chatgpt-ui/archive/legacy-workspaces`
 
 ## Testing

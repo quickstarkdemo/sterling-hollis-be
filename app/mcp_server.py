@@ -19,6 +19,7 @@ from app.schemas import (
     CustomerCommunicationHistoryResponse,
     CustomerCommunicationStatus,
     CustomerCommunicationUpdateResponse,
+    CustomerEmailDraftResponse,
     CustomerEmailSendResponse,
     CustomerLookupResponse,
     CustomerRecommendationRequest,
@@ -52,10 +53,14 @@ from app.schemas import (
 from app.services.apps_ui import render_widget_html
 from app.services.communications import (
     customer_message_history,
+    get_customer_email_draft,
     prepare_customer_sms,
+    prepare_customer_email_draft,
+    send_customer_email_draft,
     send_customer_recommendations_email,
     send_customer_sms,
     twilio_smoke_test,
+    update_customer_email_draft,
     update_customer_sms_draft,
 )
 from app.services.indexing import index_products_for_run
@@ -872,6 +877,105 @@ def fashion_send_customer_sms(message_id: str):
     """Send a previously prepared SMS draft through Twilio to the configured global test number."""
     with SessionLocal() as db:
         return send_customer_sms(db, message_id)
+
+
+@mcp.tool(
+    name="fashion_prepare_customer_email_draft",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_prepare_customer_email_draft(
+    message_id: str | None = None,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    customer_email: str | None = None,
+    customer_id: str | None = None,
+    customer_phone_e164: str | None = None,
+    phone_last4: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 6,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    selected_product_ids: list[str] | None = None,
+    to_email: str | None = None,
+    subject: str | None = None,
+    style_constraints: StyleConstraints | None = None,
+) -> CustomerEmailDraftResponse:
+    """Create or regenerate an email draft that can be reviewed in workspace or Canvas before send."""
+    effective_retrieval_mode = _resolve_retrieval_mode(
+        retrieval_mode,
+        customer_resolved=bool(customer_email or customer_id or customer_phone_e164 or phone_last4),
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+    )
+    with SessionLocal() as db:
+        return prepare_customer_email_draft(
+            db,
+            message_id=message_id,
+            store_query=store_query,
+            store_id=store_id,
+            customer_email=customer_email,
+            customer_id=customer_id,
+            customer_phone_e164=customer_phone_e164,
+            phone_last4=phone_last4,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=top_k,
+            retrieval_mode=effective_retrieval_mode,
+            selected_product_ids=selected_product_ids,
+            to_email=to_email,
+            subject=subject,
+            style_constraints=style_constraints,
+        )
+
+
+@mcp.tool(
+    name="fashion_update_customer_email_draft",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_update_customer_email_draft(
+    message_id: str,
+    subject: str | None = None,
+    body_text: str | None = None,
+    to_email: str | None = None,
+    selected_product_ids: list[str] | None = None,
+) -> CustomerEmailDraftResponse:
+    """Update an email draft's subject/body/destination/products before send."""
+    with SessionLocal() as db:
+        return update_customer_email_draft(
+            db,
+            message_id=message_id,
+            subject=subject,
+            body_text=body_text,
+            to_email=to_email,
+            selected_product_ids=selected_product_ids,
+        )
+
+
+@mcp.tool(
+    name="fashion_get_customer_email_draft",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_get_customer_email_draft(message_id: str) -> CustomerEmailDraftResponse:
+    """Fetch the latest persisted state for an email draft."""
+    with SessionLocal() as db:
+        return get_customer_email_draft(db, message_id)
+
+
+@mcp.tool(
+    name="fashion_send_customer_email_draft",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_send_customer_email_draft(message_id: str) -> CustomerEmailSendResponse:
+    """Send a persisted email draft through Amazon SES."""
+    with SessionLocal() as db:
+        return send_customer_email_draft(db, message_id)
 
 
 @mcp.tool(
