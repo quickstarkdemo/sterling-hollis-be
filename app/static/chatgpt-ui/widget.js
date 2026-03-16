@@ -3,6 +3,7 @@ const meta = window.__FASHION_WIDGET__ || {};
 const MODEL_CONTEXT_SUBJECT_MAX_CHARS = 200;
 const MODEL_CONTEXT_BODY_MAX_CHARS = 2000;
 const MODEL_CONTEXT_UPDATE_DEBOUNCE_MS = 600;
+const DRAFT_POLL_INTERVAL_MS = 3500;
 
 const state = {
   payload: {
@@ -55,6 +56,9 @@ const state = {
     draftHydrationRequestedForId: null,
     modelContextHash: "",
     modelContextTimer: null,
+    draftPollTimer: null,
+    draftPollInFlight: false,
+    lastDraftFingerprint: "",
   },
 };
 
@@ -554,6 +558,8 @@ function clearRecommendationState() {
   state.recommendation.seedAttemptedCustomerId = null;
   state.recommendation.seedAttemptedDraftCustomerId = null;
   state.runtime.draftHydrationRequestedForId = null;
+  state.runtime.lastDraftFingerprint = "";
+  stopDraftPolling();
   state.ui.emailDraftId = null;
   state.ui.emailSubject = "";
   state.ui.emailBody = "";
@@ -888,6 +894,35 @@ function draftMatchesCurrentWorkspace(response) {
   return false;
 }
 
+function draftResponseFingerprint(response) {
+  if (!response || !isObject(response.message)) {
+    return "";
+  }
+  const destination =
+    typeof response.destination_email === "string"
+      ? response.destination_email
+      : typeof response.message.destination_e164 === "string"
+        ? response.message.destination_e164
+        : "";
+  const subject =
+    typeof response.subject === "string"
+      ? response.subject
+      : typeof response.message.subject === "string"
+        ? response.message.subject
+        : "";
+  const body = typeof response.message.body_text === "string" ? response.message.body_text : "";
+  const status = typeof response.message.status === "string" ? response.message.status : "";
+  const productIds = normalizeProductIds(response.message.product_ids || []);
+  return JSON.stringify({
+    id: response.message.id || "",
+    destination: destination.trim().toLowerCase(),
+    subject: subject.trim(),
+    body,
+    status,
+    product_ids: productIds,
+  });
+}
+
 function applyEmailDraftResponse(selected, response) {
   if (!response || !isObject(response.message)) {
     return false;
@@ -904,8 +939,95 @@ function applyEmailDraftResponse(selected, response) {
   }
   const rows = recommendationRows(state.recommendation.response);
   state.recommendation.selectedProductIds = syncSelectedProducts(rows, response.message.product_ids || []);
+  state.runtime.lastDraftFingerprint = draftResponseFingerprint(response);
   persistWidgetState();
   return true;
+}
+
+function stopDraftPolling() {
+  if (state.runtime.draftPollTimer) {
+    window.clearInterval(state.runtime.draftPollTimer);
+    state.runtime.draftPollTimer = null;
+  }
+  state.runtime.draftPollInFlight = false;
+}
+
+function applyIncomingDraftUpdate(incomingDraft, source = "chat") {
+  if (!incomingDraft || !draftMatchesCurrentWorkspace(incomingDraft)) {
+    return false;
+  }
+  const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+  const selected = selectedCustomer(results);
+  if (!applyEmailDraftResponse(selected, incomingDraft)) {
+    return false;
+  }
+  const incomingStatus = typeof incomingDraft.message?.status === "string" ? incomingDraft.message.status : "";
+  if (incomingStatus === "sent") {
+    state.ui.emailDraftId = null;
+    state.runtime.lastDraftFingerprint = "";
+    stopDraftPolling();
+    persistWidgetState();
+    setNotice("Draft was sent from chat. Workspace draft state updated.");
+  } else if (source === "poll") {
+    setNotice(`Draft ${incomingDraft.message.id} synced from backend.`);
+  } else {
+    setNotice(`Draft ${incomingDraft.message.id} updated from chat.`);
+  }
+  return true;
+}
+
+async function pollActiveDraft(selected) {
+  if (!selected || !state.ui.emailDraftId) {
+    return;
+  }
+  if (state.runtime.draftPollInFlight) {
+    return;
+  }
+  if (
+    state.recommendation.isPreparingEmailDraft ||
+    state.recommendation.isRefreshingEmailDraft ||
+    state.recommendation.isUpdatingEmailDraft ||
+    state.recommendation.isSendingEmailDraft
+  ) {
+    return;
+  }
+  state.runtime.draftPollInFlight = true;
+  const result = await callTool("fashion_get_customer_email_draft", { message_id: state.ui.emailDraftId });
+  state.runtime.draftPollInFlight = false;
+  if (result.__toolError) {
+    return;
+  }
+  const incomingDraft = normalizeEmailDraftResponse(result);
+  if (!incomingDraft) {
+    return;
+  }
+  const incomingFingerprint = draftResponseFingerprint(incomingDraft);
+  if (incomingFingerprint && incomingFingerprint === state.runtime.lastDraftFingerprint) {
+    return;
+  }
+  if (applyIncomingDraftUpdate(incomingDraft, "poll")) {
+    render();
+  }
+}
+
+function ensureDraftPolling(selected) {
+  const shouldPoll = Boolean(selected && state.ui.emailDraftId);
+  if (!shouldPoll) {
+    stopDraftPolling();
+    return;
+  }
+  if (state.runtime.draftPollTimer) {
+    return;
+  }
+  state.runtime.draftPollTimer = window.setInterval(() => {
+    const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+    const activeSelected = selectedCustomer(results);
+    if (!activeSelected || !state.ui.emailDraftId) {
+      stopDraftPolling();
+      return;
+    }
+    void pollActiveDraft(activeSelected);
+  }, DRAFT_POLL_INTERVAL_MS);
 }
 
 async function copyTextToClipboard(text) {
@@ -1242,6 +1364,8 @@ async function sendEmailDraft(selected) {
   if (status === "sent") {
     const providerId = payload.provider_message_id ? ` (${payload.provider_message_id})` : "";
     state.ui.emailDraftId = null;
+    state.runtime.lastDraftFingerprint = "";
+    stopDraftPolling();
     persistWidgetState();
     setNotice(`Sent recommendations email to ${sentTo}${providerId}.`);
   } else {
@@ -1913,6 +2037,9 @@ function render() {
     queueSeedRecommendations(selected);
     queueHydrateInitialEmailDraft(selected);
     queueSeedEmailDraft(selected);
+    ensureDraftPolling(selected);
+  } else {
+    stopDraftPolling();
   }
 }
 
@@ -1932,22 +2059,8 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
-    let draftChanged = false;
     const incomingDraft = normalizeEmailDraftResponse(globals.toolOutput);
-    if (incomingDraft && draftMatchesCurrentWorkspace(incomingDraft)) {
-      const results = Array.isArray(state.payload.results) ? state.payload.results : [];
-      const selected = selectedCustomer(results);
-      if (applyEmailDraftResponse(selected, incomingDraft)) {
-        draftChanged = true;
-        const incomingStatus = typeof incomingDraft.message?.status === "string" ? incomingDraft.message.status : "";
-        if (incomingStatus === "sent") {
-          state.ui.emailDraftId = null;
-          setNotice("Draft was sent from chat. Workspace draft state updated.");
-        } else {
-          setNotice(`Draft ${incomingDraft.message.id} updated from chat.`);
-        }
-      }
-    }
+    const draftChanged = applyIncomingDraftUpdate(incomingDraft, "chat");
     const uiChanged = applyUiWidgetState(globals.widgetState);
     if (uiChanged) {
       queueModelContextUpdate();
@@ -1976,25 +2089,19 @@ window.addEventListener(
       return;
     }
     const payloadChanged = applyWorkspacePayload(data.params);
-    let draftChanged = false;
     const incomingDraft = normalizeEmailDraftResponse(data.params);
-    if (incomingDraft && draftMatchesCurrentWorkspace(incomingDraft)) {
-      const results = Array.isArray(state.payload.results) ? state.payload.results : [];
-      const selected = selectedCustomer(results);
-      if (applyEmailDraftResponse(selected, incomingDraft)) {
-        draftChanged = true;
-        const incomingStatus = typeof incomingDraft.message?.status === "string" ? incomingDraft.message.status : "";
-        if (incomingStatus === "sent") {
-          state.ui.emailDraftId = null;
-          setNotice("Draft was sent from chat. Workspace draft state updated.");
-        } else {
-          setNotice(`Draft ${incomingDraft.message.id} updated from chat.`);
-        }
-      }
-    }
+    const draftChanged = applyIncomingDraftUpdate(incomingDraft, "chat");
     if (payloadChanged || draftChanged) {
       render();
     }
+  },
+  { passive: true },
+);
+
+window.addEventListener(
+  "beforeunload",
+  () => {
+    stopDraftPolling();
   },
   { passive: true },
 );
