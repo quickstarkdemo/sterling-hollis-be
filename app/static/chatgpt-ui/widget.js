@@ -7,6 +7,9 @@ const state = {
     mode: "idle",
     resolved: null,
     results: [],
+    selected_customer_id: null,
+    initial_style_constraints: null,
+    initial_notice: null,
     uiHints: {
       searchPlaceholder: "Search by name, email, or phone",
       emptyState: "Type a customer name, email, or phone number and run search.",
@@ -18,6 +21,7 @@ const state = {
     occasion: "",
     budgetMax: "",
     emailTo: "",
+    styleConstraints: null,
     notice: "",
     noticeTone: "info",
     isSearching: false,
@@ -93,6 +97,9 @@ function normalizeWorkspacePayload(raw) {
       : Array.isArray(raw.candidates)
         ? clone(raw.candidates)
         : [],
+    selected_customer_id: typeof raw.selected_customer_id === "string" ? raw.selected_customer_id : null,
+    initial_style_constraints: normalizeStyleConstraints(raw.initial_style_constraints),
+    initial_notice: typeof raw.initial_notice === "string" ? raw.initial_notice : null,
     uiHints: {
       searchPlaceholder:
         raw.uiHints && typeof raw.uiHints.searchPlaceholder === "string"
@@ -114,8 +121,17 @@ function applyWorkspacePayload(raw) {
     return false;
   }
   state.payload = payload;
-  if (!state.ui.query) {
+  if (!state.ui.query && payload.query) {
     state.ui.query = payload.query;
+  }
+  if (payload.selected_customer_id) {
+    state.ui.selectedCustomerId = payload.selected_customer_id;
+  }
+  if (payload.initial_style_constraints && !state.ui.styleConstraints) {
+    state.ui.styleConstraints = payload.initial_style_constraints;
+  }
+  if (payload.initial_notice && !state.ui.notice) {
+    setNotice(payload.initial_notice);
   }
   return true;
 }
@@ -148,6 +164,13 @@ function applyUiWidgetState(raw) {
     state.ui.emailTo = raw.emailTo;
     changed = true;
   }
+  if (isObject(raw.styleConstraints) || raw.styleConstraints === null) {
+    const nextConstraints = normalizeStyleConstraints(raw.styleConstraints);
+    if (JSON.stringify(nextConstraints) !== JSON.stringify(state.ui.styleConstraints)) {
+      state.ui.styleConstraints = nextConstraints;
+      changed = true;
+    }
+  }
   if (Array.isArray(raw.selectedProductIds)) {
     const next = normalizeProductIds(raw.selectedProductIds);
     if (JSON.stringify(next) !== JSON.stringify(state.recommendation.selectedProductIds)) {
@@ -178,6 +201,9 @@ function loadWidgetState() {
   if (typeof widgetState.emailTo === "string") {
     state.ui.emailTo = widgetState.emailTo;
   }
+  if (isObject(widgetState.styleConstraints) || widgetState.styleConstraints === null) {
+    state.ui.styleConstraints = normalizeStyleConstraints(widgetState.styleConstraints);
+  }
   if (Array.isArray(widgetState.selectedProductIds)) {
     state.recommendation.selectedProductIds = normalizeProductIds(widgetState.selectedProductIds);
   }
@@ -194,6 +220,7 @@ function persistWidgetState() {
       occasion: state.ui.occasion,
       budgetMax: state.ui.budgetMax,
       emailTo: state.ui.emailTo,
+      styleConstraints: state.ui.styleConstraints,
       selectedProductIds: state.recommendation.selectedProductIds,
     });
   } catch {
@@ -285,6 +312,65 @@ function humanizeToken(value) {
     return "";
   }
   return String(value).replace(/[_-]+/g, " ").trim();
+}
+
+function normalizeTextList(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const seen = new Set();
+  const values = [];
+  for (const item of raw) {
+    const token = String(item || "").trim().toLowerCase();
+    if (!token || seen.has(token)) {
+      continue;
+    }
+    seen.add(token);
+    values.push(token);
+  }
+  return values;
+}
+
+function normalizeStyleConstraints(raw) {
+  if (!isObject(raw)) {
+    return null;
+  }
+  const constraintSource =
+    typeof raw.constraint_source === "string" && raw.constraint_source.trim()
+      ? raw.constraint_source.trim().toLowerCase()
+      : null;
+  const targetCategories = normalizeTextList(raw.target_categories);
+  const excludeCategories = normalizeTextList(raw.exclude_categories);
+  const styleKeywords = normalizeTextList(raw.style_keywords);
+  const targetGenders = normalizeTextList(raw.target_genders)
+    .map((value) => {
+      if (["male", "man", "men", "m", "boys", "boy"].includes(value)) {
+        return "male";
+      }
+      if (["female", "woman", "women", "f", "girls", "girl"].includes(value)) {
+        return "female";
+      }
+      if (["unisex", "neutral", "gender_neutral", "gender-neutral"].includes(value)) {
+        return "unisex";
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  if (!targetCategories.length && !excludeCategories.length && !targetGenders.length && !styleKeywords.length) {
+    return null;
+  }
+  return {
+    constraint_source: constraintSource,
+    target_categories: targetCategories,
+    exclude_categories: excludeCategories,
+    target_genders: targetGenders,
+    style_keywords: styleKeywords,
+  };
+}
+
+function hasStyleConstraints(raw) {
+  return normalizeStyleConstraints(raw) !== null;
 }
 
 function parseBudgetMax(value) {
@@ -445,6 +531,10 @@ async function loadRecommendations(selected, options = {}) {
   if (budgetMax !== null) {
     args.budget_max = budgetMax;
   }
+  const styleConstraints = normalizeStyleConstraints(state.ui.styleConstraints);
+  if (styleConstraints) {
+    args.style_constraints = styleConstraints;
+  }
 
   state.recommendation.isLoading = true;
   state.recommendation.error = "";
@@ -475,6 +565,8 @@ async function loadRecommendations(selected, options = {}) {
   state.recommendation.customerId = selected.id;
   state.recommendation.response = response;
   state.recommendation.error = "";
+  const appliedConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
+  state.ui.styleConstraints = appliedConstraints;
   state.recommendation.selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
   if (!state.ui.emailTo && selected.email) {
     state.ui.emailTo = selected.email;
@@ -486,6 +578,17 @@ async function loadRecommendations(selected, options = {}) {
       : `Loaded ${rows.length} recommendations for ${selected.full_name || selected.id}.`,
   );
   render();
+}
+
+async function clearStyleGuidance(selected) {
+  state.ui.styleConstraints = null;
+  persistWidgetState();
+  setNotice("Cleared uploaded image guidance. Reloading baseline recommendations...");
+  if (!selected) {
+    render();
+    return;
+  }
+  await loadRecommendations(selected);
 }
 
 function parseJsonContentPayload(raw) {
@@ -665,6 +768,37 @@ function queueSeedRecommendations(selected) {
   }, 0);
 }
 
+function styleConstraintChips(constraints, source, stage) {
+  const normalized = normalizeStyleConstraints(constraints);
+  if (!normalized) {
+    return [];
+  }
+  const chips = [];
+  const effectiveSource = source || normalized.constraint_source;
+  chips.push(
+    el(
+      "span",
+      { className: "fw-chip", text: effectiveSource === "chat_image" ? "From uploaded image" : "Image guidance" },
+    ),
+  );
+  if (stage) {
+    chips.push(el("span", { className: "fw-chip subtle", text: stage.replace(/_/g, " ") }));
+  }
+  normalized.target_categories.slice(0, 2).forEach((value) => {
+    chips.push(el("span", { className: "fw-chip subtle", text: `category: ${humanizeToken(value)}` }));
+  });
+  normalized.target_genders.slice(0, 2).forEach((value) => {
+    chips.push(el("span", { className: "fw-chip subtle", text: `gender: ${humanizeToken(value)}` }));
+  });
+  normalized.style_keywords.slice(0, 2).forEach((value) => {
+    chips.push(el("span", { className: "fw-chip subtle", text: `style: ${humanizeToken(value)}` }));
+  });
+  normalized.exclude_categories.slice(0, 1).forEach((value) => {
+    chips.push(el("span", { className: "fw-chip subtle", text: `exclude: ${humanizeToken(value)}` }));
+  });
+  return chips;
+}
+
 function recommendationCards(response) {
   const rows = recommendationRows(response);
   const selectedIds = new Set(normalizeProductIds(state.recommendation.selectedProductIds));
@@ -717,9 +851,14 @@ function recommendationCards(response) {
           ),
           Array.isArray(item.reasons) && item.reasons.length
             ? el(
-                "ul",
-                { className: "fw-rec-reasons" },
-                ...item.reasons.slice(0, 3).map((reason) => el("li", { text: reason })),
+                "div",
+                {},
+                el("p", { className: "fw-rec-why", text: "Why this works" }),
+                el(
+                  "ul",
+                  { className: "fw-rec-reasons" },
+                  ...item.reasons.slice(0, 3).map((reason) => el("li", { text: reason })),
+                ),
               )
             : null,
           item.link
@@ -745,6 +884,7 @@ function render() {
   const results = Array.isArray(state.payload.results) ? state.payload.results : [];
   resolveRowSelection(results);
   const selected = selectedCustomer(results);
+  const activeStyleConstraints = normalizeStyleConstraints(state.ui.styleConstraints);
   if (selected && !state.ui.emailTo && selected.email) {
     state.ui.emailTo = selected.email;
     persistWidgetState();
@@ -855,16 +995,34 @@ function render() {
           { className: "fw-field actions" },
           el("label", { className: "fw-label", text: "Recommendations" }),
           el(
-            "button",
-            {
-              className: "fw-button",
-              type: "button",
-              disabled: state.recommendation.isLoading ? "true" : null,
-              onClick: () => {
-                void loadRecommendations(selected);
+            "div",
+            { className: "fw-button-stack" },
+            el(
+              "button",
+              {
+                className: "fw-button",
+                type: "button",
+                disabled: state.recommendation.isLoading ? "true" : null,
+                onClick: () => {
+                  void loadRecommendations(selected);
+                },
               },
-            },
-            state.recommendation.isLoading ? "Loading..." : "Refresh Recommendations",
+              state.recommendation.isLoading ? "Loading..." : "Refresh Recommendations",
+            ),
+            activeStyleConstraints
+              ? el(
+                  "button",
+                  {
+                    className: "fw-button secondary",
+                    type: "button",
+                    disabled: state.recommendation.isLoading ? "true" : null,
+                    onClick: () => {
+                      void clearStyleGuidance(selected);
+                    },
+                  },
+                  "Clear Image Guidance",
+                )
+              : null,
           ),
         ),
       )
@@ -941,6 +1099,12 @@ function render() {
         }
         const selectedProductCount = selectedProductIds.length;
         const strategy = response?.recommendation?.strategy;
+        const responseConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
+        const displayConstraints = responseConstraints || activeStyleConstraints;
+        const constraintSource =
+          response?.recommendation?.constraint_source ||
+          (displayConstraints ? displayConstraints.constraint_source : null);
+        const constraintStage = response?.recommendation?.constraint_stage;
         const retrievalModeRaw = response?.retrieval_mode;
         const retrievalMode =
           typeof retrievalModeRaw === "string"
@@ -958,6 +1122,13 @@ function render() {
                 { className: "fw-chip-row" },
                 strategy ? el("span", { className: "fw-chip", text: strategy }) : null,
                 retrievalMode ? el("span", { className: "fw-chip subtle", text: retrievalMode }) : null,
+              )
+            : null,
+          displayConstraints
+            ? el(
+                "div",
+                { className: "fw-chip-row" },
+                ...styleConstraintChips(displayConstraints, constraintSource, constraintStage),
               )
             : null,
           response

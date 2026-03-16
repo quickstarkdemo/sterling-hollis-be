@@ -19,8 +19,15 @@ router = APIRouter(tags=["recommendations"])
 
 @router.post("/recommendations/customer", response_model=CustomerRecommendationResponse)
 def recommend_customer(req: CustomerRecommendationRequest, db: Session = Depends(get_db)):
-    rows, strategy = customer_recommendations(db, req)
-    return CustomerRecommendationResponse(store_id=req.store_id, strategy=strategy, recommendations=rows)
+    rows, strategy, applied_constraints, constraint_stage = customer_recommendations(db, req)
+    return CustomerRecommendationResponse(
+        store_id=req.store_id,
+        strategy=strategy,
+        recommendations=rows,
+        applied_style_constraints=applied_constraints,
+        constraint_source=applied_constraints.constraint_source if applied_constraints else None,
+        constraint_stage=constraint_stage,
+    )
 
 
 @router.post("/recommendations/merchandising", response_model=MerchandisingRecommendationResponse)

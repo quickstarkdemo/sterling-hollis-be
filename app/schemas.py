@@ -121,6 +121,56 @@ class IndexJobStatus(str, Enum):
     failed = "failed"
 
 
+class StyleConstraints(BaseModel):
+    constraint_source: str | None = None
+    target_categories: list[str] = Field(default_factory=list)
+    exclude_categories: list[str] = Field(default_factory=list)
+    target_genders: list[str] = Field(default_factory=list)
+    style_keywords: list[str] = Field(default_factory=list)
+
+    @staticmethod
+    def _clean_string_list(values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = str(value).strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            cleaned.append(normalized)
+            seen.add(normalized)
+        return cleaned
+
+    @model_validator(mode="after")
+    def normalize(self) -> "StyleConstraints":
+        self.target_categories = self._clean_string_list(self.target_categories)
+        self.exclude_categories = self._clean_string_list(self.exclude_categories)
+        self.style_keywords = self._clean_string_list(self.style_keywords)
+
+        mapped_genders: list[str] = []
+        for value in self.target_genders:
+            token = str(value).strip().lower()
+            if token in {"male", "man", "men", "m", "boys", "boy"}:
+                mapped_genders.append("male")
+            elif token in {"female", "woman", "women", "f", "girls", "girl"}:
+                mapped_genders.append("female")
+            elif token in {"unisex", "neutral", "gender_neutral", "gender-neutral"}:
+                mapped_genders.append("unisex")
+        self.target_genders = self._clean_string_list(mapped_genders)
+
+        if self.constraint_source is not None:
+            source = str(self.constraint_source).strip().lower()
+            self.constraint_source = source or None
+        return self
+
+    def is_empty(self) -> bool:
+        return not (
+            self.target_categories
+            or self.exclude_categories
+            or self.target_genders
+            or self.style_keywords
+        )
+
+
 class CustomerRecommendationRequest(BaseModel):
     store_id: str
     customer_id: str | None = None
@@ -128,6 +178,7 @@ class CustomerRecommendationRequest(BaseModel):
     budget_min: float | None = None
     budget_max: float | None = None
     top_k: int = Field(default=12, ge=1, le=50)
+    style_constraints: StyleConstraints | None = None
 
     @model_validator(mode="after")
     def validate_budget(self) -> "CustomerRecommendationRequest":
@@ -153,6 +204,9 @@ class CustomerRecommendationResponse(BaseModel):
     store_id: str
     strategy: str
     recommendations: list[ProductRecommendation]
+    applied_style_constraints: StyleConstraints | None = None
+    constraint_source: str | None = None
+    constraint_stage: str | None = None
 
 
 class MerchandisingRecommendationRequest(BaseModel):

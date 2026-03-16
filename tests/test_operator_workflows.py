@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import Customer, Order, OrderItem, Product, Store, SyntheticRun
-from app.schemas import CompareMode, Objective, PeerMode, PriceBand, RetrievalMode
+from app.schemas import CompareMode, CustomerRecommendationRequest, Objective, PeerMode, PriceBand, RetrievalMode, StyleConstraints
 from app.services.communications import (
     customer_message_history,
     prepare_customer_sms,
@@ -32,6 +32,26 @@ class _DummyPineconeService:
 class _BoomEmbeddingService:
     def embed_text(self, text):
         raise AssertionError("embedding path should not run in fast mode")
+
+
+def test_style_constraints_normalize_fields():
+    request = CustomerRecommendationRequest(
+        store_id="1001",
+        style_constraints=StyleConstraints(
+            constraint_source=" Chat_Image ",
+            target_categories=["Women's Apparel", " womens_apparel ", "MENS_APPAREL"],
+            exclude_categories=["Handbags", "handbags"],
+            target_genders=["Women", " female ", "UNISEX"],
+            style_keywords=["Tailored", "tailored", "Minimal"],
+        ),
+    )
+
+    assert request.style_constraints is not None
+    assert request.style_constraints.constraint_source == "chat_image"
+    assert request.style_constraints.target_categories == ["women's apparel", "womens_apparel", "mens_apparel"]
+    assert request.style_constraints.exclude_categories == ["handbags"]
+    assert request.style_constraints.target_genders == ["female", "unisex"]
+    assert request.style_constraints.style_keywords == ["tailored", "minimal"]
 
 
 @contextmanager
@@ -427,6 +447,32 @@ def test_demo_customer_uses_sex_fallback_for_filtering(monkeypatch):
         assert all((product.gender or "").lower() not in {"women", "female", "girls"} for product in products)
 
 
+def test_style_constraints_relaxation_stage_is_reported(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            retrieval_mode=RetrievalMode.fast,
+            top_k=5,
+            style_constraints=StyleConstraints(
+                constraint_source="chat_image",
+                target_categories=["shoes"],
+                target_genders=["female"],
+                style_keywords=["tailored", "modern"],
+            ),
+        )
+
+        assert response.recommendation.recommendations
+        assert response.recommendation.applied_style_constraints is not None
+        assert response.recommendation.constraint_source == "chat_image"
+        assert response.recommendation.constraint_stage == "relaxed_drop_target_genders"
+        product_ids = [item.product_id for item in response.recommendation.recommendations]
+        products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+        assert all((product.gender or "").lower() not in {"women", "female", "girls"} for product in products)
+
+
 def test_prepare_update_send_history_and_smoke(monkeypatch):
     import app.services.communications as communications
 
@@ -530,6 +576,14 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         result = mcp_server.fashion_render_customer_search_workspace(
             query="avery.parker.1@example-fashion.test",
             limit=10,
+            selected_customer_id="cust_000001",
+            initial_style_constraints=StyleConstraints(
+                constraint_source="chat_image",
+                target_categories=["mens_apparel"],
+                target_genders=["male"],
+                style_keywords=["tailored", "minimal"],
+            ),
+            initial_notice="Image guidance loaded from this chat turn.",
         )
         html = mcp_server.customer_search_widget_resource()
         template_uri = result.meta["openai/outputTemplate"]
@@ -542,6 +596,10 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert result.structuredContent["payload"]["mode"] == "resolved"
         assert result.structuredContent["payload"]["resolved"]["id"] == "cust_000001"
         assert result.structuredContent["payload"]["results"][0]["id"] == "cust_000001"
+        assert result.structuredContent["payload"]["selected_customer_id"] == "cust_000001"
+        assert result.structuredContent["payload"]["initial_notice"] == "Image guidance loaded from this chat turn."
+        assert result.structuredContent["payload"]["initial_style_constraints"]["constraint_source"] == "chat_image"
+        assert result.structuredContent["payload"]["initial_style_constraints"]["target_categories"] == ["mens_apparel"]
         assert "<style>" in html
         assert "Customer Workspace" in html
         assert "window.__FASHION_WIDGET__" in html

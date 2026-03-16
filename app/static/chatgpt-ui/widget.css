@@ -155,6 +155,17 @@ body {
   cursor: default;
 }
 
+.fw-button.secondary {
+  background: #e9eff4;
+  color: #2c4c66;
+  border: 1px solid #c8d6e3;
+}
+
+.fw-button-stack {
+  display: grid;
+  gap: 8px;
+}
+
 .fw-notice {
   border-radius: 10px;
   border: 1px solid #c8def4;
@@ -292,6 +303,13 @@ body {
   padding-left: 18px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.fw-rec-why {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
 }
 
 .fw-link {

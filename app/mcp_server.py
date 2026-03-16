@@ -41,6 +41,7 @@ from app.schemas import (
     RunReportResponse,
     StoreAssociateRecommendationResponse,
     StoreResolutionResponse,
+    StyleConstraints,
     SyntheticGenerateRequest,
     SyntheticGenerateResponse,
     SyntheticLoadRequest,
@@ -208,6 +209,7 @@ def _associate_recommendation_impl(
     budget_max: float | None = None,
     top_k: int = 5,
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    style_constraints: StyleConstraints | None = None,
 ) -> StoreAssociateRecommendationResponse:
     with SessionLocal() as db:
         resolved_store, resolved_customer = _resolve_associate_context(
@@ -235,12 +237,18 @@ def _associate_recommendation_impl(
             budget_min=budget_min,
             budget_max=budget_max,
             top_k=top_k,
+            style_constraints=style_constraints,
         )
-        rows, strategy = customer_recommendations(db, req, retrieval_mode=effective_retrieval_mode)
+        rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
+            db, req, retrieval_mode=effective_retrieval_mode
+        )
         recommendation = CustomerRecommendationResponse(
             store_id=resolved_store.id,
             strategy=strategy,
             recommendations=rows,
+            applied_style_constraints=applied_constraints,
+            constraint_source=applied_constraints.constraint_source if applied_constraints else None,
+            constraint_stage=constraint_stage,
         )
         return StoreAssociateRecommendationResponse(
             store=resolved_store,
@@ -497,8 +505,14 @@ def fashion_customer_recommendations(
     budget_min: float | None = None,
     budget_max: float | None = None,
     top_k: int = 12,
+    style_constraints: StyleConstraints | None = None,
 ) -> CustomerRecommendationResponse:
-    """Return customer-facing product recommendations for a store, occasion, and optional customer profile."""
+    """Return customer-facing product recommendations.
+
+    If the user uploaded an image in chat, extract style cues and pass them via
+    `style_constraints` so recommendations can be guided by those image-derived
+    attributes.
+    """
     params = CustomerRecommendationRequest(
         store_id=store_id,
         customer_id=customer_id,
@@ -506,10 +520,18 @@ def fashion_customer_recommendations(
         budget_min=budget_min,
         budget_max=budget_max,
         top_k=top_k,
+        style_constraints=style_constraints,
     )
     with SessionLocal() as db:
-        rows, strategy = customer_recommendations(db, params)
-        return CustomerRecommendationResponse(store_id=params.store_id, strategy=strategy, recommendations=rows)
+        rows, strategy, applied_constraints, constraint_stage = customer_recommendations(db, params)
+        return CustomerRecommendationResponse(
+            store_id=params.store_id,
+            strategy=strategy,
+            recommendations=rows,
+            applied_style_constraints=applied_constraints,
+            constraint_source=applied_constraints.constraint_source if applied_constraints else None,
+            constraint_stage=constraint_stage,
+        )
 
 
 @mcp.tool(name="fashion_merchandising_recommendations", annotations=_tool_annotations(read_only=True, idempotent=True))
@@ -605,14 +627,33 @@ def fashion_find_customers(query: str, limit: int = 10) -> CustomerSearchRespons
         return find_customers(db, query=query, limit=limit)
 
 
-def _customer_search_workspace_payload(query: str | None, limit: int) -> dict:
+def _customer_search_workspace_payload(
+    query: str | None,
+    limit: int,
+    selected_customer_id: str | None = None,
+    initial_style_constraints: StyleConstraints | None = None,
+    initial_notice: str | None = None,
+) -> dict:
     normalized_query = (query or "").strip()
+    initial_constraints_payload = (
+        initial_style_constraints.model_dump(mode="json") if initial_style_constraints is not None else None
+    )
     if not normalized_query:
+        seeded_results: list[dict] = []
+        seeded_resolved: dict | None = None
+        if selected_customer_id:
+            lookup = fashion_lookup_customer(selected_customer_id, limit=1)
+            if lookup.mode == "resolved" and lookup.resolved is not None:
+                seeded_resolved = lookup.resolved.model_dump(mode="json")
+                seeded_results = [seeded_resolved]
         return {
             "query": "",
-            "mode": "idle",
-            "resolved": None,
-            "results": [],
+            "mode": "resolved" if seeded_resolved else "idle",
+            "resolved": seeded_resolved,
+            "results": seeded_results,
+            "selected_customer_id": selected_customer_id,
+            "initial_style_constraints": initial_constraints_payload,
+            "initial_notice": initial_notice,
             "uiHints": {
                 "searchPlaceholder": "Search by name, email, or phone",
                 "emptyState": "Type a customer name, email, or phone number and run search.",
@@ -630,6 +671,9 @@ def _customer_search_workspace_payload(query: str | None, limit: int) -> dict:
         "mode": lookup.mode,
         "resolved": lookup.resolved.model_dump(mode="json") if lookup.resolved else None,
         "results": results,
+        "selected_customer_id": selected_customer_id,
+        "initial_style_constraints": initial_constraints_payload,
+        "initial_notice": initial_notice,
         "uiHints": {
             "searchPlaceholder": "Search by name, email, or phone",
             "emptyState": "No customers matched the current query.",
@@ -647,10 +691,26 @@ def _customer_search_workspace_payload(query: str | None, limit: int) -> dict:
     ),
     structured_output=False,
 )
-def fashion_render_customer_search_workspace(query: str | None = None, limit: int = 10) -> CallToolResult:
-    """Render the minimal customer-search workspace inside ChatGPT."""
+def fashion_render_customer_search_workspace(
+    query: str | None = None,
+    limit: int = 10,
+    selected_customer_id: str | None = None,
+    initial_style_constraints: StyleConstraints | None = None,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Render the customer workspace inside ChatGPT.
+
+    Optional hydration fields (`selected_customer_id`, `initial_style_constraints`,
+    and `initial_notice`) can seed the UI state from prior model/tool context.
+    """
     effective_limit = max(1, min(limit, 25))
-    workspace_payload = _customer_search_workspace_payload(query=query, limit=effective_limit)
+    workspace_payload = _customer_search_workspace_payload(
+        query=query,
+        limit=effective_limit,
+        selected_customer_id=selected_customer_id,
+        initial_style_constraints=initial_style_constraints,
+        initial_notice=initial_notice,
+    )
     structured_payload = {"kind": "customer_search_workspace", "payload": workspace_payload}
     summary = (
         f"Opened customer workspace with query '{workspace_payload['query']}'."
@@ -685,8 +745,13 @@ def fashion_store_associate_recommend(
     budget_max: float | None = None,
     top_k: int = 5,
     retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    style_constraints: StyleConstraints | None = None,
 ) -> StoreAssociateRecommendationResponse:
-    """Main store-associate workflow for resolving a customer and store, then returning actionable recommendations."""
+    """Main store-associate recommendation workflow.
+
+    When an image is uploaded in chat, populate `style_constraints` from image
+    cues (for example categories, gender cues, and style keywords).
+    """
     return _associate_recommendation_impl(
         store_query=store_query,
         store_id=store_id,
@@ -699,6 +764,7 @@ def fashion_store_associate_recommend(
         budget_max=budget_max,
         top_k=top_k,
         retrieval_mode=retrieval_mode,
+        style_constraints=style_constraints,
     )
 
 

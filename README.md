@@ -421,6 +421,7 @@ Human-first examples:
 - `fashion_resolve_customer(phone_last4="1234")`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5, retrieval_mode="auto")`
+- `fashion_store_associate_recommend(store_id="1001", customer_id="cust_000001", top_k=6, retrieval_mode="auto", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel","shoes"],"target_genders":["male"],"style_keywords":["tailored","minimal"]})`
 - `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
 - `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
 - `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
@@ -515,6 +516,11 @@ Current message body content is text-only:
 - product links
 
 The synthetic dataset includes `image_link`, but those URLs are placeholders and are not used for outbound messaging.
+
+Image-guided recommendation notes:
+- if a user uploads an image in chat, pass extracted cues into `style_constraints` on recommendation tools
+- supported fields: `target_categories`, `exclude_categories`, `target_genders`, `style_keywords`, and `constraint_source`
+- recommendation responses include `applied_style_constraints`, `constraint_source`, and `constraint_stage` so the workspace can explain what was applied
 
 ### Apps SDK widgets
 

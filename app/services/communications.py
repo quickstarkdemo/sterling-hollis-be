@@ -165,11 +165,16 @@ def prepare_customer_sms(
         budget_max=budget_max,
         top_k=top_k,
     )
-    rows, strategy = customer_recommendations(session, req, retrieval_mode=retrieval_mode)
+    rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
+        session, req, retrieval_mode=retrieval_mode
+    )
     recommendation = CustomerRecommendationResponse(
         store_id=resolved_store.id,
         strategy=strategy,
         recommendations=rows,
+        applied_style_constraints=applied_constraints,
+        constraint_source=applied_constraints.constraint_source if applied_constraints else None,
+        constraint_stage=constraint_stage,
     )
 
     selected_product_ids = selected_product_ids or [product.product_id for product in recommendation.recommendations[:3]]
@@ -190,6 +195,13 @@ def prepare_customer_sms(
             "budget_max": budget_max,
             "top_k": top_k,
             "strategy": strategy,
+            "style_constraints": (
+                recommendation.applied_style_constraints.model_dump(mode="json")
+                if recommendation.applied_style_constraints
+                else None
+            ),
+            "constraint_source": recommendation.constraint_source,
+            "constraint_stage": recommendation.constraint_stage,
         },
     )
     session.add(record)
@@ -284,6 +296,7 @@ def send_customer_recommendations_email(
 
     strategy = "selected_products_only"
     selected_product_ids = selected_product_ids or []
+    recommendation: CustomerRecommendationResponse | None = None
     if not selected_product_ids:
         req = CustomerRecommendationRequest(
             store_id=resolved_store.id,
@@ -293,11 +306,16 @@ def send_customer_recommendations_email(
             budget_max=budget_max,
             top_k=top_k,
         )
-        rows, strategy = customer_recommendations(session, req, retrieval_mode=retrieval_mode)
+        rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
+            session, req, retrieval_mode=retrieval_mode
+        )
         recommendation = CustomerRecommendationResponse(
             store_id=resolved_store.id,
             strategy=strategy,
             recommendations=rows,
+            applied_style_constraints=applied_constraints,
+            constraint_source=applied_constraints.constraint_source if applied_constraints else None,
+            constraint_stage=constraint_stage,
         )
         selected_product_ids = [product.product_id for product in recommendation.recommendations[:3]]
     if not selected_product_ids:
@@ -331,6 +349,13 @@ def send_customer_recommendations_email(
             "budget_max": budget_max,
             "top_k": top_k,
             "strategy": strategy,
+            "style_constraints": (
+                recommendation.applied_style_constraints.model_dump(mode="json")
+                if recommendation and recommendation.applied_style_constraints
+                else None
+            ),
+            "constraint_source": recommendation.constraint_source if recommendation else None,
+            "constraint_stage": recommendation.constraint_stage if recommendation else None,
             "subject": resolved_subject,
             "retrieval_mode": retrieval_mode.value if isinstance(retrieval_mode, RetrievalMode) else str(retrieval_mode),
         },
