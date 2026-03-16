@@ -50,6 +50,8 @@ const state = {
     toolOutputApplied: false,
     userInteracted: false,
     draftHydrationRequestedForId: null,
+    modelContextHash: "",
+    modelContextTimer: null,
   },
 };
 
@@ -163,6 +165,7 @@ function applyWorkspacePayload(raw) {
   if (payload.initial_email_body) {
     state.ui.emailBody = payload.initial_email_body;
   }
+  queueModelContextUpdate({ immediate: true });
   return true;
 }
 
@@ -278,6 +281,7 @@ function loadWidgetState() {
 
 function persistWidgetState() {
   if (!window.openai || typeof window.openai.setWidgetState !== "function") {
+    queueModelContextUpdate();
     return;
   }
   try {
@@ -296,6 +300,59 @@ function persistWidgetState() {
   } catch {
     // Best-effort only.
   }
+  queueModelContextUpdate();
+}
+
+function buildModelContextPayload() {
+  const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+  const selected = selectedCustomer(results);
+  return {
+    workspace: "customer_search",
+    selected_customer_id: selected?.id || null,
+    selected_customer_name: selected?.full_name || null,
+    occasion: state.ui.occasion.trim() || null,
+    budget_max: parseBudgetMax(state.ui.budgetMax),
+    selected_product_ids: normalizeProductIds(state.recommendation.selectedProductIds),
+    style_constraints: normalizeStyleConstraints(state.ui.styleConstraints),
+    email_draft_id: state.ui.emailDraftId || null,
+  };
+}
+
+function queueModelContextUpdate(options = {}) {
+  if (!window.parent || typeof window.parent.postMessage !== "function") {
+    return;
+  }
+  const payload = buildModelContextPayload();
+  const serialized = JSON.stringify(payload);
+  if (!options.force && serialized === state.runtime.modelContextHash) {
+    return;
+  }
+  state.runtime.modelContextHash = serialized;
+
+  const send = () => {
+    state.runtime.modelContextTimer = null;
+    window.parent.postMessage(
+      {
+        jsonrpc: "2.0",
+        id: `ctx_${Date.now()}`,
+        method: "ui/update-model-context",
+        params: {
+          content: [{ type: "text", text: `Workspace context:\n${serialized}` }],
+        },
+      },
+      "*",
+    );
+  };
+
+  if (state.runtime.modelContextTimer) {
+    window.clearTimeout(state.runtime.modelContextTimer);
+    state.runtime.modelContextTimer = null;
+  }
+  if (options.immediate) {
+    send();
+    return;
+  }
+  state.runtime.modelContextTimer = window.setTimeout(send, 300);
 }
 
 function setNotice(message, tone = "info") {
@@ -466,6 +523,7 @@ function clearRecommendationState() {
   state.ui.emailDraftId = null;
   state.ui.emailSubject = "";
   state.ui.emailBody = "";
+  queueModelContextUpdate({ immediate: true });
 }
 
 function selectCustomerId(customerId, options = {}) {
@@ -1803,6 +1861,7 @@ function boot() {
   if (!state.ui.query && state.payload.query) {
     state.ui.query = state.payload.query;
   }
+  queueModelContextUpdate({ force: true, immediate: true });
   render();
 }
 
@@ -1817,6 +1876,7 @@ window.addEventListener(
     }
     const uiChanged = applyUiWidgetState(globals.widgetState);
     if (uiChanged) {
+      queueModelContextUpdate();
       render();
     }
   },
@@ -1826,6 +1886,9 @@ window.addEventListener(
 window.addEventListener(
   "message",
   (event) => {
+    if (event.source !== window.parent) {
+      return;
+    }
     const data = event.data;
     if (!data || typeof data !== "object") {
       return;
