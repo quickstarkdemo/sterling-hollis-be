@@ -140,13 +140,48 @@ validate_env_file() {
   done
 }
 
+suggest_next_version() {
+  local version="$1"
+
+  if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    echo "$version"
+    return
+  fi
+
+  awk -F. '{
+    $NF = $NF + 1;
+    out = $1;
+    for (i = 2; i <= NF; i += 1) {
+      out = out "." $i;
+    }
+    print out;
+  }' <<< "$version"
+}
+
 set_version() {
   local current_version
+  local suggested_version
+  local prompt
   current_version=$(tr -d '[:space:]' < VERSION 2>/dev/null || true)
   current_version="${current_version:-0.1.0}"
+  suggested_version="$(suggest_next_version "$current_version")"
 
-  read -r -p "Version [$current_version]: " new_version
-  new_version="${new_version:-$current_version}"
+  if [[ "$suggested_version" == "$current_version" ]]; then
+    prompt="Version [$current_version]: "
+  else
+    prompt="Version [$suggested_version] (current: $current_version, '=' to keep current): "
+  fi
+
+  read -r -p "$prompt" new_version
+  new_version="${new_version:-$suggested_version}"
+  if [[ "$new_version" == "=" ]]; then
+    new_version="$current_version"
+  fi
+
+  if [[ ! "$new_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    print_error "Invalid version format: $new_version (expected dot-separated numeric segments)"
+    exit 1
+  fi
 
   if [[ "$new_version" != "$current_version" ]]; then
     echo "$new_version" > VERSION
@@ -181,15 +216,183 @@ upload_secrets() {
   print_success "Recorded env sync fingerprint for $env_file"
 }
 
+generate_commit_message() {
+  local staged_files
+  staged_files="$(git diff --cached --name-only)"
+
+  if [[ -z "$staged_files" ]]; then
+    echo "Deploy product-db"
+    return
+  fi
+
+  local file_count=0
+  local non_version_count=0
+  local has_app=0
+  local has_tests=0
+  local has_docs=0
+  local has_scripts=0
+  local has_deploy=0
+  local has_db=0
+  local has_version=0
+  local target_first=""
+  local target_second=""
+  local path
+
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    ((file_count += 1))
+    case "$path" in
+      app/*) has_app=1 ;;
+      tests/*) has_tests=1 ;;
+      docs/*|README.md) has_docs=1 ;;
+      scripts/*) has_scripts=1 ;;
+      .github/*|deploy/*|Dockerfile|docker-compose.yml) has_deploy=1 ;;
+      alembic/*) has_db=1 ;;
+      VERSION) has_version=1 ;;
+    esac
+
+    if [[ "$path" != "VERSION" ]]; then
+      ((non_version_count += 1))
+      local base_name
+      base_name="$(basename "$path")"
+
+      if [[ -z "$target_first" ]]; then
+        target_first="$base_name"
+      elif [[ "$base_name" != "$target_first" && -z "$target_second" ]]; then
+        target_second="$base_name"
+      fi
+    fi
+  done <<< "$staged_files"
+
+  local scope_text=""
+  [[ "$has_app" -eq 1 ]] && scope_text="${scope_text:+$scope_text, }workspace"
+  [[ "$has_db" -eq 1 ]] && scope_text="${scope_text:+$scope_text, }db"
+  [[ "$has_scripts" -eq 1 ]] && scope_text="${scope_text:+$scope_text, }scripts"
+  [[ "$has_deploy" -eq 1 ]] && scope_text="${scope_text:+$scope_text, }deploy"
+  [[ "$has_tests" -eq 1 ]] && scope_text="${scope_text:+$scope_text, }tests"
+  [[ "$has_docs" -eq 1 ]] && scope_text="${scope_text:+$scope_text, }docs"
+  if [[ -z "$scope_text" ]]; then
+    if [[ "$has_version" -eq 1 ]]; then
+      scope_text="version"
+    else
+      scope_text="updates"
+    fi
+  fi
+
+  local current_version
+  current_version="$(tr -d '[:space:]' < VERSION 2>/dev/null || true)"
+
+  if [[ "$has_version" -eq 1 && "$file_count" -eq 1 && -n "$current_version" ]]; then
+    echo "chore: bump VERSION to ${current_version}"
+    return
+  fi
+
+  local target_text="staged changes"
+  local captured_targets=0
+  [[ -n "$target_first" ]] && ((captured_targets += 1))
+  [[ -n "$target_second" ]] && ((captured_targets += 1))
+  local target_suffix_count=$((non_version_count - captured_targets))
+  if [[ "$captured_targets" -eq 1 ]]; then
+    target_text="$target_first"
+  elif [[ "$captured_targets" -ge 2 ]]; then
+    target_text="${target_first} and ${target_second}"
+  fi
+  if [[ "$target_suffix_count" -gt 0 ]]; then
+    target_text="${target_text} +${target_suffix_count} files"
+  fi
+
+  if [[ -n "$current_version" ]]; then
+    echo "deploy(${scope_text}): ${target_text} (v${current_version})"
+  else
+    echo "deploy(${scope_text}): ${target_text}"
+  fi
+}
+
+write_deploy_notes() {
+  local commit_subject="$1"
+  local notes_file="$DEPLOY_STATE_DIR/deploy-notes-latest.md"
+  local generated_at_utc
+  local current_version
+  local current_branch
+  local base_sha
+  local shortstat
+
+  mkdir -p "$DEPLOY_STATE_DIR"
+  generated_at_utc="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  current_version="$(tr -d '[:space:]' < VERSION 2>/dev/null || true)"
+  current_branch="$(git branch --show-current)"
+  base_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  shortstat="$(git diff --cached --shortstat | sed 's/^ *//')"
+  shortstat="${shortstat:-0 files changed}"
+
+  {
+    echo "# Deploy Notes"
+    echo ""
+    echo "- Generated (UTC): ${generated_at_utc}"
+    echo "- Branch: ${current_branch}"
+    echo "- Base SHA: ${base_sha}"
+    if [[ -n "$current_version" ]]; then
+      echo "- Version: ${current_version}"
+    fi
+    echo "- Proposed commit: ${commit_subject}"
+    echo "- Diff summary: ${shortstat}"
+    echo ""
+    echo "## Staged files"
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      echo "- \`${line}\`"
+    done <<< "$(git diff --cached --name-status)"
+  } > "$notes_file"
+
+  echo "$notes_file"
+}
+
+append_deploy_history() {
+  local commit_subject="$1"
+  local history_file="$DEPLOY_STATE_DIR/deploy-history.md"
+  local generated_at_utc
+  local current_version
+  local current_branch
+  local head_sha
+  local shortstat
+
+  mkdir -p "$DEPLOY_STATE_DIR"
+  generated_at_utc="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  current_version="$(tr -d '[:space:]' < VERSION 2>/dev/null || true)"
+  current_branch="$(git branch --show-current)"
+  head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  shortstat="$(git show --shortstat --format='' HEAD | sed 's/^ *//')"
+  shortstat="${shortstat:-0 files changed}"
+
+  {
+    echo "## ${generated_at_utc} | ${commit_subject}"
+    echo ""
+    echo "- Branch: ${current_branch}"
+    echo "- Commit: ${head_sha}"
+    if [[ -n "$current_version" ]]; then
+      echo "- Version: ${current_version}"
+    fi
+    echo "- Summary: ${shortstat}"
+    echo "- Files:"
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      echo "  - ${line}"
+    done <<< "$(git show --name-status --format='' HEAD)"
+    echo ""
+  } >> "$history_file"
+
+  echo "$history_file"
+}
+
 commit_and_push() {
   local commit_message
+  local auto_commit_message
+  local deploy_notes_file
+  local deploy_history_file
   local unstaged_tracked
   local untracked_files
 
   git status --short
-  echo ""
-  read -r -p "Commit message [Deploy product-db]: " commit_message
-  commit_message="${commit_message:-Deploy product-db}"
 
   unstaged_tracked="$(git diff --name-only)"
   untracked_files="$(git ls-files --others --exclude-standard)"
@@ -225,8 +428,17 @@ commit_and_push() {
     return
   fi
 
+  auto_commit_message="$(generate_commit_message)"
+  deploy_notes_file="$(write_deploy_notes "$auto_commit_message")"
+  print_step "Generated deploy notes: ${deploy_notes_file#$PROJECT_ROOT/}"
+  echo ""
+  read -r -p "Commit message [$auto_commit_message]: " commit_message
+  commit_message="${commit_message:-$auto_commit_message}"
+
   git commit -m "$commit_message"
   git push origin "$(git branch --show-current)"
+  deploy_history_file="$(append_deploy_history "$commit_message")"
+  print_step "Updated deploy history: ${deploy_history_file#$PROJECT_ROOT/}"
 }
 
 main() {

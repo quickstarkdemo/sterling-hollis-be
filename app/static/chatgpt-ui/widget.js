@@ -860,6 +860,19 @@ function toggleSelectedProduct(productId) {
   persistWidgetState();
 }
 
+function selectAllProducts(response) {
+  markUserInteraction();
+  const rows = recommendationRows(response);
+  state.recommendation.selectedProductIds = normalizeProductIds(rows.map((item) => item.product_id));
+  persistWidgetState();
+}
+
+function deselectAllProducts() {
+  markUserInteraction();
+  state.recommendation.selectedProductIds = [];
+  persistWidgetState();
+}
+
 function normalizeEmailDraftResponse(raw) {
   if (isObject(raw?.structuredContent)) {
     return normalizeEmailDraftResponse(raw.structuredContent);
@@ -1250,39 +1263,6 @@ async function syncEmailDraftEdits(selected) {
   return response;
 }
 
-function buildCanvasHandoffPrompt(selected, draftResponse) {
-  const products = Array.isArray(draftResponse?.selected_products) ? draftResponse.selected_products : [];
-  const productLines = products.length
-    ? products
-        .slice(0, 8)
-        .map((item) => `- ${item.title} (${item.brand || "brand n/a"}, ${money(item.price)}): ${item.link || "no link"}`)
-        .join("\n")
-    : "- Use selected products from draft context.";
-  const occasionText = state.ui.occasion.trim() || "none";
-  return [
-    "Open Canvas now and draft an outbound customer recommendation email from the context below.",
-    "",
-    "After editing in Canvas, persist the final draft by calling `fashion_update_customer_email_draft` with:",
-    `- message_id: ${draftResponse.message.id}`,
-    "- subject: final subject",
-    "- body_text: final body",
-    `- to_email: ${draftResponse.destination_email}`,
-    `- selected_product_ids: ${JSON.stringify(draftResponse.message.product_ids || [])}`,
-    "",
-    `Customer: ${selected.full_name || selected.id} (${selected.email || "no email"})`,
-    `Store: ${selected.home_store_name || selected.home_store_id}`,
-    `Occasion: ${occasionText}`,
-    `Draft ID: ${draftResponse.message.id}`,
-    "",
-    "Selected products:",
-    productLines,
-    "",
-    `Current subject: ${draftResponse.subject}`,
-    "Current body:",
-    draftResponse.message.body_text || "",
-  ].join("\n");
-}
-
 async function copyEmailDraft(selected) {
   markUserInteraction();
   if (!selected) {
@@ -1303,31 +1283,6 @@ async function copyEmailDraft(selected) {
     return;
   }
   setNotice("Copied draft email to clipboard.");
-  render();
-}
-
-async function copyCanvasPrompt(selected) {
-  markUserInteraction();
-  if (!selected) {
-    setNotice("Select a customer before copying a Canvas prompt.", "error");
-    render();
-    return;
-  }
-  let draft = await syncEmailDraftEdits(selected);
-  if (!draft) {
-    draft = await prepareEmailDraft(selected, { includeMessageId: true, silent: true });
-    if (!draft) {
-      return;
-    }
-  }
-  const prompt = buildCanvasHandoffPrompt(selected, draft);
-  const copied = await copyTextToClipboard(prompt);
-  if (!copied) {
-    setNotice("Clipboard copy failed in this browser.", "error");
-    render();
-    return;
-  }
-  setNotice(`Copied Canvas prompt for draft ${draft.message.id}. Paste it into chat to open Canvas.`);
   render();
 }
 
@@ -1559,7 +1514,13 @@ function recommendationCards(response) {
           "div",
           { className: "fw-rec-content" },
           el("h3", { className: "fw-rec-title", text: item.title || item.product_id }),
-          el("p", { className: "fw-rec-meta", text: `${item.brand || "Unknown brand"} • ${money(item.price)}` }),
+          el(
+            "p",
+            { className: "fw-rec-meta" },
+            el("span", { className: "fw-rec-brand", text: item.brand || "Unknown brand" }),
+            " • ",
+            el("span", { className: "fw-rec-price", text: money(item.price) }),
+          ),
           el(
             "div",
             { className: "fw-chip-row" },
@@ -1840,6 +1801,7 @@ function render() {
           persistWidgetState();
         }
         const selectedProductCount = selectedProductIds.length;
+        const allProductsSelected = rows.length > 0 && selectedProductCount === rows.length;
         const strategy = response?.recommendation?.strategy;
         const responseConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
         const displayConstraints = responseConstraints || activeStyleConstraints;
@@ -1895,6 +1857,36 @@ function render() {
                     },
                   ),
                   el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
+                ),
+                el(
+                  "div",
+                  { className: "fw-toolbar" },
+                  el(
+                    "button",
+                    {
+                      className: "fw-button secondary",
+                      type: "button",
+                      disabled: !rows.length || allProductsSelected ? "true" : null,
+                      onClick: () => {
+                        selectAllProducts(response);
+                        render();
+                      },
+                    },
+                    "Select All",
+                  ),
+                  el(
+                    "button",
+                    {
+                      className: "fw-button secondary",
+                      type: "button",
+                      disabled: !selectedProductCount ? "true" : null,
+                      onClick: () => {
+                        deselectAllProducts();
+                        render();
+                      },
+                    },
+                    "Deselect All",
+                  ),
                 ),
                 el(
                   "div",
@@ -1958,18 +1950,6 @@ function render() {
                       },
                     },
                     "Copy Draft",
-                  ),
-                  el(
-                    "button",
-                    {
-                      className: "fw-button secondary",
-                      type: "button",
-                      disabled: emailDraftBusy || !selectedProductCount || !state.ui.emailTo.trim() ? "true" : null,
-                      onClick: () => {
-                        void copyCanvasPrompt(selected);
-                      },
-                    },
-                    "Copy Canvas Prompt",
                   ),
                   el(
                     "button",

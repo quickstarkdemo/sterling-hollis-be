@@ -262,9 +262,9 @@ body {
 .fw-rec-card {
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 10px;
+  padding: 8px 10px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .fw-rec-select {
@@ -277,17 +277,18 @@ body {
 
 .fw-rec-layout {
   display: grid;
-  gap: 12px;
-  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  grid-template-columns: 84px minmax(0, 1fr);
 }
 
 .fw-rec-image-wrap {
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 4px;
+  padding: 3px;
   background: #fff;
-  width: 96px;
-  height: 96px;
+  width: 84px;
+  height: 84px;
 }
 
 .fw-rec-image {
@@ -299,7 +300,7 @@ body {
 
 .fw-rec-content {
   display: grid;
-  gap: 8px;
+  gap: 5px;
 }
 
 .fw-rec-title {
@@ -313,15 +314,27 @@ body {
   font-size: 13px;
 }
 
+.fw-rec-brand {
+  color: var(--muted);
+}
+
+.fw-rec-price {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .fw-rec-reasons {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.25;
 }
 
 .fw-rec-why {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   font-size: 12px;
   font-weight: 700;
   color: var(--ink);
