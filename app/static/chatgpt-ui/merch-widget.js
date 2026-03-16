@@ -383,6 +383,19 @@ function money(value) {
   return `$${numberValue.toFixed(2)}`;
 }
 
+function formatCurrencyCompact(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(numeric);
+}
+
 function stableTextHash(raw) {
   const text = String(raw || "");
   let hash = 2166136261;
@@ -964,8 +977,13 @@ function renderTrendChart(result) {
   }
 
   const width = 760;
-  const height = 220;
-  const pad = 24;
+  const height = 250;
+  const chartLeft = 76;
+  const chartRight = 16;
+  const chartTop = 20;
+  const chartBottom = 38;
+  const plotWidth = width - chartLeft - chartRight;
+  const plotHeight = height - chartTop - chartBottom;
   let minValue = Math.min(...finiteValues);
   let maxValue = Math.max(...finiteValues);
   if (maxValue === minValue) {
@@ -977,13 +995,13 @@ function renderTrendChart(result) {
 
   const xFor = (idx) => {
     if (series.length <= 1) {
-      return pad;
+      return chartLeft;
     }
-    return pad + (idx / (series.length - 1)) * (width - pad * 2);
+    return chartLeft + (idx / (series.length - 1)) * plotWidth;
   };
   const yFor = (value) => {
     const normalized = (Number(value) - minValue) / span;
-    return height - pad - normalized * (height - pad * 2);
+    return chartTop + (1 - normalized) * plotHeight;
   };
 
   const buildPath = (field) => {
@@ -1021,11 +1039,28 @@ function renderTrendChart(result) {
       : result?.compare_store_name
         ? result.compare_store_name
         : "Peer Set";
+  const latestPoint = series[series.length - 1];
+  const hasBaselineLatest = latestPoint && latestPoint.baseline_revenue !== null && latestPoint.baseline_revenue !== undefined;
+  const latestDeltaPct =
+    hasBaselineLatest && Number(latestPoint.baseline_revenue) !== 0
+      ? ((Number(latestPoint.current_revenue) - Number(latestPoint.baseline_revenue)) / Number(latestPoint.baseline_revenue)) * 100
+      : null;
+  const yTicks = Array.from({ length: 5 }, (_, idx) => maxValue - (span * idx) / 4);
+  const xLabelIndices = Array.from(new Set([0, Math.floor((series.length - 1) / 2), series.length - 1])).filter(
+    (idx) => idx >= 0 && idx < series.length,
+  );
 
   return el(
     "section",
     { className: "fw-panel fw-trend-chart-panel" },
     el("h3", { className: "fw-panel-title", text: "Weekly Revenue Trend" }),
+    el(
+      "p",
+      {
+        className: "fw-empty",
+        text: `Blue line is weekly revenue for ${currentLabel}. Gray line is weekly revenue for ${baselineLabel}.`,
+      },
+    ),
     el(
       "div",
       { className: "fw-trend-legend" },
@@ -1040,8 +1075,33 @@ function renderTrendChart(result) {
         role: "img",
         "aria-label": "Weekly trend chart for current store and baseline",
       },
-      el("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: "#cbd8e4", "stroke-width": "1" }),
-      el("line", { x1: pad, y1: pad, x2: pad, y2: height - pad, stroke: "#cbd8e4", "stroke-width": "1" }),
+      ...yTicks.map((value) => {
+        const y = yFor(value).toFixed(2);
+        return el("line", {
+          x1: chartLeft.toFixed(2),
+          y1: y,
+          x2: (width - chartRight).toFixed(2),
+          y2: y,
+          stroke: "#e1e8ef",
+          "stroke-width": "1",
+        });
+      }),
+      el("line", {
+        x1: chartLeft.toFixed(2),
+        y1: chartTop.toFixed(2),
+        x2: chartLeft.toFixed(2),
+        y2: (height - chartBottom).toFixed(2),
+        stroke: "#cbd8e4",
+        "stroke-width": "1",
+      }),
+      el("line", {
+        x1: chartLeft.toFixed(2),
+        y1: (height - chartBottom).toFixed(2),
+        x2: (width - chartRight).toFixed(2),
+        y2: (height - chartBottom).toFixed(2),
+        stroke: "#cbd8e4",
+        "stroke-width": "1",
+      }),
       baselinePath ? el("path", { d: baselinePath, fill: "none", stroke: "#6f8498", "stroke-width": "2.2", "stroke-linecap": "round" }) : null,
       el("path", { d: currentPath, fill: "none", stroke: "#1f5d8f", "stroke-width": "2.8", "stroke-linecap": "round" }),
       ...series.map((point, idx) => {
@@ -1066,16 +1126,35 @@ function renderTrendChart(result) {
           fill: "#1f5d8f",
         });
       }),
-      el("text", { x: String(pad + 2), y: String(pad + 4), class: "fw-trend-ylabel", text: compactNumber(maxValue) }),
-      el("text", { x: String(pad + 2), y: String(height - pad - 4), class: "fw-trend-ylabel", text: compactNumber(minValue) }),
+      ...yTicks.map((value) =>
+        el("text", {
+          x: String(chartLeft - 8),
+          y: yFor(value).toFixed(2),
+          class: "fw-trend-ylabel",
+          "text-anchor": "end",
+          "dominant-baseline": "middle",
+          text: formatCurrencyCompact(value),
+        }),
+      ),
     ),
     el(
       "div",
       { className: "fw-trend-axis" },
-      ...series.map((point, idx) =>
-        el("span", { className: "fw-axis-label", text: idx === 0 || idx === series.length - 1 ? point.period_start : "·" }),
+      ...xLabelIndices.map((idx) =>
+        el("span", { className: "fw-axis-label", text: series[idx].period_start }),
       ),
     ),
+    latestPoint
+      ? el(
+          "p",
+          {
+            className: "fw-empty",
+            text: hasBaselineLatest
+              ? `Latest week (${latestPoint.period_start}): ${currentLabel} ${formatCurrencyCompact(latestPoint.current_revenue)} vs ${baselineLabel} ${formatCurrencyCompact(latestPoint.baseline_revenue)} (${compactNumber(latestDeltaPct)}%).`
+              : `Latest week (${latestPoint.period_start}): ${currentLabel} ${formatCurrencyCompact(latestPoint.current_revenue)}.`,
+          },
+        )
+      : null,
   );
 }
 

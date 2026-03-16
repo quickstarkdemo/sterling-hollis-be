@@ -518,9 +518,10 @@ body {
 }
 
 .fw-trend-axis {
-  display: grid;
-  gap: 6px;
-  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
   margin-top: -2px;
 }
 
