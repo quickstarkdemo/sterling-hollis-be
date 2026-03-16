@@ -35,6 +35,10 @@ const state = {
     selectedProductIds: [],
     seedAttemptedCustomerId: null,
   },
+  runtime: {
+    toolOutputApplied: false,
+    userInteracted: false,
+  },
 };
 
 function isObject(value) {
@@ -134,6 +138,22 @@ function applyWorkspacePayload(raw) {
     setNotice(payload.initial_notice);
   }
   return true;
+}
+
+function applyInitialToolOutput(raw, options = {}) {
+  const force = options.force === true;
+  if (!force && (state.runtime.toolOutputApplied || state.runtime.userInteracted)) {
+    return false;
+  }
+  const applied = applyWorkspacePayload(raw);
+  if (applied) {
+    state.runtime.toolOutputApplied = true;
+  }
+  return applied;
+}
+
+function markUserInteraction() {
+  state.runtime.userInteracted = true;
 }
 
 function applyUiWidgetState(raw) {
@@ -391,6 +411,7 @@ function clearRecommendationState() {
 }
 
 function selectCustomerId(customerId) {
+  markUserInteraction();
   if (customerId !== state.ui.selectedCustomerId) {
     state.ui.selectedCustomerId = customerId;
     state.ui.emailTo = "";
@@ -412,6 +433,7 @@ function resolveRowSelection(results) {
 }
 
 async function runSearch() {
+  markUserInteraction();
   const query = state.ui.query.trim();
   if (!query) {
     setNotice("Enter a customer name, email, or phone before searching.", "error");
@@ -511,6 +533,9 @@ function selectedCustomer(results) {
 
 async function loadRecommendations(selected, options = {}) {
   const autoSeed = options.autoSeed === true;
+  if (!autoSeed) {
+    markUserInteraction();
+  }
   if (!selected) {
     setNotice("Select a customer before requesting recommendations.", "error");
     render();
@@ -652,6 +677,7 @@ function syncSelectedProducts(rows, existingSelection = []) {
 }
 
 function toggleSelectedProduct(productId) {
+  markUserInteraction();
   if (!productId) {
     return;
   }
@@ -667,6 +693,7 @@ function toggleSelectedProduct(productId) {
 }
 
 async function sendRecommendationsEmail(selected, response) {
+  markUserInteraction();
   if (!selected) {
     setNotice("Select a customer before sending email.", "error");
     render();
@@ -896,6 +923,7 @@ function render() {
     value: state.ui.query,
     placeholder: state.payload.uiHints.searchPlaceholder,
     onInput: (event) => {
+      markUserInteraction();
       state.ui.query = event.target.value;
       persistWidgetState();
     },
@@ -968,6 +996,7 @@ function render() {
             value: state.ui.occasion,
             placeholder: "wedding, workwear, vacation...",
             onInput: (event) => {
+              markUserInteraction();
               state.ui.occasion = event.target.value;
               persistWidgetState();
             },
@@ -985,6 +1014,7 @@ function render() {
             value: state.ui.budgetMax,
             placeholder: "900",
             onInput: (event) => {
+              markUserInteraction();
               state.ui.budgetMax = event.target.value;
               persistWidgetState();
             },
@@ -1145,6 +1175,7 @@ function render() {
                     value: state.ui.emailTo,
                     placeholder: "customer@example.com",
                     onInput: (event) => {
+                      markUserInteraction();
                       state.ui.emailTo = event.target.value;
                       persistWidgetState();
                     },
@@ -1210,7 +1241,7 @@ function render() {
 
 function boot() {
   applyWorkspacePayload(meta.initialPayload);
-  applyWorkspacePayload(window.openai && window.openai.toolOutput);
+  applyInitialToolOutput(window.openai && window.openai.toolOutput, { force: true });
   loadWidgetState();
   if (!state.ui.query && state.payload.query) {
     state.ui.query = state.payload.query;
@@ -1222,8 +1253,11 @@ window.addEventListener(
   "openai:set_globals",
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
-    // Do not re-apply globals.toolOutput here; widgetState updates can fire
-    // frequently and stale toolOutput snapshots can clobber interactive results.
+    const payloadChanged = applyInitialToolOutput(globals.toolOutput);
+    if (payloadChanged) {
+      render();
+      return;
+    }
     const uiChanged = applyUiWidgetState(globals.widgetState);
     if (uiChanged) {
       render();
