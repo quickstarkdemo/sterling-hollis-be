@@ -7,9 +7,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPLOY_STATE_DIR="$PROJECT_ROOT/.deploy"
 RELEASE_BRIEF_FILE="$DEPLOY_STATE_DIR/release-brief.md"
+RELEASE_BRIEF_USAGE_FILE="$DEPLOY_STATE_DIR/release-brief.last-used.sha256"
 DEPLOY_VERSION_FROM=""
 DEPLOY_VERSION_TO=""
 DEPLOY_VERSION_BUMP_TYPE="unknown"
+DEPLOY_RELEASE_BRIEF_MODE="auto" # auto|always|never
+DEPLOY_VERSION_OVERRIDE=""
+DEPLOY_BUMP_OVERRIDE="patch" # major|minor|patch|none
+DEPLOY_NON_INTERACTIVE=0
+RELEASE_BRIEF_FRESH=0
+RELEASE_BRIEF_CONSUMED=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -85,6 +92,96 @@ Summary:
 EOF
 }
 
+release_brief_hash() {
+  [[ -f "$RELEASE_BRIEF_FILE" ]] || return 0
+  hash_file "$RELEASE_BRIEF_FILE"
+}
+
+detect_release_brief_freshness() {
+  RELEASE_BRIEF_FRESH=0
+  [[ -f "$RELEASE_BRIEF_FILE" ]] || return 0
+
+  local current_hash
+  local previous_hash=""
+  current_hash="$(release_brief_hash)"
+  if [[ -f "$RELEASE_BRIEF_USAGE_FILE" ]]; then
+    previous_hash="$(cut -d ' ' -f1 < "$RELEASE_BRIEF_USAGE_FILE")"
+  fi
+
+  if [[ -z "$previous_hash" || "$previous_hash" != "$current_hash" ]]; then
+    RELEASE_BRIEF_FRESH=1
+  fi
+}
+
+mark_release_brief_used() {
+  [[ -f "$RELEASE_BRIEF_FILE" ]] || return 0
+  local current_hash
+  current_hash="$(release_brief_hash)"
+  mkdir -p "$DEPLOY_STATE_DIR"
+  printf '%s  %s\n' "$current_hash" "$RELEASE_BRIEF_FILE" > "$RELEASE_BRIEF_USAGE_FILE"
+}
+
+should_use_release_brief_for_version() {
+  case "$DEPLOY_RELEASE_BRIEF_MODE" in
+    always) return 0 ;;
+    never) return 1 ;;
+    auto)
+      [[ "$RELEASE_BRIEF_FRESH" -eq 1 ]]
+      return
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+should_use_release_brief_for_commit_text() {
+  case "$DEPLOY_RELEASE_BRIEF_MODE" in
+    always) return 0 ;;
+    never) return 1 ;;
+    auto) return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+release_brief_state_label() {
+  if [[ ! -f "$RELEASE_BRIEF_FILE" ]]; then
+    echo "missing"
+    return
+  fi
+
+  if [[ "$RELEASE_BRIEF_FRESH" -eq 1 ]]; then
+    echo "fresh"
+  else
+    echo "stale"
+  fi
+}
+
+print_run_configuration() {
+  local env_file="$1"
+  local brief_state
+  local brief_text_mode="auto-generated"
+  local version_override
+  local interactive_mode="interactive"
+  local env_display
+  brief_state="$(release_brief_state_label)"
+  if should_use_release_brief_for_commit_text; then
+    brief_text_mode="release-brief"
+  fi
+  if [[ "$DEPLOY_NON_INTERACTIVE" -eq 1 ]]; then
+    interactive_mode="non-interactive"
+  fi
+  version_override="${DEPLOY_VERSION_OVERRIDE:-none}"
+  env_display="$env_file"
+  if [[ "$env_display" == "$PROJECT_ROOT" ]]; then
+    env_display="."
+  elif [[ "$env_display" == "$PROJECT_ROOT/"* ]]; then
+    env_display="${env_display#$PROJECT_ROOT/}"
+  fi
+
+  print_step "Deploy config: env=${env_display}, mode=${interactive_mode}, bump=${DEPLOY_BUMP_OVERRIDE}, version_override=${version_override}, release_brief_mode=${DEPLOY_RELEASE_BRIEF_MODE}, release_brief_state=${brief_state}, commit_text=${brief_text_mode}"
+}
+
 hash_file() {
   local file_path="$1"
 
@@ -132,6 +229,16 @@ env_state_file() {
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-n}"
+  local default_label="no"
+
+  if [[ "$default" == "y" ]]; then
+    default_label="yes"
+  fi
+
+  if [[ "$DEPLOY_NON_INTERACTIVE" -eq 1 ]]; then
+    print_step "Non-interactive: ${prompt} -> ${default_label}"
+    [[ "$default" == "y" ]] && return 0 || return 1
+  fi
 
   if [[ "$default" == "y" ]]; then
     prompt="$prompt [Y/n]: "
@@ -148,6 +255,76 @@ prompt_yes_no() {
         [[ "$default" == "y" ]] && return 0 || return 1
         ;;
       *) echo "Please answer yes or no." ;;
+    esac
+  done
+}
+
+print_usage() {
+  cat <<'EOF'
+Usage: scripts/deploy.sh [env_file] [options]
+
+Options:
+  --env-file <path>         Environment file path (default: .env)
+  --version <x.y.z>         Explicit version override for this run
+  --bump <major|minor|patch|none>
+                            Auto bump strategy when --version is not provided (default: patch)
+  --non-interactive, -y     Run without prompts (uses defaults + generated commit metadata)
+  --use-release-brief       Always use release-brief fields when present
+  --ignore-release-brief    Never use release-brief fields
+  --help                    Show this help
+EOF
+}
+
+parse_args() {
+  DEPLOY_ENV_FILE="$DEFAULT_ENV_FILE"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --env-file)
+        [[ $# -ge 2 ]] || { print_error "Missing value for --env-file"; exit 1; }
+        DEPLOY_ENV_FILE="$2"
+        shift 2
+        ;;
+      --version)
+        [[ $# -ge 2 ]] || { print_error "Missing value for --version"; exit 1; }
+        DEPLOY_VERSION_OVERRIDE="$2"
+        shift 2
+        ;;
+      --bump)
+        [[ $# -ge 2 ]] || { print_error "Missing value for --bump"; exit 1; }
+        DEPLOY_BUMP_OVERRIDE="$2"
+        shift 2
+        ;;
+      --non-interactive|-y)
+        DEPLOY_NON_INTERACTIVE=1
+        shift
+        ;;
+      --use-release-brief)
+        DEPLOY_RELEASE_BRIEF_MODE="always"
+        shift
+        ;;
+      --ignore-release-brief|--no-release-brief)
+        DEPLOY_RELEASE_BRIEF_MODE="never"
+        shift
+        ;;
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      -*)
+        print_error "Unknown option: $1"
+        print_usage
+        exit 1
+        ;;
+      *)
+        if [[ "$DEPLOY_ENV_FILE" == "$DEFAULT_ENV_FILE" ]]; then
+          DEPLOY_ENV_FILE="$1"
+          shift
+        else
+          print_error "Unexpected positional argument: $1"
+          print_usage
+          exit 1
+        fi
+        ;;
     esac
   done
 }
@@ -195,22 +372,64 @@ validate_env_file() {
   done
 }
 
-suggest_next_version() {
+increment_version_by_bump() {
   local version="$1"
+  local bump="$2"
+  local -a parts
+  local idx
+  local i
+  local out
 
   if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
     echo "$version"
     return
   fi
 
-  awk -F. '{
-    $NF = $NF + 1;
-    out = $1;
-    for (i = 2; i <= NF; i += 1) {
-      out = out "." $i;
-    }
-    print out;
-  }' <<< "$version"
+  IFS='.' read -r -a parts <<< "$version"
+  if [[ "${#parts[@]}" -eq 0 ]]; then
+    echo "$version"
+    return
+  fi
+
+  case "$bump" in
+    none)
+      echo "$version"
+      return
+      ;;
+    major)
+      idx=0
+      ;;
+    minor)
+      if [[ "${#parts[@]}" -lt 2 ]]; then
+        parts+=(0)
+      fi
+      idx=1
+      ;;
+    patch)
+      idx=$((${#parts[@]} - 1))
+      ;;
+    *)
+      print_error "Unsupported bump strategy: $bump (expected major|minor|patch|none)"
+      exit 1
+      ;;
+  esac
+
+  parts[$idx]=$((10#${parts[$idx]} + 1))
+  for ((i = idx + 1; i < ${#parts[@]}; i += 1)); do
+    parts[$i]=0
+  done
+
+  out="${parts[0]}"
+  for ((i = 1; i < ${#parts[@]}; i += 1)); do
+    out="${out}.${parts[$i]}"
+  done
+  echo "$out"
+}
+
+suggest_next_version() {
+  local version="$1"
+  local bump="${2:-patch}"
+  increment_version_by_bump "$version" "$bump"
 }
 
 compare_versions() {
@@ -328,32 +547,138 @@ infer_bump_type() {
 set_version() {
   local current_version
   local suggested_version
+  local patch_version
+  local minor_version
+  local major_version
   local release_brief_version
-  local prompt
+  local release_brief_direction=""
+  local release_brief_note=""
+  local default_choice=""
+  local selected_choice=""
+  local new_version
+  local version_source="auto-bump"
   current_version=$(tr -d '[:space:]' < VERSION 2>/dev/null || true)
   current_version="${current_version:-0.1.0}"
-  suggested_version="$(suggest_next_version "$current_version")"
-  release_brief_version="$(read_release_brief_field "Version" || true)"
+  patch_version="$(suggest_next_version "$current_version" "patch")"
+  minor_version="$(suggest_next_version "$current_version" "minor")"
+  major_version="$(suggest_next_version "$current_version" "major")"
+  suggested_version="$(suggest_next_version "$current_version" "$DEPLOY_BUMP_OVERRIDE")"
+  release_brief_version=""
 
-  if [[ -n "$release_brief_version" ]]; then
-    if [[ "$release_brief_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
-      suggested_version="$release_brief_version"
-      print_step "Version hint loaded from .deploy/release-brief.md: $release_brief_version"
-    else
-      print_warning "Ignoring invalid Version in .deploy/release-brief.md: $release_brief_version"
+  if should_use_release_brief_for_version; then
+    release_brief_version="$(read_release_brief_field "Version" || true)"
+    if [[ -n "$release_brief_version" ]]; then
+      if [[ "$release_brief_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+        print_step "Version hint loaded from .deploy/release-brief.md: $release_brief_version"
+        release_brief_direction="$(compare_versions "$current_version" "$release_brief_version")"
+        case "$release_brief_direction" in
+          gt)
+            release_brief_note="ahead"
+            if [[ "$DEPLOY_RELEASE_BRIEF_MODE" == "always" ]]; then
+              suggested_version="$release_brief_version"
+              version_source="release-brief"
+            fi
+            ;;
+          eq)
+            release_brief_note="same as current"
+            if [[ "$DEPLOY_RELEASE_BRIEF_MODE" == "always" ]]; then
+              suggested_version="$release_brief_version"
+              version_source="release-brief"
+            fi
+            ;;
+          lt)
+            release_brief_note="downgrade"
+            if [[ "$DEPLOY_RELEASE_BRIEF_MODE" == "always" ]]; then
+              suggested_version="$release_brief_version"
+              version_source="release-brief"
+            else
+              print_warning "Ignoring release-brief version for auto selection because it would downgrade (${current_version} -> ${release_brief_version})."
+            fi
+            ;;
+        esac
+      else
+        print_warning "Ignoring invalid Version in .deploy/release-brief.md: $release_brief_version"
+        release_brief_version=""
+      fi
     fi
   fi
 
-  if [[ "$suggested_version" == "$current_version" ]]; then
-    prompt="Version [$current_version]: "
-  else
-    prompt="Version [$suggested_version] (current: $current_version, '=' to keep current): "
+  if [[ -n "$DEPLOY_VERSION_OVERRIDE" ]]; then
+    suggested_version="$DEPLOY_VERSION_OVERRIDE"
+    version_source="cli-override"
   fi
 
-  read -r -p "$prompt" new_version
-  new_version="${new_version:-$suggested_version}"
-  if [[ "$new_version" == "=" ]]; then
-    new_version="$current_version"
+  if [[ -z "$DEPLOY_VERSION_OVERRIDE" && -t 0 && "$DEPLOY_NON_INTERACTIVE" -eq 0 ]]; then
+    case "$version_source" in
+      release-brief) default_choice="5" ;;
+      auto-bump)
+        case "$DEPLOY_BUMP_OVERRIDE" in
+          major) default_choice="3" ;;
+          minor) default_choice="2" ;;
+          none) default_choice="4" ;;
+          *) default_choice="1" ;;
+        esac
+        ;;
+      *) default_choice="1" ;;
+    esac
+
+    echo ""
+    print_step "SemVer version selection:"
+    echo "  Current: ${current_version}"
+    echo "  1) patch  -> ${patch_version} (backward-compatible fixes)"
+    echo "  2) minor  -> ${minor_version} (backward-compatible features)"
+    echo "  3) major  -> ${major_version} (breaking changes)"
+    echo "  4) keep   -> ${current_version} (no version bump)"
+    if [[ -n "$release_brief_version" ]]; then
+      echo "  5) release-brief -> ${release_brief_version} (${release_brief_note:-from release brief})"
+    else
+      echo "  5) release-brief -> unavailable"
+    fi
+    echo "  6) custom version"
+    read -r -p "Select option [${default_choice}]: " selected_choice
+    selected_choice="${selected_choice:-$default_choice}"
+
+    case "$selected_choice" in
+      1)
+        suggested_version="$patch_version"
+        version_source="semver-patch"
+        ;;
+      2)
+        suggested_version="$minor_version"
+        version_source="semver-minor"
+        ;;
+      3)
+        suggested_version="$major_version"
+        version_source="semver-major"
+        ;;
+      4)
+        suggested_version="$current_version"
+        version_source="keep-current"
+        ;;
+      5)
+        if [[ -z "$release_brief_version" ]]; then
+          print_error "Release-brief version is unavailable."
+          exit 1
+        fi
+        suggested_version="$release_brief_version"
+        version_source="release-brief"
+        RELEASE_BRIEF_CONSUMED=1
+        ;;
+      6)
+        read -r -p "Enter custom version [${suggested_version}]: " new_version
+        suggested_version="${new_version:-$suggested_version}"
+        version_source="custom"
+        ;;
+      *)
+        print_error "Invalid version selection: ${selected_choice}"
+        exit 1
+        ;;
+    esac
+  fi
+
+  new_version="$suggested_version"
+  if [[ "$version_source" == "release-brief" ]]; then
+    RELEASE_BRIEF_CONSUMED=1
   fi
 
   if [[ ! "$new_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
@@ -363,7 +688,7 @@ set_version() {
 
   local bump_type
   bump_type="$(infer_bump_type "$current_version" "$new_version")"
-  print_step "Detected version bump type: $bump_type ($current_version -> $new_version)"
+  print_step "Detected version bump type: $bump_type ($current_version -> $new_version) via $version_source"
 
   case "$bump_type" in
     downgrade)
@@ -428,10 +753,13 @@ upload_secrets() {
 
 generate_commit_message() {
   local release_brief_commit
-  release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
-  if [[ -n "$release_brief_commit" ]]; then
-    echo "$release_brief_commit"
-    return
+  if should_use_release_brief_for_commit_text; then
+    release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
+    if [[ -n "$release_brief_commit" ]]; then
+      RELEASE_BRIEF_CONSUMED=1
+      echo "$release_brief_commit"
+      return
+    fi
   fi
 
   local staged_files
@@ -525,6 +853,38 @@ generate_commit_message() {
   fi
 }
 
+generate_staged_summary() {
+  local staged_status
+  local line_count=0
+  local summary=""
+  local status
+  local path
+  local rest
+
+  staged_status="$(git diff --cached --name-status)"
+  while IFS=$'\t' read -r status path rest; do
+    [[ -z "$status" ]] && continue
+    case "$status" in
+      A) summary="${summary}- Added ${path}\n" ;;
+      M) summary="${summary}- Updated ${path}\n" ;;
+      D) summary="${summary}- Removed ${path}\n" ;;
+      R*) summary="${summary}- Renamed ${path} -> ${rest}\n" ;;
+      *) summary="${summary}- Changed ${path}\n" ;;
+    esac
+    ((line_count += 1))
+    if [[ "$line_count" -ge 8 ]]; then
+      break
+    fi
+  done <<< "$staged_status"
+
+  if [[ "$line_count" -eq 0 ]]; then
+    echo "- No staged file summary available."
+    return
+  fi
+
+  printf '%b' "$summary"
+}
+
 generate_commit_body() {
   local summary_text
   local current_version
@@ -533,7 +893,15 @@ generate_commit_body() {
   local metadata_block
   local body=""
 
-  summary_text="$(read_release_brief_summary || true)"
+  if should_use_release_brief_for_commit_text; then
+    summary_text="$(read_release_brief_summary || true)"
+    if [[ -n "$summary_text" ]]; then
+      RELEASE_BRIEF_CONSUMED=1
+    fi
+  fi
+  if [[ -z "$summary_text" ]]; then
+    summary_text="$(generate_staged_summary)"
+  fi
   current_version="$(tr -d '[:space:]' < VERSION 2>/dev/null || true)"
   staged_count="$(git diff --cached --name-only | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
   staged_paths="$(git diff --cached --name-only | sed '/^[[:space:]]*$/d' | head -n 8 | sed 's/^/- /')"
@@ -716,8 +1084,11 @@ commit_and_push() {
   auto_commit_message="$(generate_commit_message)"
   auto_commit_body="$(generate_commit_body)"
   local release_brief_commit
-  release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
-  if [[ -n "$release_brief_commit" ]]; then
+  release_brief_commit=""
+  if should_use_release_brief_for_commit_text; then
+    release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
+  fi
+  if [[ -n "$release_brief_commit" && "$auto_commit_message" == "$release_brief_commit" ]]; then
     print_step "Commit subject loaded from .deploy/release-brief.md"
   fi
   deploy_notes_file="$(write_deploy_notes "$auto_commit_message" "$auto_commit_body")"
@@ -727,9 +1098,14 @@ commit_and_push() {
     print_step "AI commit body preview:"
     printf '%s\n' "$auto_commit_body"
   fi
-  echo ""
-  read -r -p "Commit message [$auto_commit_message]: " commit_message
-  commit_message="${commit_message:-$auto_commit_message}"
+  if [[ "$DEPLOY_NON_INTERACTIVE" -eq 1 ]]; then
+    commit_message="$auto_commit_message"
+    print_step "Non-interactive: using generated commit message."
+  else
+    echo ""
+    read -r -p "Commit message [$auto_commit_message]: " commit_message
+    commit_message="${commit_message:-$auto_commit_message}"
+  fi
 
   if [[ -n "$auto_commit_body" ]]; then
     git commit -m "$commit_message" -m "$auto_commit_body"
@@ -737,6 +1113,9 @@ commit_and_push() {
     git commit -m "$commit_message"
   fi
   git push origin "$(git branch --show-current)"
+  if [[ "$RELEASE_BRIEF_CONSUMED" -eq 1 ]]; then
+    mark_release_brief_used
+  fi
   deploy_history_file="$(append_deploy_history "$commit_message")"
   print_step "Updated deploy history: ${deploy_history_file#$PROJECT_ROOT/}"
 }
@@ -744,7 +1123,8 @@ commit_and_push() {
 main() {
   cd "$PROJECT_ROOT"
 
-  local env_file="${1:-$DEFAULT_ENV_FILE}"
+  parse_args "$@"
+  local env_file="$DEPLOY_ENV_FILE"
 
   if [[ ! -f "$env_file" ]]; then
     print_error "Environment file not found: $env_file"
@@ -753,6 +1133,13 @@ main() {
 
   check_prerequisites
   ensure_release_brief_file
+  detect_release_brief_freshness
+  print_run_configuration "$env_file"
+  if [[ "$DEPLOY_RELEASE_BRIEF_MODE" == "auto" && "$RELEASE_BRIEF_FRESH" -eq 0 ]]; then
+    print_step "Release brief unchanged since last use; using auto-generated version/message/body."
+  elif [[ "$DEPLOY_RELEASE_BRIEF_MODE" == "auto" && "$RELEASE_BRIEF_FRESH" -eq 1 ]]; then
+    print_step "Release brief is fresh; using it as a version hint only. Commit message/body will be auto-generated unless --use-release-brief is passed."
+  fi
   validate_env_file "$env_file"
   set_version
   upload_secrets "$env_file"
