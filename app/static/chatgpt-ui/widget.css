@@ -530,6 +530,12 @@ body {
   text-align: center;
 }
 
+.fw-trend-ylabel {
+  fill: #607183;
+  font-size: 11px;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
 @media (max-width: 760px) {
   .fashion-widget-shell {
     padding: 10px;

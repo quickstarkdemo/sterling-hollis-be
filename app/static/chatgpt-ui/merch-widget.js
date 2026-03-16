@@ -773,6 +773,23 @@ function kpi(label, value) {
   );
 }
 
+function activeStoreName(result) {
+  if (result && result.store && typeof result.store.name === "string" && result.store.name.trim()) {
+    return result.store.name.trim();
+  }
+  if (state.payload.store && typeof state.payload.store.name === "string" && state.payload.store.name.trim()) {
+    return state.payload.store.name.trim();
+  }
+  return "Current Store";
+}
+
+function peerBoxLabel(result) {
+  if (result && typeof result.compare_store_name === "string" && result.compare_store_name.trim()) {
+    return result.compare_store_name.trim();
+  }
+  return "Peer";
+}
+
 function renderActions(result) {
   const items = Array.isArray(result?.recommendations) ? result.recommendations : [];
   if (!items.length) {
@@ -880,6 +897,8 @@ function renderDiagnostics(result) {
   if (!items.length) {
     return el("p", { className: "fw-empty", text: state.payload.uiHints.emptyState });
   }
+  const currentLabel = activeStoreName(result);
+  const peerLabel = peerBoxLabel(result);
   return el(
     "div",
     { className: "fw-list" },
@@ -898,22 +917,22 @@ function renderDiagnostics(result) {
         el(
           "div",
           { className: "fw-kpi-strip" },
-          kpi("Current", compactNumber(item.current_value)),
-          kpi("Peer", compactNumber(item.peer_value)),
+          kpi(currentLabel, compactNumber(item.current_value)),
+          kpi(peerLabel, compactNumber(item.peer_value)),
           kpi("Prior", compactNumber(item.prior_value)),
         ),
         el(
           "div",
           { className: "fw-kpi-strip" },
-          kpi("Current Units", compactNumber(item.current_units)),
-          kpi("Peer Units", compactNumber(item.peer_units)),
+          kpi(`${currentLabel} Units`, compactNumber(item.current_units)),
+          kpi(`${peerLabel} Units`, compactNumber(item.peer_units)),
           kpi("Prior Units", compactNumber(item.prior_units)),
         ),
         el(
           "div",
           { className: "fw-kpi-strip" },
-          kpi("Current Margin", compactNumber(item.current_margin_pct)),
-          kpi("Peer Margin", compactNumber(item.peer_margin_pct)),
+          kpi(`${currentLabel} Margin`, compactNumber(item.current_margin_pct)),
+          kpi(`${peerLabel} Margin`, compactNumber(item.peer_margin_pct)),
           kpi("Prior Margin", compactNumber(item.prior_margin_pct)),
         ),
       ),
@@ -926,34 +945,64 @@ function renderTrendChart(result) {
   if (!points.length) {
     return null;
   }
+  const series = points.map((point) => {
+    const currentRevenue = Number(point?.current_revenue);
+    const baselineRevenue =
+      point?.baseline_revenue === null || point?.baseline_revenue === undefined ? null : Number(point?.baseline_revenue);
+    return {
+      period_start: typeof point?.period_start === "string" ? point.period_start : "",
+      current_revenue: Number.isFinite(currentRevenue) ? currentRevenue : null,
+      baseline_revenue: baselineRevenue !== null && Number.isFinite(baselineRevenue) ? baselineRevenue : null,
+    };
+  });
+
+  const finiteValues = series
+    .flatMap((point) => [point.current_revenue, point.baseline_revenue])
+    .filter((value) => value !== null && Number.isFinite(value));
+  if (!finiteValues.length) {
+    return null;
+  }
+
   const width = 760;
   const height = 220;
   const pad = 24;
-  const currentValues = points.map((point) => Number(point.current_revenue || 0));
-  const baselineValues = points
-    .map((point) => (point.baseline_revenue === null || point.baseline_revenue === undefined ? null : Number(point.baseline_revenue)))
-    .filter((value) => value !== null && Number.isFinite(value));
-  const allValues = [...currentValues, ...baselineValues];
-  const minValue = Math.min(...allValues);
-  const maxValue = Math.max(...allValues);
+  let minValue = Math.min(...finiteValues);
+  let maxValue = Math.max(...finiteValues);
+  if (maxValue === minValue) {
+    const padding = Math.max(Math.abs(maxValue) * 0.05, 1);
+    minValue -= padding;
+    maxValue += padding;
+  }
   const span = Math.max(maxValue - minValue, 1);
 
   const xFor = (idx) => {
-    if (points.length <= 1) {
+    if (series.length <= 1) {
       return pad;
     }
-    return pad + (idx / (points.length - 1)) * (width - pad * 2);
+    return pad + (idx / (series.length - 1)) * (width - pad * 2);
   };
   const yFor = (value) => {
-    const normalized = (Number(value || 0) - minValue) / span;
+    const normalized = (Number(value) - minValue) / span;
     return height - pad - normalized * (height - pad * 2);
   };
 
-  const currentPath = points
-    .map((point, idx) => `${idx === 0 ? "M" : "L"} ${xFor(idx).toFixed(2)} ${yFor(point.current_revenue).toFixed(2)}`)
-    .join(" ");
+  const buildPath = (field) => {
+    const segments = [];
+    let started = false;
+    series.forEach((point, idx) => {
+      const value = point[field];
+      if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+        return;
+      }
+      segments.push(`${started ? "L" : "M"} ${xFor(idx).toFixed(2)} ${yFor(value).toFixed(2)}`);
+      started = true;
+    });
+    return segments.join(" ");
+  };
+
+  const currentPath = buildPath("current_revenue");
   let baselineStarted = false;
-  const baselinePath = points
+  const baselinePath = series
     .map((point, idx) => {
       const value = point.baseline_revenue;
       if (value === null || value === undefined) {
@@ -965,6 +1014,13 @@ function renderTrendChart(result) {
     })
     .filter(Boolean)
     .join(" ");
+  const currentLabel = activeStoreName(result);
+  const baselineLabel =
+    result?.compare_mode === "prior_period"
+      ? "Prior Period"
+      : result?.compare_store_name
+        ? result.compare_store_name
+        : "Peer Set";
 
   return el(
     "section",
@@ -973,8 +1029,8 @@ function renderTrendChart(result) {
     el(
       "div",
       { className: "fw-trend-legend" },
-      el("span", { className: "fw-chip", text: "Current Store" }),
-      baselinePath ? el("span", { className: "fw-chip subtle", text: "Baseline" }) : null,
+      el("span", { className: "fw-chip", text: currentLabel }),
+      baselinePath ? el("span", { className: "fw-chip subtle", text: baselineLabel }) : null,
     ),
     el(
       "svg",
@@ -988,12 +1044,36 @@ function renderTrendChart(result) {
       el("line", { x1: pad, y1: pad, x2: pad, y2: height - pad, stroke: "#cbd8e4", "stroke-width": "1" }),
       baselinePath ? el("path", { d: baselinePath, fill: "none", stroke: "#6f8498", "stroke-width": "2.2", "stroke-linecap": "round" }) : null,
       el("path", { d: currentPath, fill: "none", stroke: "#1f5d8f", "stroke-width": "2.8", "stroke-linecap": "round" }),
+      ...series.map((point, idx) => {
+        if (point.baseline_revenue === null || point.baseline_revenue === undefined) {
+          return null;
+        }
+        return el("circle", {
+          cx: xFor(idx).toFixed(2),
+          cy: yFor(point.baseline_revenue).toFixed(2),
+          r: "2.2",
+          fill: "#6f8498",
+        });
+      }),
+      ...series.map((point, idx) => {
+        if (point.current_revenue === null || point.current_revenue === undefined) {
+          return null;
+        }
+        return el("circle", {
+          cx: xFor(idx).toFixed(2),
+          cy: yFor(point.current_revenue).toFixed(2),
+          r: "2.8",
+          fill: "#1f5d8f",
+        });
+      }),
+      el("text", { x: String(pad + 2), y: String(pad + 4), class: "fw-trend-ylabel", text: compactNumber(maxValue) }),
+      el("text", { x: String(pad + 2), y: String(height - pad - 4), class: "fw-trend-ylabel", text: compactNumber(minValue) }),
     ),
     el(
       "div",
       { className: "fw-trend-axis" },
-      ...points.map((point, idx) =>
-        el("span", { className: "fw-axis-label", text: idx === 0 || idx === points.length - 1 ? point.period_start : "·" }),
+      ...series.map((point, idx) =>
+        el("span", { className: "fw-axis-label", text: idx === 0 || idx === series.length - 1 ? point.period_start : "·" }),
       ),
     ),
   );
@@ -1023,8 +1103,8 @@ function renderTrends(result) {
         el(
           "div",
           { className: "fw-kpi-strip" },
-          kpi("Current", compactNumber(item.current_value)),
-          kpi("Peer", compactNumber(item.peer_value)),
+          kpi(activeStoreName(result), compactNumber(item.current_value)),
+          kpi(peerBoxLabel(result), compactNumber(item.peer_value)),
           kpi("Prior", compactNumber(item.prior_value)),
         ),
       ),

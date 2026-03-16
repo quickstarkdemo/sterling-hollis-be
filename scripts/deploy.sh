@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPLOY_STATE_DIR="$PROJECT_ROOT/.deploy"
 RELEASE_BRIEF_FILE="$DEPLOY_STATE_DIR/release-brief.md"
+DEPLOY_VERSION_FROM=""
+DEPLOY_VERSION_TO=""
+DEPLOY_VERSION_BUMP_TYPE="unknown"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -210,6 +213,118 @@ suggest_next_version() {
   }' <<< "$version"
 }
 
+compare_versions() {
+  local current="$1"
+  local target="$2"
+  local -a current_parts target_parts
+  local max_len=0
+  local i
+
+  IFS='.' read -r -a current_parts <<< "$current"
+  IFS='.' read -r -a target_parts <<< "$target"
+
+  if [[ "${#target_parts[@]}" -gt "$max_len" ]]; then
+    max_len="${#target_parts[@]}"
+  fi
+  if [[ "${#current_parts[@]}" -gt "$max_len" ]]; then
+    max_len="${#current_parts[@]}"
+  fi
+
+  for ((i = 0; i < max_len; i += 1)); do
+    local cur_part="${current_parts[$i]:-0}"
+    local new_part="${target_parts[$i]:-0}"
+    if ((10#$new_part > 10#$cur_part)); then
+      echo "gt"
+      return
+    fi
+    if ((10#$new_part < 10#$cur_part)); then
+      echo "lt"
+      return
+    fi
+  done
+
+  echo "eq"
+}
+
+infer_bump_type() {
+  local current="$1"
+  local target="$2"
+  local direction
+  local -a current_parts target_parts
+  local max_len=0
+  local first_diff=-1
+  local i
+
+  if [[ ! "$current" =~ ^[0-9]+(\.[0-9]+)+$ || ! "$target" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    echo "custom"
+    return
+  fi
+
+  direction="$(compare_versions "$current" "$target")"
+  if [[ "$direction" == "eq" ]]; then
+    echo "unchanged"
+    return
+  fi
+  if [[ "$direction" == "lt" ]]; then
+    echo "downgrade"
+    return
+  fi
+
+  IFS='.' read -r -a current_parts <<< "$current"
+  IFS='.' read -r -a target_parts <<< "$target"
+
+  if [[ "${#target_parts[@]}" -gt "$max_len" ]]; then
+    max_len="${#target_parts[@]}"
+  fi
+  if [[ "${#current_parts[@]}" -gt "$max_len" ]]; then
+    max_len="${#current_parts[@]}"
+  fi
+
+  for ((i = 0; i < max_len; i += 1)); do
+    local cur_part="${current_parts[$i]:-0}"
+    local new_part="${target_parts[$i]:-0}"
+    if ((10#$new_part != 10#$cur_part)); then
+      first_diff="$i"
+      break
+    fi
+  done
+
+  if [[ "$first_diff" -lt 0 ]]; then
+    echo "custom"
+    return
+  fi
+
+  if [[ "$first_diff" -eq 0 ]]; then
+    for ((i = 1; i < max_len; i += 1)); do
+      if ((10#${target_parts[$i]:-0} != 0)); then
+        echo "custom"
+        return
+      fi
+    done
+    echo "major"
+    return
+  fi
+
+  if [[ "$first_diff" -eq 1 ]]; then
+    for ((i = 2; i < max_len; i += 1)); do
+      if ((10#${target_parts[$i]:-0} != 0)); then
+        echo "custom"
+        return
+      fi
+    done
+    echo "minor"
+    return
+  fi
+
+  for ((i = first_diff + 1; i < max_len; i += 1)); do
+    if ((10#${target_parts[$i]:-0} != 0)); then
+      echo "custom"
+      return
+    fi
+  done
+  echo "patch"
+}
+
 set_version() {
   local current_version
   local suggested_version
@@ -245,6 +360,38 @@ set_version() {
     print_error "Invalid version format: $new_version (expected dot-separated numeric segments)"
     exit 1
   fi
+
+  local bump_type
+  bump_type="$(infer_bump_type "$current_version" "$new_version")"
+  print_step "Detected version bump type: $bump_type ($current_version -> $new_version)"
+
+  case "$bump_type" in
+    downgrade)
+      print_warning "Selected version is lower than current."
+      if ! prompt_yes_no "Continue with downgrade?" "n"; then
+        print_error "Version downgrade cancelled."
+        exit 1
+      fi
+      ;;
+    major)
+      print_warning "Major bump detected."
+      if ! prompt_yes_no "Continue with major bump?" "y"; then
+        print_error "Major version bump cancelled."
+        exit 1
+      fi
+      ;;
+    custom)
+      print_warning "Custom multi-segment bump detected."
+      if ! prompt_yes_no "Continue with custom bump?" "y"; then
+        print_error "Custom version bump cancelled."
+        exit 1
+      fi
+      ;;
+  esac
+
+  DEPLOY_VERSION_FROM="$current_version"
+  DEPLOY_VERSION_TO="$new_version"
+  DEPLOY_VERSION_BUMP_TYPE="$bump_type"
 
   if [[ "$new_version" != "$current_version" ]]; then
     echo "$new_version" > VERSION
@@ -399,6 +546,10 @@ $summary_text"
   metadata_block="Release metadata:
 - version: ${current_version:-n/a}
 - staged files: ${staged_count:-0}"
+  if [[ -n "$DEPLOY_VERSION_BUMP_TYPE" && "$DEPLOY_VERSION_BUMP_TYPE" != "unknown" ]]; then
+    metadata_block="${metadata_block}
+- version bump: ${DEPLOY_VERSION_BUMP_TYPE} (${DEPLOY_VERSION_FROM:-$current_version} -> ${DEPLOY_VERSION_TO:-$current_version})"
+  fi
   if [[ -n "$staged_paths" ]]; then
     metadata_block="${metadata_block}
 - paths:
@@ -442,6 +593,9 @@ write_deploy_notes() {
     echo "- Base SHA: ${base_sha}"
     if [[ -n "$current_version" ]]; then
       echo "- Version: ${current_version}"
+    fi
+    if [[ -n "$DEPLOY_VERSION_BUMP_TYPE" && "$DEPLOY_VERSION_BUMP_TYPE" != "unknown" ]]; then
+      echo "- Version bump: ${DEPLOY_VERSION_BUMP_TYPE} (${DEPLOY_VERSION_FROM:-$current_version} -> ${DEPLOY_VERSION_TO:-$current_version})"
     fi
     echo "- Proposed commit: ${commit_subject}"
     echo "- Diff summary: ${shortstat}"
@@ -493,6 +647,9 @@ append_deploy_history() {
     echo "- Commit: ${head_sha}"
     if [[ -n "$current_version" ]]; then
       echo "- Version: ${current_version}"
+    fi
+    if [[ -n "$DEPLOY_VERSION_BUMP_TYPE" && "$DEPLOY_VERSION_BUMP_TYPE" != "unknown" ]]; then
+      echo "- Version bump: ${DEPLOY_VERSION_BUMP_TYPE} (${DEPLOY_VERSION_FROM:-$current_version} -> ${DEPLOY_VERSION_TO:-$current_version})"
     fi
     echo "- Summary: ${shortstat}"
     echo "- Files:"
