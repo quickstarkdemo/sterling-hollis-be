@@ -14,6 +14,7 @@ from app.schemas import (
     ProductRecommendation,
     RetrievalMode,
 )
+from app.services.customer_preferences import normalize_customer_sex, top_style_categories
 from app.services.embeddings import EmbeddingService
 from app.services.demo_assets import demo_image_url
 from app.services.pinecone_service import PineconeService
@@ -27,19 +28,6 @@ def _safe_json(raw: str | None) -> dict:
         return json.loads(raw)
     except Exception:
         return {}
-
-
-def _normalize_sex(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = value.strip().lower()
-    if normalized in {"male", "man", "m"}:
-        return "male"
-    if normalized in {"female", "woman", "f"}:
-        return "female"
-    if normalized in {"nonbinary", "non-binary", "nb", "other"}:
-        return "nonbinary"
-    return normalized or None
 
 
 def _gender_alignment_score(customer_sex: str | None, product_gender: str | None) -> tuple[float, str | None]:
@@ -78,7 +66,7 @@ def _build_customer_query_context(db: Session, req: CustomerRecommendationReques
         if customer:
             parts.append(f"Loyalty tier: {customer.loyalty_tier}")
             parts.append(f"Price sensitivity: {customer.price_sensitivity}")
-            customer_sex = _normalize_sex(customer.sex)
+            customer_sex = normalize_customer_sex(customer.sex)
             if customer_sex:
                 parts.append(f"Customer sex: {customer_sex}")
             style = customer.style_vector if isinstance(customer.style_vector, dict) else _safe_json(customer.style_vector)
@@ -173,9 +161,9 @@ def customer_recommendations(
     if req.customer_id:
         customer = db.get(Customer, req.customer_id)
         if customer:
-            customer_sex = _normalize_sex(customer.sex)
+            customer_sex = normalize_customer_sex(customer.sex)
             style = customer.style_vector if isinstance(customer.style_vector, dict) else _safe_json(customer.style_vector)
-            preferred_categories = {str(category) for category, _ in sorted(style.items(), key=lambda x: x[1], reverse=True)[:3]}
+            preferred_categories = set(top_style_categories(style, customer_sex, limit=3))
         brand_rows = db.execute(
             select(Product.brand, func.count(OrderItem.id).label("cnt"))
             .join(OrderItem, OrderItem.product_id == Product.id)

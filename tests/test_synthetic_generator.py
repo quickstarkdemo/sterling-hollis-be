@@ -15,6 +15,7 @@ from app.services.synthetic_generator import (
     GenerationVolumes,
     generate_synthetic_dataset,
 )
+from app.services.customer_preferences import top_style_categories
 
 
 def _sample_stores(run_id: str) -> list[dict]:
@@ -181,3 +182,16 @@ def test_customers_include_unique_phones_and_demo_customer(tmp_path: Path):
     demo_customer = next(customer for customer in customers if customer["id"] == DEMO_CUSTOMER_ID)
     style_vector = json.loads(demo_customer["style_vector"])
     assert style_vector["mens_apparel"] > style_vector["womens_apparel"]
+    assert "womens_apparel" not in top_style_categories(style_vector, "male", limit=3)
+
+    sampled = customers[:30]
+    for customer in sampled:
+        sex = customer.get("sex")
+        if sex not in {"male", "female"}:
+            continue
+        style = json.loads(customer["style_vector"])
+        top = top_style_categories(style, sex, limit=3)
+        if sex == "male":
+            assert "womens_apparel" not in top
+        if sex == "female":
+            assert "mens_apparel" not in top

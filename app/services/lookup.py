@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Customer, Store
 from app.schemas import CustomerSearchResponse, CustomerSearchResult, ResolvedCustomer, ResolvedStore
+from app.services.customer_preferences import normalize_customer_sex, top_style_categories
 from app.services.demo_customer import (
     DEMO_CUSTOMER_EMAIL,
     DEMO_CUSTOMER_FIRST_NAME,
@@ -95,6 +96,7 @@ def _resolved_customer(customer: Customer, home_store: Store | None, match_reaso
         last_name = DEMO_CUSTOMER_LAST_NAME
         email = DEMO_CUSTOMER_EMAIL
         sex = DEMO_CUSTOMER_SEX
+    normalized_sex = normalize_customer_sex(sex)
     style_vector = _json_dict(customer.style_vector)
     occasion_affinity = _json_dict(customer.occasion_affinity)
     size_preferences = _json_dict(customer.size_preferences)
@@ -109,8 +111,8 @@ def _resolved_customer(customer: Customer, home_store: Store | None, match_reaso
         home_store_id=customer.home_store_id,
         home_store_name=home_store.name if home_store else customer.home_store_id,
         loyalty_tier=customer.loyalty_tier,
-        sex=sex,
-        preferred_categories=_top_keys(style_vector, limit=3),
+        sex=normalized_sex,
+        preferred_categories=top_style_categories(style_vector, normalized_sex, limit=3),
         preferred_occasions=_top_keys(occasion_affinity, limit=3),
         size_preferences=cleaned_size_preferences,
         match_reason=match_reason,

@@ -111,7 +111,7 @@ def _seed_data(session):
         sex="male",
         price_sensitivity=Decimal("0.4200"),
         occasion_affinity={"wedding": 0.8, "workwear": 0.9, "vacation": 0.6},
-        style_vector={"mens_apparel": 0.95, "shoes": 0.7, "jewelry_accessories": 0.5, "womens_apparel": 0.2},
+        style_vector={"womens_apparel": 0.99, "beauty": 0.92, "mens_apparel": 0.85, "shoes": 0.7},
         size_preferences={"top": "M", "bottom": "8", "shoe": "8"},
         channel_preference="hybrid",
         pii_token="token-1",
@@ -131,7 +131,7 @@ def _seed_data(session):
         sex="female",
         price_sensitivity=Decimal("0.5100"),
         occasion_affinity={"wedding": 0.5},
-        style_vector={"womens_apparel": 0.6, "handbags": 0.7},
+        style_vector={"mens_apparel": 0.98, "womens_apparel": 0.75, "handbags": 0.7, "beauty": 0.66},
         size_preferences={"top": "S", "bottom": "6", "shoe": "7"},
         channel_preference="in_store",
         pii_token="token-2",
@@ -344,15 +344,20 @@ def test_customer_lookup_supports_name_email_and_phone(monkeypatch):
         resolved_by_email = resolve_customer(session, email="avery.parker.1@example-fashion.test").resolved
         resolved_by_phone = resolve_customer(session, phone_e164="+12145551234").resolved
         resolved_by_last4 = resolve_customer(session, phone_last4="1234").resolved
+        resolved_customer_two = resolve_customer(session, customer_id="cust_000002").resolved
         store = resolve_store(session, store_query="Dallas").resolved
 
         assert resolved_by_email.id == "cust_000001"
         assert resolved_by_phone.id == "cust_000001"
         assert resolved_by_last4.phone_e164 == "+12145551234"
         assert resolved_by_email.sex == "male"
-        assert resolved_by_email.preferred_categories[:2] == ["mens_apparel", "shoes"]
+        assert "womens_apparel" not in resolved_by_email.preferred_categories
+        assert resolved_by_email.preferred_categories[:2] == ["beauty", "mens_apparel"]
         assert resolved_by_email.preferred_occasions[:2] == ["workwear", "wedding"]
         assert resolved_by_email.size_preferences["top"] == "M"
+        assert resolved_customer_two.sex == "female"
+        assert "mens_apparel" not in resolved_customer_two.preferred_categories
+        assert resolved_customer_two.preferred_categories[:2] == ["womens_apparel", "handbags"]
         assert store.id == "1001"
 
 
