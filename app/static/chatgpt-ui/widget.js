@@ -41,6 +41,7 @@ const state = {
     isUpdatingEmailDraft: false,
     selectedProductIds: [],
     seedAttemptedCustomerId: null,
+    seedAttemptedDraftCustomerId: null,
   },
   runtime: {
     toolOutputApplied: false,
@@ -443,6 +444,7 @@ function clearRecommendationState() {
   state.recommendation.isUpdatingEmailDraft = false;
   state.recommendation.selectedProductIds = [];
   state.recommendation.seedAttemptedCustomerId = null;
+  state.recommendation.seedAttemptedDraftCustomerId = null;
   state.ui.emailDraftId = null;
   state.ui.emailSubject = "";
   state.ui.emailBody = "";
@@ -832,8 +834,11 @@ async function prepareEmailDraft(selected, options = {}) {
     return null;
   }
 
+  const quiet = options.quiet === true;
   state.recommendation.isPreparingEmailDraft = true;
-  setNotice(options.silent ? "Preparing draft..." : `Preparing draft for ${selected.full_name || selected.id}...`);
+  if (!quiet) {
+    setNotice(options.silent ? "Preparing draft..." : `Preparing draft for ${selected.full_name || selected.id}...`);
+  }
   persistWidgetState();
   render();
 
@@ -851,7 +856,7 @@ async function prepareEmailDraft(selected, options = {}) {
     return null;
   }
   applyEmailDraftResponse(selected, response);
-  if (!options.silent) {
+  if (!options.silent && !quiet) {
     setNotice(`Prepared email draft ${response.message.id}.`);
   }
   render();
@@ -955,7 +960,7 @@ function buildCanvasHandoffPrompt(selected, draftResponse) {
     : "- Use selected products from draft context.";
   const occasionText = state.ui.occasion.trim() || "none";
   return [
-    "Open a Canvas document and draft an outbound customer recommendation email using the context below.",
+    "Open Canvas now and draft an outbound customer recommendation email from the context below.",
     "",
     "After editing in Canvas, persist the final draft by calling `fashion_update_customer_email_draft` with:",
     `- message_id: ${draftResponse.message.id}`,
@@ -998,7 +1003,9 @@ async function composeInCanvas(selected) {
     render();
     return;
   }
-  setNotice(`Sent draft ${draft.message.id} to chat for Canvas editing.`);
+  setNotice(
+    `Posted Canvas handoff for draft ${draft.message.id}. If Canvas does not open automatically, ask chat: "Open canvas for draft ${draft.message.id}".`,
+  );
   render();
 }
 
@@ -1070,6 +1077,45 @@ function queueSeedRecommendations(selected) {
       return;
     }
     void loadRecommendations(activeSelected, { autoSeed: true });
+  }, 0);
+}
+
+function queueSeedEmailDraft(selected) {
+  if (!selected || !selected.id) {
+    return;
+  }
+  if (
+    state.recommendation.isPreparingEmailDraft ||
+    state.recommendation.isRefreshingEmailDraft ||
+    state.recommendation.isUpdatingEmailDraft ||
+    state.recommendation.isSendingEmailDraft
+  ) {
+    return;
+  }
+  if (state.ui.emailDraftId) {
+    return;
+  }
+  const response = state.recommendation.customerId === selected.id ? state.recommendation.response : null;
+  if (!response || !recommendationRows(response).length) {
+    return;
+  }
+  const destination = (state.ui.emailTo || selected.email || "").trim();
+  if (!destination) {
+    return;
+  }
+  if (state.recommendation.seedAttemptedDraftCustomerId === selected.id) {
+    return;
+  }
+  state.recommendation.seedAttemptedDraftCustomerId = selected.id;
+  window.setTimeout(() => {
+    const activeSelected = selectedCustomer(Array.isArray(state.payload.results) ? state.payload.results : []);
+    if (!activeSelected || activeSelected.id !== selected.id) {
+      return;
+    }
+    if (state.ui.emailDraftId || state.recommendation.isPreparingEmailDraft) {
+      return;
+    }
+    void prepareEmailDraft(activeSelected, { includeMessageId: false, silent: true, quiet: true });
   }, 0);
 }
 
@@ -1608,6 +1654,7 @@ function render() {
   );
   if (selected) {
     queueSeedRecommendations(selected);
+    queueSeedEmailDraft(selected);
   }
 }
 
