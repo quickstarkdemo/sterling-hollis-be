@@ -576,3 +576,48 @@ class MerchExportCsvResponse(BaseModel):
     row_count: int = 0
     csv_text: str
     generated_at: datetime
+
+
+class InventoryFacet(str, Enum):
+    brand = "brand"
+    category = "category"
+    size = "size"
+
+
+class InventoryByStoreRow(BaseModel):
+    store_id: str
+    store_name: str
+    city: str
+    state: str
+    units_in_stock: int
+    sku_count: int
+
+
+class InventoryByStoreResponse(BaseModel):
+    product_query: str | None = None
+    product_id: str | None = None
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    rows: list[InventoryByStoreRow] = Field(default_factory=list)
+    total_units_in_stock: int = 0
+    total_skus: int = 0
+
+
+class InventoryFacetRow(BaseModel):
+    facet_value: str
+    units_in_stock: int
+    sku_count: int
+
+
+class InventoryFacetsResponse(BaseModel):
+    facet: InventoryFacet
+    store: ResolvedStore | None = None
+    product_query: str | None = None
+    product_id: str | None = None
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    rows: list[InventoryFacetRow] = Field(default_factory=list)
+    total_units_in_stock: int = 0
+    total_skus: int = 0

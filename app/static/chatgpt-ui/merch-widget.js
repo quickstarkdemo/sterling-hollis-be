@@ -23,6 +23,12 @@ const DEFAULT_PAYLOAD = {
   uiHints: {
     questionPlaceholder: "What should this store feature, promote, or deprioritize?",
     emptyState: "Run Actions, Diagnostics, or Trends to populate this workspace.",
+    categoryOptions: [],
+    actionDefinitions: {
+      feature: "High-confidence winners for full-price visibility.",
+      promote: "Inventory where campaign/offer can accelerate sell-through.",
+      deprioritize: "Lower-priority items to reduce exposure.",
+    },
   },
 };
 
@@ -62,6 +68,40 @@ function clone(value) {
     return value;
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeCategoryOptions(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const options = [];
+  const seen = new Set();
+  raw.forEach((item) => {
+    if (!isObject(item)) {
+      return;
+    }
+    const value = typeof item.value === "string" ? item.value.trim() : "";
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    if (!value || !label || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    options.push({ value, label });
+  });
+  return options;
+}
+
+function normalizeActionDefinitions(raw) {
+  const defaults = clone(DEFAULT_PAYLOAD.uiHints.actionDefinitions);
+  if (!isObject(raw)) {
+    return defaults;
+  }
+  for (const key of ["feature", "promote", "deprioritize"]) {
+    if (typeof raw[key] === "string" && raw[key].trim()) {
+      defaults[key] = raw[key].trim();
+    }
+  }
+  return defaults;
 }
 
 function parseJsonContentPayload(raw) {
@@ -145,6 +185,8 @@ function normalizeWorkspacePayload(raw) {
         raw.uiHints && typeof raw.uiHints.emptyState === "string"
           ? raw.uiHints.emptyState
           : DEFAULT_PAYLOAD.uiHints.emptyState,
+      categoryOptions: normalizeCategoryOptions(raw.uiHints && raw.uiHints.categoryOptions),
+      actionDefinitions: normalizeActionDefinitions(raw.uiHints && raw.uiHints.actionDefinitions),
     },
   };
 }
@@ -911,6 +953,18 @@ function render() {
     },
   });
 
+  const categoryOptions = [
+    { label: "Any", value: "" },
+    ...(Array.isArray(state.payload.uiHints.categoryOptions) ? state.payload.uiHints.categoryOptions : []),
+  ];
+  const categorySelect = buildSelect(
+    state.ui.category,
+    categoryOptions,
+    (value) => {
+      state.ui.category = value;
+    },
+  );
+
   const objectiveSelect = buildSelect(
     state.ui.objective,
     [
@@ -983,17 +1037,7 @@ function render() {
         "div",
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Category" }),
-        el("input", {
-          className: "fw-input",
-          type: "text",
-          value: state.ui.category,
-          placeholder: "womens_apparel",
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.category = event.target.value;
-            persistWidgetState();
-          },
-        }),
+        categorySelect,
       ),
       el(
         "div",
@@ -1117,6 +1161,15 @@ function render() {
         state.ui.isExporting ? "Exporting..." : "Copy CSV",
       ),
     ),
+    activeTool === "fashion_merch_action_recommendations"
+      ? el(
+          "p",
+          {
+            className: "fw-empty",
+            text: `Feature: ${state.payload.uiHints.actionDefinitions.feature} Promote: ${state.payload.uiHints.actionDefinitions.promote} Deprioritize: ${state.payload.uiHints.actionDefinitions.deprioritize}`,
+          },
+        )
+      : null,
   );
 
   const contextPanel = el(

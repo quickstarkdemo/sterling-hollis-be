@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Product, ProductEmbedding, SyntheticRun
+from app.models import Product, ProductEmbedding, Store, SyntheticRun
 from app.schemas import (
     CompareMode,
     CustomerCommunicationDraftResponse,
@@ -33,6 +33,11 @@ from app.schemas import (
     IndexJobResponse,
     IndexProductsRequest,
     IndexProductsResponse,
+    InventoryByStoreResponse,
+    InventoryByStoreRow,
+    InventoryFacet,
+    InventoryFacetRow,
+    InventoryFacetsResponse,
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
     MerchExportCsvRequest,
@@ -90,6 +95,7 @@ from app.services.recommendations import customer_recommendations, merchandising
 from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
 from app.services.system_status import vector_status_payload
+from app.services.taxonomy import CATEGORY_TAXONOMY
 
 
 def _split_csv(raw: str) -> list[str]:
@@ -188,12 +194,51 @@ def _csv_text(headers: list[str], rows: list[dict[str, str]]) -> str:
     return buffer.getvalue()
 
 
-def _tool_name_to_workspace_view(tool_name: str | None) -> MerchWorkspaceView:
-    if tool_name == "fashion_merch_diagnostics":
-        return MerchWorkspaceView.diagnostics
-    if tool_name == "fashion_merch_trend_summary":
-        return MerchWorkspaceView.trends
-    return MerchWorkspaceView.actions
+def _int_value(value) -> int:
+    try:
+        return int(round(float(value or 0)))
+    except Exception:
+        return 0
+
+
+def _merch_category_options() -> list[dict[str, str]]:
+    rows = []
+    for token, cfg in CATEGORY_TAXONOMY.items():
+        label = str(cfg.get("label") or token.replace("_", " ").title())
+        rows.append({"value": token, "label": label})
+    rows.sort(key=lambda item: item["label"])
+    return rows
+
+
+def _apply_inventory_filters(
+    query,
+    *,
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    store_id: str | None = None,
+    in_stock_only: bool = True,
+):
+    if product_id:
+        query = query.where(Product.id == product_id.strip())
+    if product_query:
+        token = product_query.strip().lower()
+        if token:
+            query = query.where(func.lower(Product.title).like(f"%{token}%"))
+    if brand:
+        query = query.where(func.lower(Product.brand) == brand.strip().lower())
+    if category:
+        query = query.where(func.lower(Product.category) == category.strip().lower())
+    if size:
+        query = query.where(func.lower(Product.size) == size.strip().lower())
+    if store_id:
+        query = query.where(Product.store_id == store_id)
+    if in_stock_only:
+        query = query.where(Product.inventory_qty > 0)
+        query = query.where(func.lower(Product.availability) == "in stock")
+    return query
 
 
 def _resolve_associate_context(
@@ -795,6 +840,12 @@ def _merch_workspace_payload(
         "uiHints": {
             "questionPlaceholder": "What should this store feature, promote, or deprioritize?",
             "emptyState": "Run Actions, Diagnostics, or Trends to populate this workspace.",
+            "categoryOptions": _merch_category_options(),
+            "actionDefinitions": {
+                "feature": "High-confidence winners to prioritize in full-price placement.",
+                "promote": "Inventory with margin headroom where campaigns/offers can accelerate sell-through.",
+                "deprioritize": "Lower-priority items with weaker demand and inventory pressure.",
+            },
         },
     }
 
@@ -1602,6 +1653,161 @@ def fashion_merch_trend_summary(
             occasion=occasion,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
+        )
+
+
+@mcp.tool(
+    name="fashion_inventory_by_store",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_inventory_by_store(
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    in_stock_only: bool = True,
+    limit: int = 100,
+) -> InventoryByStoreResponse:
+    """Return on-hand inventory units and SKU counts per store for optional product filters."""
+    effective_limit = max(1, min(limit, 500))
+    with SessionLocal() as db:
+        query = (
+            select(
+                Product.store_id.label("store_id"),
+                func.sum(Product.inventory_qty).label("units_in_stock"),
+                func.count(Product.id).label("sku_count"),
+            )
+            .group_by(Product.store_id)
+            .order_by(func.sum(Product.inventory_qty).desc(), func.count(Product.id).desc(), Product.store_id)
+        )
+        query = _apply_inventory_filters(
+            query,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            in_stock_only=in_stock_only,
+        )
+        grouped_rows = db.execute(query.limit(effective_limit)).all()
+        store_ids = [row.store_id for row in grouped_rows if row.store_id]
+        stores = db.scalars(select(Store).where(Store.id.in_(store_ids))).all() if store_ids else []
+        store_map = {store.id: store for store in stores}
+
+        rows: list[InventoryByStoreRow] = []
+        total_units = 0
+        total_skus = 0
+        for row in grouped_rows:
+            store = store_map.get(row.store_id)
+            units = _int_value(row.units_in_stock)
+            skus = _int_value(row.sku_count)
+            total_units += units
+            total_skus += skus
+            rows.append(
+                InventoryByStoreRow(
+                    store_id=row.store_id,
+                    store_name=store.name if store else row.store_id,
+                    city=store.city if store else "",
+                    state=store.state if store else "",
+                    units_in_stock=units,
+                    sku_count=skus,
+                )
+            )
+
+        return InventoryByStoreResponse(
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            rows=rows,
+            total_units_in_stock=total_units,
+            total_skus=total_skus,
+        )
+
+
+@mcp.tool(
+    name="fashion_inventory_facets",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_inventory_facets(
+    facet: InventoryFacet = InventoryFacet.brand,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    in_stock_only: bool = True,
+    limit: int = 25,
+) -> InventoryFacetsResponse:
+    """Return inventory units and SKU counts grouped by brand, category, or size."""
+    effective_limit = max(1, min(limit, 200))
+    with SessionLocal() as db:
+        resolved_store = None
+        if store_id or store_query:
+            resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+
+        if facet == InventoryFacet.category:
+            raw_col = Product.category
+        elif facet == InventoryFacet.size:
+            raw_col = Product.size
+        else:
+            raw_col = Product.brand
+
+        facet_col = func.coalesce(raw_col, "unknown")
+        query = (
+            select(
+                facet_col.label("facet_value"),
+                func.sum(Product.inventory_qty).label("units_in_stock"),
+                func.count(Product.id).label("sku_count"),
+            )
+            .group_by(facet_col)
+            .order_by(func.sum(Product.inventory_qty).desc(), func.count(Product.id).desc(), facet_col.asc())
+        )
+        query = _apply_inventory_filters(
+            query,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            store_id=resolved_store.id if resolved_store else None,
+            in_stock_only=in_stock_only,
+        )
+        grouped_rows = db.execute(query.limit(effective_limit)).all()
+
+        rows: list[InventoryFacetRow] = []
+        total_units = 0
+        total_skus = 0
+        for row in grouped_rows:
+            units = _int_value(row.units_in_stock)
+            skus = _int_value(row.sku_count)
+            total_units += units
+            total_skus += skus
+            rows.append(
+                InventoryFacetRow(
+                    facet_value=str(row.facet_value or "unknown"),
+                    units_in_stock=units,
+                    sku_count=skus,
+                )
+            )
+
+        return InventoryFacetsResponse(
+            facet=facet,
+            store=resolved_store,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            rows=rows,
+            total_units_in_stock=total_units,
+            total_skus=total_skus,
         )
 
 

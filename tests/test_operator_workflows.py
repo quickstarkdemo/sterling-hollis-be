@@ -621,6 +621,27 @@ def test_merchandising_supports_expanded_slices(monkeypatch):
         assert trends.highlights
 
 
+def test_merch_action_recommendations_do_not_repeat_products_across_actions(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+
+        actions = merchandising_action_recommendations(
+            session,
+            store_query="Dallas",
+            objective=Objective.margin,
+            compare_mode=CompareMode.peer_and_prior_period,
+            top_k=9,
+        )
+
+        product_ids = [item.product_id for item in actions.recommendations]
+        assert len(product_ids) == len(set(product_ids))
+        assert any(item.action.value == "feature" for item in actions.recommendations)
+        assert any("full-price" in item.rationale for item in actions.recommendations if item.action.value == "feature")
+        promote_items = [item for item in actions.recommendations if item.action.value == "promote"]
+        if promote_items:
+            assert any("campaign or offer" in item.rationale for item in promote_items)
+
+
 def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
@@ -684,6 +705,8 @@ def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
         assert payload["store"]["id"] == "1001"
         assert payload["filters"]["objective"] == "margin"
         assert payload["filters"]["peer_mode"] == "profile_type"
+        assert payload["uiHints"]["categoryOptions"]
+        assert payload["uiHints"]["actionDefinitions"]["feature"]
         assert payload["initial_result"]["recommendations"]
         assert payload["last_tool"] == "fashion_merch_action_recommendations"
         assert "<style>" in html
@@ -739,6 +762,26 @@ def test_merch_export_csv_supports_all_views(monkeypatch):
         assert trends.row_count > 0
         assert trends.csv_text.splitlines()[0].startswith("store_id,store_name,view,subject,current_value")
         assert trends.view.value == "trends"
+
+
+def test_inventory_by_store_and_facets_tools(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        by_store = mcp_server.fashion_inventory_by_store(category="shoes")
+        assert by_store.rows
+        assert by_store.total_units_in_stock > 0
+        assert {row.store_id for row in by_store.rows} == {"1001", "1002"}
+
+        facets = mcp_server.fashion_inventory_facets(
+            facet="size",
+            store_query="Dallas",
+            category="womens_apparel",
+        )
+        assert facets.store is not None
+        assert facets.store.id == "1001"
+        assert facets.rows
+        assert facets.total_units_in_stock > 0
 
 
 def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypatch):

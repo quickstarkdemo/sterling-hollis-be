@@ -391,6 +391,7 @@ def merchandising_action_recommendations(
     prior_by_product = _by_key(prior_rows, lambda row: row.id, lambda row: float(row.revenue or 0.0))
 
     recs: list[MerchActionRecommendationItem] = []
+    action_order = [MerchAction.feature, MerchAction.promote, MerchAction.deprioritize]
     for row in store_rows:
         units = float(row.units or 0.0)
         revenue = float(row.revenue or 0.0)
@@ -405,17 +406,40 @@ def merchandising_action_recommendations(
         prior_delta = revenue - prior_by_product.get(row.id, 0.0) if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period} else 0.0
 
         metric_value = _select_metric_value(units, revenue, margin, objective_weight, parsed.objective)
-        feature_score = metric_value + max(peer_delta, 0.0) + max(prior_delta, 0.0)
-        deprioritize_score = inventory * 4 + max(-peer_delta, 0.0) + max(-prior_delta, 0.0)
-        promote_score = (margin * 100) + inventory * 2 + max(-peer_delta, 0.0) * 0.5
+        positive_signal = max(peer_delta, 0.0) + max(prior_delta, 0.0)
+        negative_signal = max(-peer_delta, 0.0) + max(-prior_delta, 0.0)
+
+        # Distinct action intent:
+        # - feature: full-price visibility for demand winners
+        # - promote: campaign/offer candidates with inventory + margin headroom
+        # - deprioritize: reduced exposure for weak movers with inventory pressure
+        feature_score = metric_value + positive_signal * 1.2 - negative_signal * 0.5
+        promote_score = (margin * 80) + inventory * 2.5 + negative_signal - positive_signal * 0.8
+        deprioritize_score = inventory * 4 + negative_signal * 1.3 - (margin * 40) - positive_signal * 0.9
 
         action_scores = {
-            MerchAction.feature: (feature_score, "strong current performance with supportive comparison signals"),
-            MerchAction.deprioritize: (deprioritize_score, "inventory and comparison signals suggest a lower priority"),
-            MerchAction.promote: (promote_score, "good margin or inventory headroom suggests promotional potential"),
+            MerchAction.feature: (
+                feature_score,
+                "strong demand and positive peer/prior signals support full-price featuring",
+            ),
+            MerchAction.promote: (
+                promote_score,
+                "inventory headroom with margin potential suggests a campaign or offer",
+            ),
+            MerchAction.deprioritize: (
+                deprioritize_score,
+                "weaker demand versus peer/prior with inventory pressure suggests lower floor priority",
+            ),
         }
 
-        selected_actions = [parsed.action_hint] if parsed.action_hint else list(MerchAction)
+        selected_actions = [parsed.action_hint] if parsed.action_hint else None
+        if selected_actions is None:
+            best_action = max(
+                action_order,
+                key=lambda action: action_scores[action][0],
+            )
+            selected_actions = [best_action]
+
         for action in selected_actions:
             score, rationale = action_scores[action]
             recs.append(
@@ -442,11 +466,23 @@ def merchandising_action_recommendations(
         limited = recs[:top_k]
     else:
         grouped: dict[MerchAction, list[MerchActionRecommendationItem]] = defaultdict(list)
-        target_per_group = max(2, top_k // 3)
         for item in recs:
-            if len(grouped[item.action]) < target_per_group:
-                grouped[item.action].append(item)
-        limited = grouped[MerchAction.feature] + grouped[MerchAction.deprioritize] + grouped[MerchAction.promote]
+            grouped[item.action].append(item)
+
+        limited: list[MerchActionRecommendationItem] = []
+        idx = 0
+        while len(limited) < top_k:
+            appended = False
+            for action in action_order:
+                bucket = grouped[action]
+                if idx < len(bucket):
+                    limited.append(bucket[idx])
+                    appended = True
+                    if len(limited) >= top_k:
+                        break
+            if not appended:
+                break
+            idx += 1
 
     return MerchActionRecommendationsResponse(
         store=resolved_store,
