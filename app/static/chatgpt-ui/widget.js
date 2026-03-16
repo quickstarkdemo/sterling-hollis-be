@@ -871,6 +871,23 @@ function normalizeEmailDraftResponse(raw) {
   return null;
 }
 
+function draftMatchesCurrentWorkspace(response) {
+  if (!response || !isObject(response.message) || response.message.channel !== "email") {
+    return false;
+  }
+  const messageId = typeof response.message.id === "string" ? response.message.id : null;
+  const responseCustomerId = typeof response.customer?.id === "string" ? response.customer.id : null;
+  const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+  const selected = selectedCustomer(results);
+  if (messageId && state.ui.emailDraftId && messageId === state.ui.emailDraftId) {
+    return true;
+  }
+  if (selected && responseCustomerId && selected.id === responseCustomerId) {
+    return true;
+  }
+  return false;
+}
+
 function applyEmailDraftResponse(selected, response) {
   if (!selected || !response || !isObject(response.message)) {
     return false;
@@ -1050,12 +1067,23 @@ async function prepareEmailDraft(selected, options = {}) {
 
 async function refreshEmailDraft(selected) {
   markUserInteraction();
-  if (!state.ui.emailDraftId) {
-    setNotice("No draft available. Prepare a draft first.", "error");
+  state.recommendation.isRefreshingEmailDraft = true;
+  const rows = recommendationRows(state.recommendation.response);
+  if (selected && rows.length) {
+    const rebuilt = await prepareEmailDraft(selected, { includeMessageId: true, silent: true });
+    if (rebuilt) {
+      setNotice(`Rebuilt draft ${rebuilt.message.id} from current recommendations.`);
+    }
+    state.recommendation.isRefreshingEmailDraft = false;
     render();
     return;
   }
-  state.recommendation.isRefreshingEmailDraft = true;
+  if (!state.ui.emailDraftId) {
+    state.recommendation.isRefreshingEmailDraft = false;
+    setNotice("No draft available. Prepare recommendations first.", "error");
+    render();
+    return;
+  }
   await hydrateDraftById(selected, state.ui.emailDraftId);
   state.recommendation.isRefreshingEmailDraft = false;
   render();
@@ -1829,7 +1857,7 @@ function render() {
                         void refreshEmailDraft(selected);
                       },
                     },
-                    state.recommendation.isRefreshingEmailDraft ? "Refreshing..." : "Refresh Draft",
+                    state.recommendation.isRefreshingEmailDraft ? "Rebuilding..." : "Rebuild Draft",
                   ),
                   el(
                     "button",
@@ -1933,7 +1961,24 @@ window.addEventListener(
     if (data.method !== "ui/notifications/tool-result") {
       return;
     }
-    if (applyWorkspacePayload(data.params)) {
+    const payloadChanged = applyWorkspacePayload(data.params);
+    let draftChanged = false;
+    const incomingDraft = normalizeEmailDraftResponse(data.params);
+    if (incomingDraft && draftMatchesCurrentWorkspace(incomingDraft)) {
+      const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+      const selected = selectedCustomer(results);
+      if (selected && applyEmailDraftResponse(selected, incomingDraft)) {
+        draftChanged = true;
+        const incomingStatus = typeof incomingDraft.message?.status === "string" ? incomingDraft.message.status : "";
+        if (incomingStatus === "sent") {
+          state.ui.emailDraftId = null;
+          setNotice("Draft was sent from chat. Workspace draft state updated.");
+        } else {
+          setNotice(`Draft ${incomingDraft.message.id} updated from chat.`);
+        }
+      }
+    }
+    if (payloadChanged || draftChanged) {
       render();
     }
   },
