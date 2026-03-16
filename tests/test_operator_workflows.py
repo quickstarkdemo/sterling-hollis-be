@@ -605,11 +605,46 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert "window.__FASHION_WIDGET__" in html
 
 
+def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_open_customer_workspace(
+            customer_query="avery.parker.1@example-fashion.test",
+            style_constraints=StyleConstraints(
+                constraint_source="chat_image",
+                target_categories=["mens_apparel"],
+                target_genders=["male"],
+                style_keywords=["tailored"],
+            ),
+            limit=10,
+        )
+
+        payload = result.structuredContent["payload"]
+        assert result.structuredContent["kind"] == "customer_search_workspace"
+        assert payload["selected_customer_id"] == "cust_000001"
+        assert payload["resolved"]["id"] == "cust_000001"
+        assert payload["initial_style_constraints"]["constraint_source"] == "chat_image"
+        assert payload["initial_notice"] == "Image guidance loaded from this chat turn."
+
+
+def test_open_customer_workspace_keeps_candidates_when_query_is_ambiguous(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_open_customer_workspace(customer_query="Avery", limit=10)
+
+        payload = result.structuredContent["payload"]
+        assert payload["mode"] == "candidates"
+        assert payload["query"] == "Avery"
+        assert payload["selected_customer_id"] is None
+        assert len(payload["results"]) == 2
+
+
 def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
         tool_names = set(mcp_server.mcp._tool_manager._tools.keys())
         assert "fashion_render_customer_search_workspace" in tool_names
+        assert "fashion_open_customer_workspace" in tool_names
 
         removed_tools = {
             "fashion_associate_workspace_bootstrap",

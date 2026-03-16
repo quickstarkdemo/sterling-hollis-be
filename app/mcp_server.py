@@ -729,6 +729,56 @@ def fashion_render_customer_search_workspace(
 
 
 @mcp.tool(
+    name="fashion_open_customer_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
+        invoking="Opening customer workspace...",
+        invoked="Customer workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_open_customer_workspace(
+    customer_query: str,
+    style_constraints: StyleConstraints | None = None,
+    initial_notice: str | None = None,
+    limit: int = 10,
+) -> CallToolResult:
+    """Resolve customer query and open a hydrated customer workspace in one call.
+
+    Prefer this as the default workspace entrypoint for chat flows. When an image
+    is uploaded in chat, extract cues and pass them as `style_constraints`.
+    """
+    normalized_query = customer_query.strip()
+    if not normalized_query:
+        raise ValueError("customer_query is required.")
+
+    effective_limit = max(1, min(limit, 25))
+    lookup = fashion_lookup_customer(normalized_query, limit=effective_limit)
+
+    selected_customer_id: str | None = None
+    if lookup.mode == "resolved" and lookup.resolved is not None:
+        selected_customer_id = lookup.resolved.id
+    elif len(lookup.candidates) == 1:
+        selected_customer_id = lookup.candidates[0].id
+
+    notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
+    if notice is None and style_constraints is not None and not style_constraints.is_empty():
+        if style_constraints.constraint_source == "chat_image":
+            notice = "Image guidance loaded from this chat turn."
+        else:
+            notice = "Style guidance loaded from this chat turn."
+
+    return fashion_render_customer_search_workspace(
+        query=None if selected_customer_id else normalized_query,
+        limit=effective_limit,
+        selected_customer_id=selected_customer_id,
+        initial_style_constraints=style_constraints,
+        initial_notice=notice,
+    )
+
+
+@mcp.tool(
     name="fashion_store_associate_recommend",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_WIDGET_TOOL_META,

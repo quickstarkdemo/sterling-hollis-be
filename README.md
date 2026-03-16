@@ -285,6 +285,7 @@ Low-level/admin MCP tools:
 Operator/customer tools:
 - `fashion_lookup_customer`
 - `fashion_find_customers`
+- `fashion_open_customer_workspace`
 - `fashion_resolve_customer`
 - `fashion_resolve_store`
 - `fashion_store_associate_recommend`
@@ -347,6 +348,7 @@ Human-first operator tools:
 - `fashion_resolve_store`
 - `fashion_resolve_customer`
 - `fashion_find_customers`
+- `fashion_open_customer_workspace`
 - `fashion_store_associate_recommend`
 - `fashion_prepare_customer_sms`
 - `fashion_update_customer_sms_draft`
@@ -417,6 +419,7 @@ Human-first examples:
 
 - `fashion_resolve_store(store_query="Dallas downtown")`
 - `fashion_find_customers(query="avery 1234", limit=10)`
+- `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel"],"exclude_categories":["athleticwear"],"target_genders":["male"],"style_keywords":["tailored","micro-check"]})`
 - `fashion_resolve_customer(email="avery.parker.1@example-fashion.test")`
 - `fashion_resolve_customer(phone_last4="1234")`
 - `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
@@ -434,6 +437,7 @@ Human-first examples:
 Render-tool examples for ChatGPT Apps:
 
 - `fashion_render_customer_search_workspace(query="avery", limit=10)`
+- `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel"],"target_genders":["male"],"style_keywords":["tailored"]})`
 
 ### Manual local MCP testing with Inspector
 

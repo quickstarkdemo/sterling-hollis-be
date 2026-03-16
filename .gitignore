@@ -1,8 +1,14 @@
 .venv/
+.pytest_cache/
 __pycache__/
-*.pyc
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.coverage
+.DS_Store
 .env
 product_db.egg-info/
+*.egg-info/
 deploy/runtime.env
 test-results/
 .deploy/
@@ -11,5 +17,6 @@ test-results/
 /data/runs/
 /data/neiman_stores_snapshot.json
 
+# Local reference materials (kept outside git)
 /examples/
 /docs/
