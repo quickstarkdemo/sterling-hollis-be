@@ -59,8 +59,9 @@ def _widget_css() -> str:
     return (_STATIC_DIR / "widget.css").read_text(encoding="utf-8")
 
 
-def _widget_js() -> str:
-    return (_STATIC_DIR / "widget.js").read_text(encoding="utf-8")
+def _widget_js(kind: str) -> str:
+    script_name = "merch-widget.js" if kind == "merch_workspace" else "widget.js"
+    return (_STATIC_DIR / script_name).read_text(encoding="utf-8")
 
 
 def render_widget_html(
@@ -75,6 +76,7 @@ def render_widget_html(
     build_version = settings.app_build_version or "dev"
     widget_summary = summary or {
         "customer_search_workspace": "Search customers by name, email, or phone and select a profile for follow-up actions.",
+        "merch_workspace": "Evaluate store performance, compare peers, and export merchandising decisions to CSV.",
     }.get(kind, "Operator workspace")
     return f"""<!doctype html>
 <html lang="en">
@@ -103,7 +105,7 @@ def render_widget_html(
       }};
     </script>
     <script type="module">
-{_widget_js()}
+{_widget_js(kind)}
     </script>
   </body>
 </html>"""

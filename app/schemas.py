@@ -431,6 +431,7 @@ class SmsReviewBootstrapResponse(BaseModel):
 
 class MerchWorkspaceFilters(BaseModel):
     question: str | None = None
+    objective: Objective = Objective.margin
     category: str | None = None
     brand: str | None = None
     price_band: PriceBand | None = None
@@ -445,6 +446,12 @@ class MerchAction(str, Enum):
     feature = "feature"
     deprioritize = "deprioritize"
     promote = "promote"
+
+
+class MerchWorkspaceView(str, Enum):
+    actions = "actions"
+    diagnostics = "diagnostics"
+    trends = "trends"
 
 
 class MerchActionRecommendationItem(BaseModel):
@@ -532,3 +539,40 @@ class MerchWorkspaceBootstrapResponse(BaseModel):
     initial_result: MerchActionRecommendationsResponse
     last_result: MerchActionRecommendationsResponse | MerchDiagnosticsResponse | MerchTrendSummaryResponse | None = None
     last_tool: str | None = None
+
+
+class MerchExportCsvRequest(BaseModel):
+    view: MerchWorkspaceView = MerchWorkspaceView.actions
+    store_query: str | None = None
+    store_id: str | None = None
+    question: str | None = None
+    objective: Objective = Objective.margin
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    top_k: int = Field(default=9, ge=1, le=50)
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period
+    peer_mode: PeerMode = PeerMode.state_and_profile
+
+    @model_validator(mode="after")
+    def validate_store_target(self) -> "MerchExportCsvRequest":
+        if not self.store_query and not self.store_id:
+            raise ValueError("Provide store_query or store_id.")
+        return self
+
+
+class MerchExportCsvRow(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class MerchExportCsvResponse(BaseModel):
+    view: MerchWorkspaceView
+    store: ResolvedStore
+    filename: str
+    headers: list[str] = Field(default_factory=list)
+    rows: list[MerchExportCsvRow] = Field(default_factory=list)
+    row_count: int = 0
+    csv_text: str
+    generated_at: datetime

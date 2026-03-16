@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
+from enum import Enum
+from io import StringIO
 from pathlib import Path
 import re
 
@@ -32,7 +35,12 @@ from app.schemas import (
     IndexProductsResponse,
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
+    MerchExportCsvRequest,
+    MerchExportCsvResponse,
+    MerchExportCsvRow,
     MerchTrendSummaryResponse,
+    MerchWorkspaceFilters,
+    MerchWorkspaceView,
     MerchandisingRecommendationRequest,
     MerchandisingRecommendationResponse,
     Objective,
@@ -111,8 +119,10 @@ _WIDGET_TOOL_META = {
     "ui": {"visibility": "public"},
 }
 _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE = "ui://widgets/customer-search/workspace"
+_MERCH_WORKSPACE_TEMPLATE_BASE = "ui://widgets/merch/workspace"
 _WIDGET_BUILD_TAG = re.sub(r"[^A-Za-z0-9._-]", "-", settings.app_build_version or "dev")
 _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
+_MERCH_WORKSPACE_RESOURCE_URI = f"{_MERCH_WORKSPACE_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
 
 
 class LatestRunResponse(BaseModel):
@@ -156,6 +166,34 @@ def _calltool_result(text: str, payload: dict | None = None, meta: dict | None =
         _meta=meta,
         isError=False,
     )
+
+
+def _as_scalar(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, float):
+        text = f"{value:.6f}".rstrip("0").rstrip(".")
+        return text if text else "0"
+    return str(value)
+
+
+def _csv_text(headers: list[str], rows: list[dict[str, str]]) -> str:
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=headers)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({header: row.get(header, "") for header in headers})
+    return buffer.getvalue()
+
+
+def _tool_name_to_workspace_view(tool_name: str | None) -> MerchWorkspaceView:
+    if tool_name == "fashion_merch_diagnostics":
+        return MerchWorkspaceView.diagnostics
+    if tool_name == "fashion_merch_trend_summary":
+        return MerchWorkspaceView.trends
+    return MerchWorkspaceView.actions
 
 
 def _resolve_associate_context(
@@ -360,6 +398,15 @@ def _index_products_impl(params: IndexProductsRequest) -> IndexProductsResponse:
 )
 def customer_search_widget_resource() -> str:
     return render_widget_html("Customer Workspace", "customer_search_workspace")
+
+
+@mcp.resource(
+    _MERCH_WORKSPACE_RESOURCE_URI,
+    mime_type="text/html;profile=mcp-app",
+    meta={**_WIDGET_RESOURCE_META, "openai/widgetDescription": "Merchandising workspace for store performance, diagnostics, and trends."},
+)
+def merch_workspace_resource() -> str:
+    return render_widget_html("Merchandising Workspace", "merch_workspace")
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -695,6 +742,241 @@ def _customer_search_workspace_payload(
     }
 
 
+def _merch_workspace_payload(
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.margin,
+    lookback_days: int = 90,
+    top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+    initial_notice: str | None = None,
+) -> dict:
+    bounded_lookback = max(7, min(lookback_days, 730))
+    bounded_top_k = max(1, min(top_k, 50))
+    initial_result = fashion_merch_action_recommendations(
+        store_query=store_query,
+        store_id=store_id,
+        question=question,
+        objective=objective,
+        lookback_days=bounded_lookback,
+        top_k=bounded_top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+    )
+    return {
+        "store": initial_result.store.model_dump(mode="json"),
+        "filters": MerchWorkspaceFilters(
+            question=question,
+            objective=objective,
+            category=category,
+            brand=brand,
+            price_band=price_band,
+            occasion=occasion,
+            lookback_days=bounded_lookback,
+            compare_mode=compare_mode,
+            peer_mode=peer_mode,
+            top_k=bounded_top_k,
+        ).model_dump(mode="json"),
+        "initial_result": initial_result.model_dump(mode="json"),
+        "last_result": None,
+        "last_tool": "fashion_merch_action_recommendations",
+        "initial_notice": initial_notice,
+        "uiHints": {
+            "questionPlaceholder": "What should this store feature, promote, or deprioritize?",
+            "emptyState": "Run Actions, Diagnostics, or Trends to populate this workspace.",
+        },
+    }
+
+
+def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvResponse:
+    generated_at = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        if params.view == MerchWorkspaceView.actions:
+            result = merchandising_action_recommendations(
+                db,
+                store_query=params.store_query,
+                store_id=params.store_id,
+                question=params.question,
+                objective=params.objective,
+                lookback_days=params.lookback_days,
+                top_k=params.top_k,
+                category=params.category,
+                brand=params.brand,
+                price_band=params.price_band,
+                occasion=params.occasion,
+                compare_mode=params.compare_mode,
+                peer_mode=params.peer_mode,
+            )
+            headers = [
+                "store_id",
+                "store_name",
+                "view",
+                "action",
+                "product_id",
+                "title",
+                "brand",
+                "category",
+                "price",
+                "price_band",
+                "metric_value",
+                "peer_delta",
+                "prior_period_delta",
+                "objective",
+                "compare_mode",
+                "peer_mode",
+                "lookback_days",
+                "rationale",
+                "link",
+                "image_url",
+            ]
+            rows = [
+                {
+                    "store_id": result.store.id,
+                    "store_name": result.store.name,
+                    "view": MerchWorkspaceView.actions.value,
+                    "action": _as_scalar(item.action),
+                    "product_id": _as_scalar(item.product_id),
+                    "title": _as_scalar(item.title),
+                    "brand": _as_scalar(item.brand),
+                    "category": _as_scalar(item.category),
+                    "price": _as_scalar(item.price),
+                    "price_band": _as_scalar(item.price_band),
+                    "metric_value": _as_scalar(item.metric_value),
+                    "peer_delta": _as_scalar(item.peer_delta),
+                    "prior_period_delta": _as_scalar(item.prior_period_delta),
+                    "objective": _as_scalar(result.objective),
+                    "compare_mode": _as_scalar(result.compare_mode),
+                    "peer_mode": _as_scalar(result.peer_mode),
+                    "lookback_days": _as_scalar(result.lookback_days),
+                    "rationale": _as_scalar(item.rationale),
+                    "link": _as_scalar(item.link),
+                    "image_url": _as_scalar(item.image_url),
+                }
+                for item in result.recommendations
+            ]
+            store = result.store
+        elif params.view == MerchWorkspaceView.diagnostics:
+            result = merchandising_diagnostics(
+                db,
+                store_query=params.store_query,
+                store_id=params.store_id,
+                question=params.question,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                price_band=params.price_band,
+                occasion=params.occasion,
+                compare_mode=params.compare_mode,
+                peer_mode=params.peer_mode,
+            )
+            headers = [
+                "store_id",
+                "store_name",
+                "view",
+                "dimension",
+                "subject",
+                "status",
+                "current_value",
+                "peer_value",
+                "prior_value",
+                "delta",
+                "compare_mode",
+                "peer_mode",
+                "lookback_days",
+                "rationale",
+            ]
+            rows = [
+                {
+                    "store_id": result.store.id,
+                    "store_name": result.store.name,
+                    "view": MerchWorkspaceView.diagnostics.value,
+                    "dimension": _as_scalar(item.dimension),
+                    "subject": _as_scalar(item.subject),
+                    "status": _as_scalar(item.status),
+                    "current_value": _as_scalar(item.current_value),
+                    "peer_value": _as_scalar(item.peer_value),
+                    "prior_value": _as_scalar(item.prior_value),
+                    "delta": _as_scalar(item.delta),
+                    "compare_mode": _as_scalar(result.compare_mode),
+                    "peer_mode": _as_scalar(result.peer_mode),
+                    "lookback_days": _as_scalar(result.lookback_days),
+                    "rationale": _as_scalar(item.rationale),
+                }
+                for item in result.insights
+            ]
+            store = result.store
+        else:
+            result = merchandising_trend_summary(
+                db,
+                store_query=params.store_query,
+                store_id=params.store_id,
+                question=params.question,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                price_band=params.price_band,
+                occasion=params.occasion,
+                compare_mode=params.compare_mode,
+                peer_mode=params.peer_mode,
+            )
+            headers = [
+                "store_id",
+                "store_name",
+                "view",
+                "subject",
+                "current_value",
+                "peer_value",
+                "prior_value",
+                "pct_change",
+                "compare_mode",
+                "peer_mode",
+                "lookback_days",
+                "rationale",
+            ]
+            rows = [
+                {
+                    "store_id": result.store.id,
+                    "store_name": result.store.name,
+                    "view": MerchWorkspaceView.trends.value,
+                    "subject": _as_scalar(item.subject),
+                    "current_value": _as_scalar(item.current_value),
+                    "peer_value": _as_scalar(item.peer_value),
+                    "prior_value": _as_scalar(item.prior_value),
+                    "pct_change": _as_scalar(item.pct_change),
+                    "compare_mode": _as_scalar(result.compare_mode),
+                    "peer_mode": _as_scalar(result.peer_mode),
+                    "lookback_days": _as_scalar(result.lookback_days),
+                    "rationale": _as_scalar(item.rationale),
+                }
+                for item in result.highlights
+            ]
+            store = result.store
+
+    csv_payload = _csv_text(headers, rows)
+    filename = f"merch_{store.id}_{params.view.value}_{generated_at.strftime('%Y%m%d_%H%M%S')}.csv"
+    return MerchExportCsvResponse(
+        view=params.view,
+        store=store,
+        filename=filename,
+        headers=headers,
+        rows=[MerchExportCsvRow(values=row) for row in rows],
+        row_count=len(rows),
+        csv_text=csv_payload,
+        generated_at=generated_at,
+    )
+
+
 @mcp.tool(
     name="fashion_render_customer_search_workspace",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
@@ -804,6 +1086,113 @@ def fashion_open_customer_workspace(
         initial_email_draft_id=initial_email_draft_id,
         initial_email_subject=initial_email_subject,
         initial_email_body=initial_email_body,
+    )
+
+
+@mcp.tool(
+    name="fashion_render_merch_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _MERCH_WORKSPACE_RESOURCE_URI,
+        invoking="Opening merchandising workspace...",
+        invoked="Merchandising workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_render_merch_workspace(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.margin,
+    lookback_days: int = 90,
+    top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Render the merchandising workspace inside ChatGPT."""
+    if not store_query and not store_id:
+        raise ValueError("Provide store_query or store_id.")
+
+    workspace_payload = _merch_workspace_payload(
+        store_query=store_query,
+        store_id=store_id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+        initial_notice=initial_notice,
+    )
+    structured_payload = {"kind": "merch_workspace", "payload": workspace_payload}
+    summary = f"Opened merchandising workspace for {workspace_payload['store']['name']}."
+    return _calltool_result(
+        text=summary,
+        payload=structured_payload,
+        meta=_render_tool_meta(
+            _MERCH_WORKSPACE_RESOURCE_URI,
+            invoking="Opening merchandising workspace...",
+            invoked="Merchandising workspace ready.",
+        ),
+    )
+
+
+@mcp.tool(
+    name="fashion_open_merch_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _MERCH_WORKSPACE_RESOURCE_URI,
+        invoking="Opening merchandising workspace...",
+        invoked="Merchandising workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_open_merch_workspace(
+    store_query: str,
+    question: str | None = None,
+    objective: Objective = Objective.margin,
+    lookback_days: int = 90,
+    top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Resolve a store query and open a hydrated merchandising workspace in one call."""
+    normalized_query = store_query.strip()
+    if not normalized_query:
+        raise ValueError("store_query is required.")
+
+    resolved_store = fashion_resolve_store(normalized_query).resolved
+    notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
+    if not notice:
+        notice = f"Resolved store {resolved_store.name} from '{normalized_query}'."
+
+    return fashion_render_merch_workspace(
+        store_id=resolved_store.id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+        initial_notice=notice,
     )
 
 
@@ -1214,6 +1603,45 @@ def fashion_merch_trend_summary(
             compare_mode=compare_mode,
             peer_mode=peer_mode,
         )
+
+
+@mcp.tool(
+    name="fashion_merch_export_csv",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_merch_export_csv(
+    view: MerchWorkspaceView = MerchWorkspaceView.actions,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.margin,
+    lookback_days: int = 90,
+    top_k: int = 9,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+) -> MerchExportCsvResponse:
+    """Export merch workspace results as deterministic CSV text for copy/paste into spreadsheets."""
+    params = MerchExportCsvRequest(
+        view=view,
+        store_query=store_query,
+        store_id=store_id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+    )
+    return _merch_export_csv_impl(params)
 
 
 @mcp.tool(name="fashion_get_product_feed", annotations=_tool_annotations(read_only=True, idempotent=True))

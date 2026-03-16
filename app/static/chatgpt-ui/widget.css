@@ -97,16 +97,64 @@ body {
   font-size: 18px;
 }
 
+.fw-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 10px;
+}
+
 .fw-toolbar {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
 
+.fw-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fw-tab {
+  border: 1px solid #c8d6e3;
+  border-radius: 10px;
+  background: #e9eff4;
+  color: #2c4c66;
+  padding: 9px 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.fw-tab.active {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: #fff;
+  border-color: transparent;
+}
+
+.fw-tab:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .fw-control-row {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.fw-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.fw-grid.merch-filters {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.fw-span-full {
+  grid-column: 1 / -1;
 }
 
 .fw-field {
@@ -259,6 +307,38 @@ body {
   color: #3f4d59;
 }
 
+.fw-kpi-strip {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.fw-kpi {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 3px;
+}
+
+.fw-kpi-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fw-kpi-value {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.fw-merch-groups {
+  display: grid;
+  gap: 12px;
+}
+
 .fw-rec-card {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -270,6 +350,10 @@ body {
   align-items: start;
   gap: 8px;
   grid-template-columns: auto 56px minmax(0, 1fr) minmax(132px, auto);
+}
+
+.fw-rec-card.merch .fw-rec-layout {
+  grid-template-columns: 56px minmax(0, 1fr) minmax(132px, auto);
 }
 
 .fw-rec-select-inline {
@@ -409,6 +493,12 @@ body {
   margin: 0;
 }
 
+.fw-csv-text {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 @media (max-width: 760px) {
   .fashion-widget-shell {
     padding: 10px;
@@ -430,6 +520,10 @@ body {
   .fw-rec-layout {
     grid-template-columns: auto 48px minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .fw-rec-card.merch .fw-rec-layout {
+    grid-template-columns: 48px minmax(0, 1fr);
   }
 
   .fw-rec-side {

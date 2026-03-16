@@ -44,6 +44,30 @@ read_release_brief_field() {
   [[ -n "$value" ]] && echo "$value"
 }
 
+read_release_brief_summary() {
+  [[ -f "$RELEASE_BRIEF_FILE" ]] || return 0
+
+  awk '
+    BEGIN { in_summary = 0 }
+    /^[[:space:]]*Summary[[:space:]]*:/ {
+      in_summary = 1
+      sub(/^[^:]*:[[:space:]]*/, "", $0)
+      if (length($0) > 0) print $0
+      next
+    }
+    in_summary && /^[[:space:]]*[A-Za-z][A-Za-z0-9 _-]*[[:space:]]*:/ {
+      exit
+    }
+    in_summary {
+      print
+    }
+  ' "$RELEASE_BRIEF_FILE" \
+    | sed 's/\r$//' \
+    | sed '/^[[:space:]]*$/d' \
+    | sed 's/^[[:space:]]*[-*][[:space:]]*/- /; s/^[[:space:]]\+//' \
+    | awk 'tolower($0) != "-"'
+}
+
 ensure_release_brief_file() {
   if [[ -f "$RELEASE_BRIEF_FILE" ]]; then
     return
@@ -354,8 +378,47 @@ generate_commit_message() {
   fi
 }
 
+generate_commit_body() {
+  local summary_text
+  local current_version
+  local staged_count
+  local staged_paths
+  local metadata_block
+  local body=""
+
+  summary_text="$(read_release_brief_summary || true)"
+  current_version="$(tr -d '[:space:]' < VERSION 2>/dev/null || true)"
+  staged_count="$(git diff --cached --name-only | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  staged_paths="$(git diff --cached --name-only | sed '/^[[:space:]]*$/d' | head -n 8 | sed 's/^/- /')"
+
+  if [[ -n "$summary_text" ]]; then
+    body="AI release summary:
+$summary_text"
+  fi
+
+  metadata_block="Release metadata:
+- version: ${current_version:-n/a}
+- staged files: ${staged_count:-0}"
+  if [[ -n "$staged_paths" ]]; then
+    metadata_block="${metadata_block}
+- paths:
+${staged_paths}"
+  fi
+
+  if [[ -n "$body" ]]; then
+    body="${body}
+
+${metadata_block}"
+  else
+    body="${metadata_block}"
+  fi
+
+  printf '%s' "$body"
+}
+
 write_deploy_notes() {
   local commit_subject="$1"
+  local commit_body="${2:-}"
   local notes_file="$DEPLOY_STATE_DIR/deploy-notes-latest.md"
   local generated_at_utc
   local current_version
@@ -394,6 +457,12 @@ write_deploy_notes() {
       echo "- Source: \`${RELEASE_BRIEF_FILE#$PROJECT_ROOT/}\`"
       echo ""
       sed 's/^/> /' "$RELEASE_BRIEF_FILE"
+    fi
+    if [[ -n "$commit_body" ]]; then
+      echo ""
+      echo "## Proposed Commit Body"
+      echo ""
+      printf '%s\n' "$commit_body" | sed 's/^/> /'
     fi
   } > "$notes_file"
 
@@ -445,6 +514,7 @@ append_deploy_history() {
 commit_and_push() {
   local commit_message
   local auto_commit_message
+  local auto_commit_body
   local deploy_notes_file
   local deploy_history_file
   local unstaged_tracked
@@ -487,18 +557,28 @@ commit_and_push() {
   fi
 
   auto_commit_message="$(generate_commit_message)"
+  auto_commit_body="$(generate_commit_body)"
   local release_brief_commit
   release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
   if [[ -n "$release_brief_commit" ]]; then
     print_step "Commit subject loaded from .deploy/release-brief.md"
   fi
-  deploy_notes_file="$(write_deploy_notes "$auto_commit_message")"
+  deploy_notes_file="$(write_deploy_notes "$auto_commit_message" "$auto_commit_body")"
   print_step "Generated deploy notes: ${deploy_notes_file#$PROJECT_ROOT/}"
+  if [[ -n "$auto_commit_body" ]]; then
+    echo ""
+    print_step "AI commit body preview:"
+    printf '%s\n' "$auto_commit_body"
+  fi
   echo ""
   read -r -p "Commit message [$auto_commit_message]: " commit_message
   commit_message="${commit_message:-$auto_commit_message}"
 
-  git commit -m "$commit_message"
+  if [[ -n "$auto_commit_body" ]]; then
+    git commit -m "$commit_message" -m "$auto_commit_body"
+  else
+    git commit -m "$commit_message"
+  fi
   git push origin "$(git branch --show-current)"
   deploy_history_file="$(append_deploy_history "$commit_message")"
   print_step "Updated deploy history: ${deploy_history_file#$PROJECT_ROOT/}"

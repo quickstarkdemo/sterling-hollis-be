@@ -662,6 +662,85 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert "window.__FASHION_WIDGET__" in html
 
 
+def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_render_merch_workspace(
+            store_query="Dallas",
+            question="What should we feature this week?",
+            objective=Objective.margin,
+            top_k=6,
+            compare_mode=CompareMode.peer_and_prior_period,
+            peer_mode=PeerMode.profile_type,
+        )
+        html = mcp_server.merch_workspace_resource()
+        template_uri = result.meta["openai/outputTemplate"]
+
+        assert template_uri.startswith("ui://widgets/merch/workspace-")
+        assert template_uri.endswith(".html")
+        assert result.meta["ui"]["resourceUri"] == template_uri
+        assert result.structuredContent["kind"] == "merch_workspace"
+        payload = result.structuredContent["payload"]
+        assert payload["store"]["id"] == "1001"
+        assert payload["filters"]["objective"] == "margin"
+        assert payload["filters"]["peer_mode"] == "profile_type"
+        assert payload["initial_result"]["recommendations"]
+        assert payload["last_tool"] == "fashion_merch_action_recommendations"
+        assert "<style>" in html
+        assert "Merchandising Workspace" in html
+        assert "window.__FASHION_WIDGET__" in html
+
+
+def test_open_merch_workspace_orchestrates_store_resolution(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_open_merch_workspace(
+            store_query="Dallas",
+            question="Why are shoes underperforming here?",
+            compare_mode=CompareMode.peer_and_prior_period,
+        )
+
+        payload = result.structuredContent["payload"]
+        assert result.structuredContent["kind"] == "merch_workspace"
+        assert payload["store"]["id"] == "1001"
+        assert "Resolved store Dallas Downtown from 'Dallas'." == payload["initial_notice"]
+
+
+def test_merch_export_csv_supports_all_views(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        actions = mcp_server.fashion_merch_export_csv(
+            view="actions",
+            store_id="1001",
+            question="What should we feature for margin?",
+            objective=Objective.margin,
+            top_k=5,
+        )
+        diagnostics = mcp_server.fashion_merch_export_csv(
+            view="diagnostics",
+            store_id="1001",
+            question="Why is womens apparel moving here?",
+            category="womens_apparel",
+        )
+        trends = mcp_server.fashion_merch_export_csv(
+            view="trends",
+            store_id="1001",
+            question="Summarize recent womens apparel trends",
+            category="womens_apparel",
+        )
+
+        assert actions.row_count > 0
+        assert actions.csv_text.splitlines()[0].startswith("store_id,store_name,view,action,product_id")
+        assert actions.view.value == "actions"
+        assert diagnostics.row_count > 0
+        assert diagnostics.csv_text.splitlines()[0].startswith("store_id,store_name,view,dimension,subject")
+        assert diagnostics.view.value == "diagnostics"
+        assert trends.row_count > 0
+        assert trends.csv_text.splitlines()[0].startswith("store_id,store_name,view,subject,current_value")
+        assert trends.view.value == "trends"
+
+
 def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
@@ -708,6 +787,9 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         tool_names = set(mcp_server.mcp._tool_manager._tools.keys())
         assert "fashion_render_customer_search_workspace" in tool_names
         assert "fashion_open_customer_workspace" in tool_names
+        assert "fashion_render_merch_workspace" in tool_names
+        assert "fashion_open_merch_workspace" in tool_names
+        assert "fashion_merch_export_csv" in tool_names
         assert "fashion_prepare_customer_email_draft" in tool_names
         assert "fashion_update_customer_email_draft" in tool_names
         assert "fashion_get_customer_email_draft" in tool_names
@@ -728,8 +810,13 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         customer_workspace_keys = [
             key for key in resources.keys() if key.startswith("ui://widgets/customer-search/workspace-")
         ]
+        merch_workspace_keys = [
+            key for key in resources.keys() if key.startswith("ui://widgets/merch/workspace-")
+        ]
         assert customer_workspace_keys
+        assert merch_workspace_keys
         assert resources[customer_workspace_keys[0]].mime_type == "text/html;profile=mcp-app"
+        assert resources[merch_workspace_keys[0]].mime_type == "text/html;profile=mcp-app"
         assert "ui://widgets/associate/workspace.html" not in resources
         assert "ui://widgets/sms/review.html" not in resources
         assert "ui://widgets/merch/board.html" not in resources
