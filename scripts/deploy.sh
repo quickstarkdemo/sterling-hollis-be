@@ -6,6 +6,7 @@ DEFAULT_ENV_FILE=".env"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEPLOY_STATE_DIR="$PROJECT_ROOT/.deploy"
+RELEASE_BRIEF_FILE="$DEPLOY_STATE_DIR/release-brief.md"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,6 +29,33 @@ print_warning() {
 
 print_error() {
   echo -e "${RED}$1${NC}"
+}
+
+read_release_brief_field() {
+  local pattern="$1"
+  local value
+
+  [[ -f "$RELEASE_BRIEF_FILE" ]] || return 0
+  value="$(
+    grep -E -m 1 "^[[:space:]]*(${pattern})[[:space:]]*:" "$RELEASE_BRIEF_FILE" 2>/dev/null \
+      | cut -d ':' -f2-
+  )"
+  value="$(echo "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [[ -n "$value" ]] && echo "$value"
+}
+
+ensure_release_brief_file() {
+  if [[ -f "$RELEASE_BRIEF_FILE" ]]; then
+    return
+  fi
+  mkdir -p "$DEPLOY_STATE_DIR"
+  cat > "$RELEASE_BRIEF_FILE" <<'EOF'
+# Release Brief
+Version:
+Commit:
+Summary:
+- 
+EOF
 }
 
 hash_file() {
@@ -161,10 +189,21 @@ suggest_next_version() {
 set_version() {
   local current_version
   local suggested_version
+  local release_brief_version
   local prompt
   current_version=$(tr -d '[:space:]' < VERSION 2>/dev/null || true)
   current_version="${current_version:-0.1.0}"
   suggested_version="$(suggest_next_version "$current_version")"
+  release_brief_version="$(read_release_brief_field "Version" || true)"
+
+  if [[ -n "$release_brief_version" ]]; then
+    if [[ "$release_brief_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+      suggested_version="$release_brief_version"
+      print_step "Version hint loaded from .deploy/release-brief.md: $release_brief_version"
+    else
+      print_warning "Ignoring invalid Version in .deploy/release-brief.md: $release_brief_version"
+    fi
+  fi
 
   if [[ "$suggested_version" == "$current_version" ]]; then
     prompt="Version [$current_version]: "
@@ -217,6 +256,13 @@ upload_secrets() {
 }
 
 generate_commit_message() {
+  local release_brief_commit
+  release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
+  if [[ -n "$release_brief_commit" ]]; then
+    echo "$release_brief_commit"
+    return
+  fi
+
   local staged_files
   staged_files="$(git diff --cached --name-only)"
 
@@ -342,6 +388,13 @@ write_deploy_notes() {
       [[ -z "$line" ]] && continue
       echo "- \`${line}\`"
     done <<< "$(git diff --cached --name-status)"
+    if [[ -f "$RELEASE_BRIEF_FILE" ]]; then
+      echo ""
+      echo "## Release Brief"
+      echo "- Source: \`${RELEASE_BRIEF_FILE#$PROJECT_ROOT/}\`"
+      echo ""
+      sed 's/^/> /' "$RELEASE_BRIEF_FILE"
+    fi
   } > "$notes_file"
 
   echo "$notes_file"
@@ -378,6 +431,11 @@ append_deploy_history() {
       [[ -z "$line" ]] && continue
       echo "  - ${line}"
     done <<< "$(git show --name-status --format='' HEAD)"
+    if [[ -f "$RELEASE_BRIEF_FILE" ]]; then
+      local brief_commit
+      brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
+      [[ -n "$brief_commit" ]] && echo "- Release brief commit: ${brief_commit}"
+    fi
     echo ""
   } >> "$history_file"
 
@@ -429,6 +487,11 @@ commit_and_push() {
   fi
 
   auto_commit_message="$(generate_commit_message)"
+  local release_brief_commit
+  release_brief_commit="$(read_release_brief_field "Commit|Subject" || true)"
+  if [[ -n "$release_brief_commit" ]]; then
+    print_step "Commit subject loaded from .deploy/release-brief.md"
+  fi
   deploy_notes_file="$(write_deploy_notes "$auto_commit_message")"
   print_step "Generated deploy notes: ${deploy_notes_file#$PROJECT_ROOT/}"
   echo ""
@@ -452,6 +515,7 @@ main() {
   fi
 
   check_prerequisites
+  ensure_release_brief_file
   validate_env_file "$env_file"
   set_version
   upload_secrets "$env_file"

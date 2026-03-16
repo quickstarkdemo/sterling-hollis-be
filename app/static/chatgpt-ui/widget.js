@@ -832,15 +832,33 @@ function recommendationRows(response) {
   return response.recommendation.recommendations;
 }
 
-function syncSelectedProducts(rows, existingSelection = []) {
-  const validIds = new Set(rows.map((item) => item.product_id).filter((value) => typeof value === "string" && value));
+function recommendationProductId(item) {
+  if (!isObject(item)) {
+    return null;
+  }
+  if (typeof item.product_id === "string" && item.product_id.trim()) {
+    return item.product_id.trim();
+  }
+  if (typeof item.id === "string" && item.id.trim()) {
+    return item.id.trim();
+  }
+  return null;
+}
+
+function syncSelectedProducts(rows, existingSelection = [], options = {}) {
+  const seedWhenEmpty = options.seedWhenEmpty !== false;
+  const validIds = new Set(
+    rows
+      .map((item) => recommendationProductId(item))
+      .filter((value) => typeof value === "string" && value),
+  );
   const filtered = normalizeProductIds(existingSelection).filter((productId) => validIds.has(productId));
-  if (filtered.length) {
+  if (filtered.length || !seedWhenEmpty) {
     return filtered;
   }
   return rows
     .slice(0, 3)
-    .map((item) => item.product_id)
+    .map((item) => recommendationProductId(item))
     .filter((value) => typeof value === "string" && value);
 }
 
@@ -863,7 +881,9 @@ function toggleSelectedProduct(productId) {
 function selectAllProducts(response) {
   markUserInteraction();
   const rows = recommendationRows(response);
-  state.recommendation.selectedProductIds = normalizeProductIds(rows.map((item) => item.product_id));
+  state.recommendation.selectedProductIds = normalizeProductIds(
+    rows.map((item) => recommendationProductId(item)),
+  );
   persistWidgetState();
 }
 
@@ -1082,7 +1102,9 @@ function buildEmailDraftClipboardText(selected) {
 
 function buildEmailDraftArgs(selected, options = {}) {
   const rows = recommendationRows(state.recommendation.response);
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
+    seedWhenEmpty: false,
+  });
   const destination = (state.ui.emailTo || selected.email || "").trim();
   const args = {
     store_id: selected.home_store_id,
@@ -1162,7 +1184,9 @@ async function prepareEmailDraft(selected, options = {}) {
     render();
     return null;
   }
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
+    seedWhenEmpty: false,
+  });
   state.recommendation.selectedProductIds = selectedIds;
   const destination = (state.ui.emailTo || selected.email || "").trim();
   if (!destination) {
@@ -1232,7 +1256,9 @@ async function syncEmailDraftEdits(selected) {
     return prepareEmailDraft(selected, { includeMessageId: false, silent: true });
   }
   const rows = recommendationRows(state.recommendation.response);
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
+    seedWhenEmpty: false,
+  });
   const destination = (state.ui.emailTo || selected.email || "").trim();
   if (!destination) {
     setNotice("Enter a destination email before updating draft.", "error");
@@ -1480,68 +1506,49 @@ function recommendationCards(response) {
   if (!rows.length) {
     return [el("p", { className: "fw-empty", text: "No recommendations returned for the selected filters." })];
   }
-  return rows.map((item) =>
-    el(
+  return rows.map((item) => {
+    const itemId = recommendationProductId(item) || "";
+    const reasonText = Array.isArray(item.reasons)
+      ? item.reasons
+          .slice(0, 2)
+          .map((reason) => String(reason || "").trim())
+          .filter(Boolean)
+          .join(" • ")
+      : "";
+    return el(
       "article",
       { className: "fw-rec-card" },
       el(
-        "label",
-        { className: "fw-rec-select" },
-        el("input", {
-          type: "checkbox",
-          checked: selectedIds.has(item.product_id),
-          onChange: () => {
-            toggleSelectedProduct(item.product_id);
-            render();
-          },
-        }),
-        el("span", { text: "Select" }),
-      ),
-      el(
         "div",
         { className: "fw-rec-layout" },
+        el(
+          "label",
+          { className: "fw-rec-select-inline" },
+          el("input", {
+            type: "checkbox",
+            checked: selectedIds.has(itemId),
+            onChange: () => {
+              toggleSelectedProduct(itemId);
+              render();
+            },
+          }),
+        ),
         el(
           "div",
           { className: "fw-rec-image-wrap" },
           el("img", {
             className: "fw-rec-image",
             src: item.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`,
-            alt: item.title || item.product_id || "Product image",
+            alt: item.title || itemId || "Product image",
             loading: "lazy",
           }),
         ),
         el(
           "div",
           { className: "fw-rec-content" },
-          el("h3", { className: "fw-rec-title", text: item.title || item.product_id }),
-          el(
-            "p",
-            { className: "fw-rec-meta" },
-            el("span", { className: "fw-rec-brand", text: item.brand || "Unknown brand" }),
-            " • ",
-            el("span", { className: "fw-rec-price", text: money(item.price) }),
-          ),
-          el(
-            "div",
-            { className: "fw-chip-row" },
-            item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
-            item.availability ? el("span", { className: "fw-chip subtle", text: item.availability }) : null,
-            item.score !== undefined
-              ? el("span", { className: "fw-chip", text: `score ${Number(item.score).toFixed(2)}` })
-              : null,
-          ),
-          Array.isArray(item.reasons) && item.reasons.length
-            ? el(
-                "div",
-                {},
-                el("p", { className: "fw-rec-why", text: "Why this works" }),
-                el(
-                  "ul",
-                  { className: "fw-rec-reasons" },
-                  ...item.reasons.slice(0, 3).map((reason) => el("li", { text: reason })),
-                ),
-              )
-            : null,
+          el("h3", { className: "fw-rec-title", text: item.title || itemId }),
+          el("p", { className: "fw-rec-brand", text: item.brand || "Unknown brand" }),
+          reasonText ? el("p", { className: "fw-rec-reason-inline", text: reasonText }) : null,
           item.link
             ? el(
                 "a",
@@ -1555,9 +1562,23 @@ function recommendationCards(response) {
               )
             : null,
         ),
+        el(
+          "div",
+          { className: "fw-rec-side" },
+          el("p", { className: "fw-rec-price", text: money(item.price) }),
+          el(
+            "div",
+            { className: "fw-chip-row fw-chip-row-right" },
+            item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
+            item.availability ? el("span", { className: "fw-chip subtle", text: item.availability }) : null,
+            item.score !== undefined
+              ? el("span", { className: "fw-chip", text: `score ${Number(item.score).toFixed(2)}` })
+              : null,
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  });
 }
 
 function render() {
@@ -1795,7 +1816,9 @@ function render() {
         const response =
           state.recommendation.customerId === selected.id ? state.recommendation.response : null;
         const rows = recommendationRows(response);
-        const selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+        const selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
+          seedWhenEmpty: false,
+        });
         if (JSON.stringify(selectedProductIds) !== JSON.stringify(state.recommendation.selectedProductIds)) {
           state.recommendation.selectedProductIds = selectedProductIds;
           persistWidgetState();
@@ -1855,37 +1878,6 @@ function render() {
                         ? `Draft ID: ${state.ui.emailDraftId}`
                         : "Draft ID: not created yet",
                     },
-                  ),
-                  el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
-                ),
-                el(
-                  "div",
-                  { className: "fw-toolbar" },
-                  el(
-                    "button",
-                    {
-                      className: "fw-button secondary",
-                      type: "button",
-                      disabled: !rows.length || allProductsSelected ? "true" : null,
-                      onClick: () => {
-                        selectAllProducts(response);
-                        render();
-                      },
-                    },
-                    "Select All",
-                  ),
-                  el(
-                    "button",
-                    {
-                      className: "fw-button secondary",
-                      type: "button",
-                      disabled: !selectedProductCount ? "true" : null,
-                      onClick: () => {
-                        deselectAllProducts();
-                        render();
-                      },
-                    },
-                    "Deselect All",
                   ),
                 ),
                 el(
@@ -1980,6 +1972,43 @@ function render() {
             : null,
           state.recommendation.error
             ? el("p", { className: "fw-empty", text: state.recommendation.error })
+            : null,
+          response
+            ? el(
+                "div",
+                { className: "fw-rec-bulk-row" },
+                el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
+                el(
+                  "div",
+                  { className: "fw-rec-bulk-actions" },
+                  el(
+                    "button",
+                    {
+                      className: "fw-text-button",
+                      type: "button",
+                      disabled: !rows.length || allProductsSelected ? "true" : null,
+                      onClick: () => {
+                        selectAllProducts(response);
+                        render();
+                      },
+                    },
+                    "Select all",
+                  ),
+                  el(
+                    "button",
+                    {
+                      className: "fw-text-button",
+                      type: "button",
+                      disabled: !selectedProductCount ? "true" : null,
+                      onClick: () => {
+                        deselectAllProducts();
+                        render();
+                      },
+                    },
+                    "Deselect",
+                  ),
+                ),
+              )
             : null,
           ...(response
             ? recommendationCards(response)
