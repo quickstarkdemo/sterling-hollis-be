@@ -569,6 +569,7 @@ class ExecutiveWorkspaceFilters(BaseModel):
     objective: Objective = Objective.revenue
     top_k_stores: int = Field(default=12, ge=1, le=50)
     events: list[str] = Field(default_factory=lambda: ["wedding", "holiday_party", "workwear"])
+    brands: list[str] = Field(default_factory=list)
     store_id: str | None = None
     store_ids: list[str] = Field(default_factory=list)
     discount_pct: float = Field(default=0.0, ge=0.0, le=60.0)

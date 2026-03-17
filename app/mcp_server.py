@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Product, ProductEmbedding, Store, SyntheticRun
+from app.models import Order, Product, ProductEmbedding, Store, SyntheticRun
 from app.schemas import (
     CompareMode,
     CustomerCommunicationDraftResponse,
@@ -109,7 +109,7 @@ from app.services.recommendations import customer_recommendations, merchandising
 from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
 from app.services.system_status import vector_status_payload
-from app.services.taxonomy import CATEGORY_TAXONOMY
+from app.services.taxonomy import CATEGORY_TAXONOMY, OCCASION_TO_CATEGORY
 
 
 def _split_csv(raw: str) -> list[str]:
@@ -264,6 +264,47 @@ def _exec_store_options() -> list[dict[str, str]]:
             }
             for store in stores
         ]
+
+
+def _exec_brand_options() -> list[dict[str, str]]:
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(Product.brand)
+            .where(Product.brand.is_not(None), func.length(func.trim(Product.brand)) > 0)
+            .group_by(Product.brand)
+            .order_by(Product.brand.asc())
+            .limit(500)
+        ).all()
+        return [{"value": str(row.brand), "label": str(row.brand)} for row in rows if row.brand]
+
+
+def _exec_event_options() -> list[dict[str, str]]:
+    taxonomy_tokens = {
+        re.sub(r"[\s\-]+", "_", str(token).strip().lower())
+        for token in OCCASION_TO_CATEGORY.keys()
+        if str(token).strip()
+    }
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(Order.occasion)
+            .where(Order.occasion.is_not(None), func.length(func.trim(Order.occasion)) > 0)
+            .group_by(Order.occasion)
+            .order_by(Order.occasion.asc())
+            .limit(200)
+        ).all()
+    observed_tokens = set()
+    for row in rows:
+        raw = str(row.occasion or "").strip().lower()
+        if not raw:
+            continue
+        token = re.sub(r"[\s\-]+", "_", raw)
+        token = re.sub(r"[^a-z0-9_]", "", token).strip("_")
+        if token:
+            observed_tokens.add(token)
+    tokens = sorted(taxonomy_tokens | observed_tokens)
+    if not tokens:
+        tokens = ["wedding", "holiday_party", "workwear"]
+    return [{"value": token, "label": token.replace("_", " ").title()} for token in tokens]
 
 
 def _apply_inventory_filters(
@@ -934,6 +975,7 @@ def _exec_workspace_payload(
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
     events: list[str] | None = None,
+    brands: list[str] | None = None,
     discount_pct: float = 10.0,
     floor_space_shift_pct: float = 5.0,
     from_category: str | None = "womens_apparel",
@@ -945,6 +987,8 @@ def _exec_workspace_payload(
     bounded_lookback = max(7, min(lookback_days, 730))
     bounded_top_k = max(1, min(top_k_stores, 50))
     bounded_autopilot_top_k = max(1, min(autopilot_top_k, 20))
+    event_options = _exec_event_options()
+    default_events = [item["value"] for item in event_options]
 
     with SessionLocal() as db:
         initial_result = executive_overview(
@@ -964,7 +1008,8 @@ def _exec_workspace_payload(
             lookback_days=bounded_lookback,
             objective=objective,
             top_k_stores=bounded_top_k,
-            events=events or ["wedding", "holiday_party", "workwear"],
+            events=events or default_events,
+            brands=[str(value).strip() for value in (brands or []) if str(value).strip()],
             store_id=store_id,
             store_ids=effective_store_ids,
             discount_pct=discount_pct,
@@ -980,8 +1025,9 @@ def _exec_workspace_payload(
         "initial_notice": initial_notice,
         "uiHints": {
             "emptyState": "Run Overview, Radar, Simulator, or Autopilot to populate this workspace.",
-            "events": ["wedding", "holiday_party", "workwear"],
+            "events": event_options,
             "categoryOptions": _merch_category_options(),
+            "brandOptions": _exec_brand_options(),
             "storeOptions": _exec_store_options(),
         },
     }
@@ -1470,6 +1516,7 @@ def fashion_render_exec_workspace(
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
     events: list[str] | None = None,
+    brands: list[str] | None = None,
     discount_pct: float = 10.0,
     floor_space_shift_pct: float = 5.0,
     from_category: str | None = "womens_apparel",
@@ -1487,6 +1534,7 @@ def fashion_render_exec_workspace(
         objective=objective,
         top_k_stores=top_k_stores,
         events=events,
+        brands=brands,
         discount_pct=discount_pct,
         floor_space_shift_pct=floor_space_shift_pct,
         from_category=from_category,
@@ -1988,6 +2036,7 @@ def fashion_exec_event_readiness_radar(
     store_ids: list[str] | None = None,
     lookback_days: int = 56,
     events: list[str] | None = None,
+    brands: list[str] | None = None,
 ) -> ExecutiveEventReadinessRadarResponse:
     """Return proactive risk flags for event demand readiness with transfer/promotion recommendations."""
     with SessionLocal() as db:
@@ -1998,6 +2047,7 @@ def fashion_exec_event_readiness_radar(
             store_ids=store_ids,
             lookback_days=lookback_days,
             events=events,
+            brands=brands,
         )
 
 
@@ -2015,6 +2065,7 @@ def fashion_exec_what_if_simulator(
     floor_space_shift_pct: float = 0.0,
     from_category: str | None = None,
     to_category: str | None = None,
+    brands: list[str] | None = None,
 ) -> ExecutiveWhatIfSimulatorResponse:
     """Simulate discount and category-exposure shifts with expected revenue/margin impact."""
     with SessionLocal() as db:
@@ -2028,6 +2079,7 @@ def fashion_exec_what_if_simulator(
             floor_space_shift_pct=floor_space_shift_pct,
             from_category=from_category,
             to_category=to_category,
+            brands=brands,
         )
 
 
@@ -2044,6 +2096,7 @@ def fashion_exec_campaign_autopilot_prepare(
     lookback_days: int = 56,
     top_k: int = 6,
     events: list[str] | None = None,
+    brands: list[str] | None = None,
     min_margin_rate: float = 0.40,
     max_discount_pct: float = 20.0,
 ) -> ExecutiveCampaignAutopilotDraftResponse:
@@ -2058,6 +2111,7 @@ def fashion_exec_campaign_autopilot_prepare(
             lookback_days=lookback_days,
             top_k=top_k,
             events=events,
+            brands=brands,
             min_margin_rate=min_margin_rate,
             max_discount_pct=max_discount_pct,
         )

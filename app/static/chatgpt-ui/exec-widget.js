@@ -19,6 +19,7 @@ const DEFAULT_PAYLOAD = {
     objective: "revenue",
     top_k_stores: 12,
     events: ["wedding", "holiday_party", "workwear"],
+    brands: [],
     store_id: null,
     store_ids: [],
     discount_pct: 10,
@@ -36,6 +37,7 @@ const DEFAULT_PAYLOAD = {
     emptyState: "Run one of the executive tabs to populate this workspace.",
     categoryOptions: [],
     events: ["wedding", "holiday_party", "workwear"],
+    brandOptions: [],
     storeOptions: [],
   },
 };
@@ -47,7 +49,8 @@ const state = {
     lookbackDays: "90",
     objective: "revenue",
     storeIds: [],
-    eventsCsv: "wedding, holiday_party, workwear",
+    selectedEvents: ["wedding", "holiday_party", "workwear"],
+    selectedBrands: [],
     discountPct: "10",
     floorSpaceShiftPct: "5",
     fromCategory: "womens_apparel",
@@ -143,7 +146,8 @@ function normalizeWorkspacePayload(raw) {
       lookback_days: Number(rawFilters.lookback_days) > 0 ? Number(rawFilters.lookback_days) : 90,
       objective: typeof rawFilters.objective === "string" ? rawFilters.objective : "revenue",
       top_k_stores: Number(rawFilters.top_k_stores) > 0 ? Number(rawFilters.top_k_stores) : 12,
-      events: Array.isArray(rawFilters.events) ? clone(rawFilters.events) : ["wedding", "holiday_party", "workwear"],
+      events: normalizeTokenSelections(rawFilters.events, { lowerCase: true, normalizeSpaces: true }),
+      brands: normalizeTokenSelections(rawFilters.brands, { lowerCase: false }),
       store_id: legacyStoreId,
       store_ids: normalizedStoreIds,
       discount_pct: Number.isFinite(Number(rawFilters.discount_pct)) ? Number(rawFilters.discount_pct) : 10,
@@ -175,7 +179,8 @@ function applyWorkspacePayload(raw) {
   state.ui.lookbackPreset = resolveLookbackPreset(state.ui.lookbackDays);
   state.ui.objective = payload.filters.objective || "revenue";
   state.ui.storeIds = clone(payload.filters.store_ids || []);
-  state.ui.eventsCsv = Array.isArray(payload.filters.events) ? payload.filters.events.join(", ") : "wedding, holiday_party, workwear";
+  state.ui.selectedEvents = normalizeTokenSelections(payload.filters.events, { lowerCase: true, normalizeSpaces: true });
+  state.ui.selectedBrands = normalizeTokenSelections(payload.filters.brands, { lowerCase: false });
   state.ui.discountPct = String(payload.filters.discount_pct ?? 10);
   state.ui.floorSpaceShiftPct = String(payload.filters.floor_space_shift_pct ?? 5);
   state.ui.fromCategory = payload.filters.from_category || "";
@@ -307,19 +312,28 @@ function activeResult() {
   return null;
 }
 
-function parseEventsCsv(raw) {
-  if (typeof raw !== "string" || !raw.trim()) {
-    return ["wedding", "holiday_party", "workwear"];
-  }
+function normalizeTokenSelections(raw, options = {}) {
+  const lowerCase = options.lowerCase !== false;
+  const normalizeSpaces = options.normalizeSpaces === true;
+  const source = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : [];
   const values = [];
-  raw.split(",").forEach((item) => {
-    const token = item.trim().toLowerCase().replace(/\s+/g, "_");
+  source.forEach((item) => {
+    let token = String(item || "").trim();
+    if (!token) {
+      return;
+    }
+    if (normalizeSpaces) {
+      token = token.replace(/\s+/g, "_");
+    }
+    if (lowerCase) {
+      token = token.toLowerCase();
+    }
     if (!token || values.includes(token)) {
       return;
     }
     values.push(token);
   });
-  return values.length ? values : ["wedding", "holiday_party", "workwear"];
+  return values;
 }
 
 function normalizeStoreIds(raw) {
@@ -335,6 +349,12 @@ function normalizeStoreIds(raw) {
     unique.push(value);
   });
   return unique;
+}
+
+function humanizeToken(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function parsePositiveInt(value, fallback, min, max) {
@@ -358,6 +378,43 @@ function normalizeLookbackDays(value, preset) {
   return parsePositiveInt(value, 90, 7, 730);
 }
 
+function normalizeOptions(raw, options = {}) {
+  const useHumanizedLabel = options.useHumanizedLabel === true;
+  const list = Array.isArray(raw) ? raw : [];
+  return list
+    .map((item) => {
+      if (isObject(item)) {
+        const value = String(item.value || "").trim();
+        const label = String(item.label || value).trim();
+        if (!value || !label) {
+          return null;
+        }
+        return { value, label };
+      }
+      const value = String(item || "").trim();
+      if (!value) {
+        return null;
+      }
+      return { value, label: useHumanizedLabel ? humanizeToken(value) : value };
+    })
+    .filter(Boolean);
+}
+
+function selectedEventValues() {
+  const selected = normalizeTokenSelections(state.ui.selectedEvents, { lowerCase: true, normalizeSpaces: true });
+  if (selected.length) {
+    return selected;
+  }
+  const defaults = normalizeOptions(state.payload.uiHints?.events || DEFAULT_PAYLOAD.uiHints.events).map((item) =>
+    String(item.value).toLowerCase(),
+  );
+  return defaults.length ? defaults : ["wedding", "holiday_party", "workwear"];
+}
+
+function selectedBrandValues() {
+  return normalizeTokenSelections(state.ui.selectedBrands, { lowerCase: false });
+}
+
 function buildModelContextPayload() {
   return {
     workspace: "exec_workspace",
@@ -365,7 +422,8 @@ function buildModelContextPayload() {
     lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
     objective: state.ui.objective,
     store_ids: normalizeStoreIds(state.ui.storeIds),
-    events: parseEventsCsv(state.ui.eventsCsv),
+    events: selectedEventValues(),
+    brands: selectedBrandValues(),
     to_email: state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL,
     autopilot_draft_id: state.runtime.autopilotDraftId || null,
   };
@@ -428,28 +486,43 @@ function buildToolArgs(toolName) {
     };
   }
   if (toolName === "fashion_exec_event_readiness_radar") {
-    return {
+    const brands = selectedBrandValues();
+    const args = {
       ...common,
-      events: parseEventsCsv(state.ui.eventsCsv),
+      events: selectedEventValues(),
     };
+    if (brands.length) {
+      args.brands = brands;
+    }
+    return args;
   }
   if (toolName === "fashion_exec_what_if_simulator") {
-    return {
+    const brands = selectedBrandValues();
+    const args = {
       ...common,
       discount_pct: Number(state.ui.discountPct || 0),
       floor_space_shift_pct: Number(state.ui.floorSpaceShiftPct || 0),
       from_category: state.ui.fromCategory || undefined,
       to_category: state.ui.toCategory || undefined,
     };
+    if (brands.length) {
+      args.brands = brands;
+    }
+    return args;
   }
   if (toolName === "fashion_exec_campaign_autopilot_prepare") {
-    return {
+    const brands = selectedBrandValues();
+    const args = {
       ...common,
       to_email: (state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL).trim() || DEFAULT_EXEC_TO_EMAIL,
       lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
       top_k: parsePositiveInt(state.ui.autopilotTopK, 6, 1, 20),
-      events: parseEventsCsv(state.ui.eventsCsv),
+      events: selectedEventValues(),
     };
+    if (brands.length) {
+      args.brands = brands;
+    }
+    return args;
   }
   return common;
 }
@@ -1064,39 +1137,36 @@ function buildPercentLeverField({
   );
 }
 
-function storeSelectionSummary(selectedIds, optionsById) {
-  if (!Array.isArray(selectedIds) || !selectedIds.length) {
-    return "All stores";
+function multiSelectSummary(selectedValues, optionsById, labels) {
+  if (!Array.isArray(selectedValues) || !selectedValues.length) {
+    return labels.all;
   }
-  if (selectedIds.length === 1) {
-    const label = optionsById.get(selectedIds[0]);
-    return label || "1 store selected";
+  if (selectedValues.length === 1) {
+    const label = optionsById.get(selectedValues[0]);
+    return label || `1 ${labels.singular} selected`;
   }
-  return `${selectedIds.length} stores selected`;
+  return `${selectedValues.length} ${labels.plural} selected`;
 }
 
-function buildStoreMultiSelect(selectedStoreIds, options) {
-  const normalizedSelected = normalizeStoreIds(selectedStoreIds);
-  const selected = new Set(normalizedSelected);
-  const normalizedOptions = [];
-  (Array.isArray(options) ? options : []).forEach((option) => {
-    const value = String(option.value || "").trim();
-    const label = String(option.label || value).trim();
-    if (!value || !label) {
-      return;
-    }
-    normalizedOptions.push({ value, label });
-  });
-  const optionsById = new Map(normalizedOptions.map((item) => [item.value, item.label]));
+function buildCheckMultiSelect({
+  selectedValues,
+  options,
+  labels,
+  noOptionsText,
+  onApply,
+}) {
+  const selected = new Set(selectedValues || []);
+  const normalizedOptions = normalizeOptions(options);
   const details = el("details", { className: "fw-multi-select" });
+  const optionsById = new Map(normalizedOptions.map((item) => [item.value, item.label]));
   const summary = el("summary", {
     className: "fw-input fw-multi-select-summary",
-    text: storeSelectionSummary(normalizedSelected, optionsById),
+    text: multiSelectSummary(Array.from(selected), optionsById, labels),
   });
   const list = el("div", { className: "fw-multi-select-list" });
 
   if (!normalizedOptions.length) {
-    list.appendChild(el("p", { className: "fw-empty", text: "No stores available." }));
+    list.appendChild(el("p", { className: "fw-empty", text: noOptionsText }));
   } else {
     normalizedOptions.forEach((option) => {
       const checkbox = el("input", { type: "checkbox", checked: selected.has(option.value) ? "true" : null });
@@ -1140,12 +1210,10 @@ function buildStoreMultiSelect(selectedStoreIds, options) {
         className: "fw-button secondary",
         type: "button",
         onClick: () => {
-          state.ui.storeIds = normalizeStoreIds(Array.from(selected));
-          summary.textContent = storeSelectionSummary(state.ui.storeIds, optionsById);
+          const nextValues = Array.from(selected);
+          summary.textContent = multiSelectSummary(nextValues, optionsById, labels);
           details.open = false;
-          markUserInteraction();
-          queueModelContextUpdate();
-          render();
+          onApply(nextValues);
         },
       },
       "Apply",
@@ -1155,6 +1223,58 @@ function buildStoreMultiSelect(selectedStoreIds, options) {
   details.appendChild(summary);
   details.appendChild(el("div", { className: "fw-multi-select-panel" }, list, actions));
   return details;
+}
+
+function buildStoreMultiSelect(selectedStoreIds, options) {
+  return buildCheckMultiSelect({
+    selectedValues: normalizeStoreIds(selectedStoreIds),
+    options,
+    labels: { all: "All stores", singular: "store", plural: "stores" },
+    noOptionsText: "No stores available.",
+    onApply: (nextValues) => {
+      state.ui.storeIds = normalizeStoreIds(nextValues);
+      markUserInteraction();
+      queueModelContextUpdate();
+      render();
+    },
+  });
+}
+
+function buildEventsMultiSelect(selectedEventValuesRaw, options) {
+  return buildCheckMultiSelect({
+    selectedValues: normalizeTokenSelections(selectedEventValuesRaw, { lowerCase: true, normalizeSpaces: true }),
+    options: normalizeOptions(options, { useHumanizedLabel: true }),
+    labels: { all: "All events", singular: "event", plural: "events" },
+    noOptionsText: "No events configured.",
+    onApply: (nextValues) => {
+      state.ui.selectedEvents = normalizeTokenSelections(nextValues, { lowerCase: true, normalizeSpaces: true });
+      markUserInteraction();
+      queueModelContextUpdate();
+      render();
+    },
+  });
+}
+
+function buildBrandsMultiSelect(selectedBrandValuesRaw, options) {
+  return buildCheckMultiSelect({
+    selectedValues: normalizeTokenSelections(selectedBrandValuesRaw, { lowerCase: false }),
+    options,
+    labels: { all: "All brands", singular: "brand", plural: "brands" },
+    noOptionsText: "No brands available.",
+    onApply: (nextValues) => {
+      state.ui.selectedBrands = normalizeTokenSelections(nextValues, { lowerCase: false });
+      markUserInteraction();
+      queueModelContextUpdate();
+      render();
+    },
+  });
+}
+
+function selectionCountText(count, singular, plural, emptyText) {
+  if (!count) {
+    return emptyText;
+  }
+  return `${count} ${count === 1 ? singular : plural} selected.`;
 }
 
 function render() {
@@ -1189,6 +1309,7 @@ function render() {
   );
 
   const tool = state.payload.last_tool || "fashion_exec_overview";
+  const activeTabTool = tool === "fashion_exec_campaign_autopilot_send" ? "fashion_exec_campaign_autopilot_prepare" : tool;
   const tabs = [
     { label: "Overview", tool: "fashion_exec_overview" },
     { label: "Readiness Radar", tool: "fashion_exec_event_readiness_radar" },
@@ -1198,13 +1319,19 @@ function render() {
 
   const categoryOptions = [
     { label: "Any", value: "" },
-    ...((Array.isArray(state.payload.uiHints?.categoryOptions) ? state.payload.uiHints.categoryOptions : []).map((item) => ({
-      label: item.label || item.value,
-      value: item.value,
-    }))),
+    ...normalizeOptions(state.payload.uiHints?.categoryOptions),
   ];
-  const storeOptions = Array.isArray(state.payload.uiHints?.storeOptions) ? state.payload.uiHints.storeOptions : [];
+  const storeOptions = normalizeOptions(state.payload.uiHints?.storeOptions);
+  const eventOptions = normalizeOptions(state.payload.uiHints?.events || DEFAULT_PAYLOAD.uiHints.events, {
+    useHumanizedLabel: true,
+  }).map((option) => ({
+    value: String(option.value).toLowerCase().replace(/\s+/g, "_"),
+    label: option.label,
+  }));
+  const brandOptions = normalizeOptions(state.payload.uiHints?.brandOptions);
   const selectedStoreCount = normalizeStoreIds(state.ui.storeIds).length;
+  const selectedEventCount = selectedEventValues().length;
+  const selectedBrandCount = selectedBrandValues().length;
   const normalizedLookbackDays = String(normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset));
 
   const lookbackPresetSelect = buildSelect(state.ui.lookbackPreset, LOOKBACK_PRESET_OPTIONS, (value) => {
@@ -1214,52 +1341,9 @@ function render() {
     }
   });
 
-  const controlsPanel = el(
-    "section",
-    { className: "fw-panel" },
-    notice,
-    el(
-      "div",
-      { className: "fw-grid merch-filters" },
-      el(
-        "div",
-        { className: "fw-field fw-span-full" },
-        el("label", { className: "fw-label", text: "Store Scope (multi-select)" }),
-        buildStoreMultiSelect(state.ui.storeIds, storeOptions),
-        el(
-          "p",
-          {
-            className: "fw-empty",
-            text: selectedStoreCount ? `${selectedStoreCount} store(s) selected.` : "No stores selected: defaults to company-wide network.",
-          },
-        ),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Lookback Window" }),
-        lookbackPresetSelect,
-      ),
-      state.ui.lookbackPreset === "custom"
-        ? el(
-            "div",
-            { className: "fw-field" },
-            el("label", { className: "fw-label", text: "Custom Days" }),
-            el("input", {
-              className: "fw-input",
-              type: "number",
-              min: "7",
-              max: "730",
-              value: normalizedLookbackDays,
-              onInput: (event) => {
-                markUserInteraction();
-                state.ui.lookbackDays = event.target.value;
-                state.ui.lookbackPreset = "custom";
-                queueModelContextUpdate();
-              },
-            }),
-          )
-        : null,
+  const tabScopedControls = [];
+  if (activeTabTool === "fashion_exec_overview") {
+    tabScopedControls.push(
       el(
         "div",
         { className: "fw-field" },
@@ -1276,27 +1360,96 @@ function render() {
           },
         ),
       ),
+    );
+  }
+  if (activeTabTool === "fashion_exec_event_readiness_radar" || activeTabTool === "fashion_exec_campaign_autopilot_prepare") {
+    tabScopedControls.push(
       el(
         "div",
-        { className: "fw-field fw-span-full" },
-        el("h3", { className: "fw-panel-title", text: "Event + Autopilot Inputs" }),
-        el("p", { className: "fw-empty", text: "Store scope + lookback + events apply to all tabs. Email and shortlist size apply to Campaign Autopilot." }),
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Events" }),
+        buildEventsMultiSelect(state.ui.selectedEvents, eventOptions),
+        el("p", {
+          className: "fw-empty",
+          text: selectionCountText(selectedEventCount, "event", "events", "No event selected: defaults to all configured events."),
+        }),
       ),
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Events (comma separated)" }),
-        el("input", {
-          className: "fw-input",
-          type: "text",
-          value: state.ui.eventsCsv,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.eventsCsv = event.target.value;
-            queueModelContextUpdate();
-          },
+        el("label", { className: "fw-label", text: "Brand Scope" }),
+        buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
+        el("p", {
+          className: "fw-empty",
+          text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
         }),
       ),
+    );
+  }
+  if (activeTabTool === "fashion_exec_what_if_simulator") {
+    tabScopedControls.push(
+      el(
+        "div",
+        { className: "fw-field fw-span-full" },
+        el("h3", { className: "fw-panel-title", text: "What-if Inputs" }),
+        el("p", { className: "fw-empty", text: "Category reallocation and pricing/space levers only apply to this simulator tab." }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Brand Scope" }),
+        buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
+        el("p", {
+          className: "fw-empty",
+          text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Reallocate From Category" }),
+        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
+          state.ui.fromCategory = value;
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Reallocate To Category" }),
+        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
+          state.ui.toCategory = value;
+        }),
+      ),
+      buildPercentLeverField({
+        label: "Discount (%)",
+        value: state.ui.discountPct,
+        min: 0,
+        max: 60,
+        step: 1,
+        onNumberInput: (value) => {
+          state.ui.discountPct = value;
+        },
+        onSliderInput: (value) => {
+          state.ui.discountPct = value;
+        },
+      }),
+      buildPercentLeverField({
+        label: "Space Shift (%)",
+        value: state.ui.floorSpaceShiftPct,
+        min: -40,
+        max: 40,
+        step: 1,
+        onNumberInput: (value) => {
+          state.ui.floorSpaceShiftPct = value;
+        },
+        onSliderInput: (value) => {
+          state.ui.floorSpaceShiftPct = value;
+        },
+      }),
+    );
+  }
+  if (activeTabTool === "fashion_exec_campaign_autopilot_prepare") {
+    tabScopedControls.push(
       el(
         "div",
         { className: "fw-field" },
@@ -1329,64 +1482,52 @@ function render() {
           },
         }),
       ),
+    );
+  }
+
+  const controlsPanel = el(
+    "section",
+    { className: "fw-panel" },
+    notice,
+    el(
+      "div",
+      { className: "fw-grid merch-filters" },
       el(
         "div",
         { className: "fw-field fw-span-full" },
-        el("h3", { className: "fw-panel-title", text: "What-if Scenario Inputs" }),
-        el("p", { className: "fw-empty", text: "Configure category reallocation, then apply pricing/space levers on the Reallocate To category." }),
-      ),
-      el(
-        "div",
-        { className: "fw-field fw-span-full" },
-        el("h4", { className: "fw-panel-title", text: "Category Reallocation Pair" }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Reallocate From Category" }),
-        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
-          state.ui.fromCategory = value;
+        el("label", { className: "fw-label", text: "Store Scope (multi-select)" }),
+        buildStoreMultiSelect(state.ui.storeIds, storeOptions),
+        el("p", {
+          className: "fw-empty",
+          text: selectionCountText(selectedStoreCount, "store", "stores", "No stores selected: defaults to company-wide network."),
         }),
       ),
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Reallocate To Category" }),
-        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
-          state.ui.toCategory = value;
-        }),
+        el("label", { className: "fw-label", text: "Lookback Window" }),
+        lookbackPresetSelect,
       ),
-      el(
-        "div",
-        { className: "fw-field fw-span-full" },
-        el("h4", { className: "fw-panel-title", text: "Reallocate-To Levers" }),
-      ),
-      buildPercentLeverField({
-        label: "Discount (%)",
-        value: state.ui.discountPct,
-        min: 0,
-        max: 60,
-        step: 1,
-        onNumberInput: (value) => {
-          state.ui.discountPct = value;
-        },
-        onSliderInput: (value) => {
-          state.ui.discountPct = value;
-        },
-      }),
-      buildPercentLeverField({
-        label: "Space Shift (%)",
-        value: state.ui.floorSpaceShiftPct,
-        min: -40,
-        max: 40,
-        step: 1,
-        onNumberInput: (value) => {
-          state.ui.floorSpaceShiftPct = value;
-        },
-        onSliderInput: (value) => {
-          state.ui.floorSpaceShiftPct = value;
-        },
-      }),
+      state.ui.lookbackPreset === "custom"
+        ? el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Custom Days" }),
+            el("input", {
+              className: "fw-input",
+              type: "number",
+              min: "7",
+              max: "730",
+              value: normalizedLookbackDays,
+              onInput: (event) => {
+                markUserInteraction();
+                state.ui.lookbackDays = event.target.value;
+                state.ui.lookbackPreset = "custom";
+                queueModelContextUpdate();
+              },
+            }),
+          )
+        : null,
     ),
     el(
       "div",
@@ -1398,14 +1539,14 @@ function render() {
           el(
             "button",
             {
-              className: `fw-tab fw-merch-tab ${tab.tool === tool ? "active" : ""}`,
+              className: `fw-tab fw-merch-tab ${tab.tool === activeTabTool ? "active" : ""}`,
               type: "button",
               disabled: state.ui.isLoading ? "true" : null,
               onClick: () => {
                 void refreshExec(tab.tool);
               },
             },
-            state.ui.isLoading && tab.tool === tool ? "Loading..." : tab.label,
+            state.ui.isLoading && tab.tool === activeTabTool ? "Loading..." : tab.label,
           ),
         ),
       ),
@@ -1416,12 +1557,13 @@ function render() {
           type: "button",
           disabled: state.ui.isLoading ? "true" : null,
           onClick: () => {
-            void refreshExec(tool);
+            void refreshExec(activeTabTool);
           },
         },
         state.ui.isLoading ? "Refreshing..." : "Refresh",
       ),
     ),
+    tabScopedControls.length ? el("div", { className: "fw-grid merch-filters" }, ...tabScopedControls) : null,
   );
 
   const contextPanel = el(

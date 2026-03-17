@@ -64,6 +64,17 @@ def _normalized_events(events: list[str] | None) -> list[str]:
     return normalized or list(DEFAULT_EXEC_EVENTS)
 
 
+def _normalized_brands(brands: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for value in brands or []:
+        token = str(value or "").strip().lower()
+        if not token:
+            continue
+        if token not in normalized:
+            normalized.append(token)
+    return normalized
+
+
 def _scope_label(*, resolved: ResolvedStore | None, explicit_store_ids: list[str]) -> str:
     if resolved is not None:
         return resolved.name
@@ -108,6 +119,7 @@ def _store_sales(
     until: datetime,
     occasion: str | None = None,
     categories: list[str] | None = None,
+    brands: list[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     if not store_ids:
         return {}
@@ -128,6 +140,8 @@ def _store_sales(
         query = query.where(Order.occasion == occasion)
     if categories:
         query = query.where(Product.category.in_(categories))
+    if brands:
+        query = query.where(func.lower(Product.brand).in_(brands))
     rows = session.execute(query).all()
     payload: dict[str, dict[str, float]] = {}
     for row in rows:
@@ -148,14 +162,16 @@ def _inventory_units_by_store(
     *,
     store_ids: list[str],
     categories: list[str],
+    brands: list[str] | None = None,
 ) -> dict[str, float]:
     if not store_ids:
         return {}
-    query = (
-        select(Product.store_id.label("store_id"), func.sum(Product.inventory_qty).label("units"))
-        .where(Product.store_id.in_(store_ids), Product.category.in_(categories))
-        .group_by(Product.store_id)
+    query = select(Product.store_id.label("store_id"), func.sum(Product.inventory_qty).label("units")).where(
+        Product.store_id.in_(store_ids), Product.category.in_(categories)
     )
+    if brands:
+        query = query.where(func.lower(Product.brand).in_(brands))
+    query = query.group_by(Product.store_id)
     rows = session.execute(query).all()
     return {row.store_id: float(row.units or 0.0) for row in rows}
 
@@ -294,10 +310,12 @@ def event_readiness_radar(
     store_ids: list[str] | None = None,
     lookback_days: int = 56,
     events: list[str] | None = None,
+    brands: list[str] | None = None,
 ) -> ExecutiveEventReadinessRadarResponse:
     explicit_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
     bounded_lookback = _bounded_lookback(lookback_days)
     normalized_events = _normalized_events(events)
+    normalized_brands = _normalized_brands(brands)
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=bounded_lookback)
     prior_since = since - timedelta(days=bounded_lookback)
@@ -316,6 +334,7 @@ def event_readiness_radar(
             until=now,
             occasion=event,
             categories=categories,
+            brands=normalized_brands,
         )
         prior = _store_sales(
             session,
@@ -324,8 +343,14 @@ def event_readiness_radar(
             until=since,
             occasion=event,
             categories=categories,
+            brands=normalized_brands,
         )
-        inventory = _inventory_units_by_store(session, store_ids=store_ids, categories=categories)
+        inventory = _inventory_units_by_store(
+            session,
+            store_ids=store_ids,
+            categories=categories,
+            brands=normalized_brands,
+        )
 
         coverage_by_store: dict[str, float] = {}
         for sid in store_ids:
@@ -418,10 +443,11 @@ def _category_sales(
     store_ids: list[str],
     since: datetime,
     until: datetime,
+    brands: list[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     if not store_ids:
         return {}
-    rows = session.execute(
+    query = (
         select(
             Product.category.label("category"),
             func.sum(OrderItem.line_total).label("revenue"),
@@ -431,8 +457,10 @@ def _category_sales(
         .join(OrderItem, OrderItem.product_id == Product.id)
         .join(Order, Order.id == OrderItem.order_id)
         .where(Order.store_id.in_(store_ids), Order.ordered_at >= since, Order.ordered_at < until)
-        .group_by(Product.category)
-    ).all()
+    )
+    if brands:
+        query = query.where(func.lower(Product.brand).in_(brands))
+    rows = session.execute(query.group_by(Product.category)).all()
     return {
         row.category: {
             "revenue": float(row.revenue or 0.0),
@@ -448,14 +476,16 @@ def _category_inventory(
     session: Session,
     *,
     store_ids: list[str],
+    brands: list[str] | None = None,
 ) -> dict[str, float]:
     if not store_ids:
         return {}
-    rows = session.execute(
-        select(Product.category.label("category"), func.sum(Product.inventory_qty).label("inventory_units"))
-        .where(Product.store_id.in_(store_ids))
-        .group_by(Product.category)
-    ).all()
+    query = select(Product.category.label("category"), func.sum(Product.inventory_qty).label("inventory_units")).where(
+        Product.store_id.in_(store_ids)
+    )
+    if brands:
+        query = query.where(func.lower(Product.brand).in_(brands))
+    rows = session.execute(query.group_by(Product.category)).all()
     return {row.category: float(row.inventory_units or 0.0) for row in rows}
 
 
@@ -470,18 +500,20 @@ def what_if_simulator(
     floor_space_shift_pct: float = 0.0,
     from_category: str | None = None,
     to_category: str | None = None,
+    brands: list[str] | None = None,
 ) -> ExecutiveWhatIfSimulatorResponse:
     explicit_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
     bounded_lookback = _bounded_lookback(lookback_days)
     bounded_discount = max(0.0, min(float(discount_pct), 60.0))
     bounded_shift = max(-40.0, min(float(floor_space_shift_pct), 40.0))
+    normalized_brands = _normalized_brands(brands)
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=bounded_lookback)
     store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id, store_ids=store_ids)
 
-    sales = _category_sales(session, store_ids=store_ids, since=since, until=now)
-    inventory = _category_inventory(session, store_ids=store_ids)
+    sales = _category_sales(session, store_ids=store_ids, since=since, until=now, brands=normalized_brands)
+    inventory = _category_inventory(session, store_ids=store_ids, brands=normalized_brands)
     baseline_revenue = sum(row["revenue"] for row in sales.values())
     baseline_margin_value = sum(row["margin_value"] for row in sales.values())
     baseline_margin_rate = (baseline_margin_value / baseline_revenue) if baseline_revenue > 0 else 0.0
@@ -588,6 +620,7 @@ def campaign_autopilot_prepare(
     lookback_days: int = 56,
     top_k: int = 6,
     events: list[str] | None = None,
+    brands: list[str] | None = None,
     min_margin_rate: float = 0.40,
     max_discount_pct: float = 20.0,
 ) -> ExecutiveCampaignAutopilotDraftResponse:
@@ -603,6 +636,7 @@ def campaign_autopilot_prepare(
         store_ids=store_ids,
         lookback_days=lookback_days,
         events=events,
+        brands=brands,
     )
     scored: list[tuple[float, ExecutiveCampaignCandidate]] = []
 
@@ -708,6 +742,7 @@ def campaign_autopilot_prepare(
                 "store_ids": [value for value in (store_ids or []) if str(value).strip()],
             },
             "events": radar.events,
+            "brands": [value for value in (brands or []) if str(value).strip()],
             "candidates": [item.model_dump(mode="json") for item in shortlist],
             "radar_summary": radar.summary,
         },

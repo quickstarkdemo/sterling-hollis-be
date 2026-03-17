@@ -1086,6 +1086,8 @@ def test_render_exec_workspace_returns_template_and_payload(monkeypatch):
         assert payload["last_tool"] == "fashion_exec_overview"
         assert payload["filters"]["lookback_days"] == 84
         assert payload["filters"]["to_email"] == "manager@example.com"
+        assert "brands" in payload["filters"]
+        assert "brandOptions" in payload["uiHints"]
         assert "Executive Overview Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
 
@@ -1115,6 +1117,21 @@ def test_exec_overview_radar_and_simulator_tools(monkeypatch):
             from_category="womens_apparel",
             to_category="shoes",
         )
+        branded_radar = mcp_server.fashion_exec_event_readiness_radar(
+            store_ids=["1001"],
+            lookback_days=56,
+            events=["wedding"],
+            brands=["Valentino"],
+        )
+        branded_simulation = mcp_server.fashion_exec_what_if_simulator(
+            store_ids=["1001"],
+            lookback_days=90,
+            discount_pct=12,
+            floor_space_shift_pct=6,
+            from_category="womens_apparel",
+            to_category="shoes",
+            brands=["Valentino"],
+        )
 
         assert overview.total_revenue > 0
         assert overview.store_count >= 2
@@ -1129,6 +1146,8 @@ def test_exec_overview_radar_and_simulator_tools(monkeypatch):
         assert all(row.store_id == "1001" for row in scoped_radar.rows)
         assert "1 selected store" in scoped_radar.summary
         assert "1 selected store" in scoped_simulation.summary
+        assert all(row.store_id == "1001" for row in branded_radar.rows)
+        assert branded_simulation.expected_revenue > 0
 
 
 def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
@@ -1154,6 +1173,7 @@ def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
             lookback_days=56,
             top_k=4,
             events=["wedding", "holiday_party", "workwear"],
+            brands=["Valentino"],
         )
         defaulted = mcp_server.fashion_exec_campaign_autopilot_prepare(
             lookback_days=56,
