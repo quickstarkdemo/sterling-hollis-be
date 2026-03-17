@@ -73,6 +73,11 @@ def render_widget_html(
 ) -> str:
     settings = get_settings()
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
+    vendor_script = (
+        f'<script src="{html.escape(asset_base)}/vendor/chart.umd.min.js"></script>'
+        if kind == "merch_workspace"
+        else ""
+    )
     build_version = settings.app_build_version or "dev"
     widget_summary = summary or {
         "customer_search_workspace": "Search customers by name, email, or phone and select a profile for follow-up actions.",
@@ -104,6 +109,7 @@ def render_widget_html(
         publicBaseUrl: {json.dumps(settings.public_base_url.rstrip("/"))},
       }};
     </script>
+    {vendor_script}
     <script type="module">
 {_widget_js(kind)}
     </script>

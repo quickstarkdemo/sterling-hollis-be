@@ -60,11 +60,12 @@ const state = {
     userInteracted: false,
     modelContextHash: "",
     modelContextTimer: null,
-    trendChartEngine: typeof meta?.trendChartEngine === "string" ? meta.trendChartEngine.toLowerCase() : "native",
+    trendChartEngine: typeof meta?.trendChartEngine === "string" ? meta.trendChartEngine.toLowerCase() : "chartjs",
     trendMetric: "revenue",
     trendHoverIndex: null,
     trendInteractionCleanup: null,
     trendInteractionUpdateCount: 0,
+    chartCleanupFns: [],
     diagnosticsShowAll: false,
     diagnosticsExpanded: {},
   },
@@ -90,6 +91,30 @@ function teardownTrendInteraction() {
     }
   }
   state.runtime.trendInteractionCleanup = null;
+}
+
+function registerChartCleanup(cleanup) {
+  if (typeof cleanup !== "function") {
+    return;
+  }
+  state.runtime.chartCleanupFns.push(cleanup);
+}
+
+function teardownChartControllers() {
+  const cleanups = Array.isArray(state.runtime.chartCleanupFns) ? [...state.runtime.chartCleanupFns] : [];
+  state.runtime.chartCleanupFns = [];
+  cleanups.forEach((cleanup) => {
+    try {
+      cleanup();
+    } catch {
+      // Best-effort cleanup.
+    }
+  });
+}
+
+function teardownMerchVisualControllers() {
+  teardownTrendInteraction();
+  teardownChartControllers();
 }
 
 function normalizeCategoryOptions(raw) {
@@ -245,7 +270,7 @@ function applyWorkspacePayload(raw) {
   if (!payload) {
     return false;
   }
-  teardownTrendInteraction();
+  teardownMerchVisualControllers();
   state.payload = payload;
   state.runtime.trendMetric = "revenue";
   state.runtime.trendHoverIndex = null;
@@ -731,7 +756,7 @@ async function refreshMerch(toolName) {
     return;
   }
 
-  teardownTrendInteraction();
+  teardownMerchVisualControllers();
   state.payload.last_result = data;
   state.payload.last_tool = toolName;
   state.ui.csvText = "";
@@ -1063,10 +1088,12 @@ function renderDiagnostics(result) {
   const currentLabel = activeStoreName(result);
   const baselineLabelText = baselineLabel(result);
   const maxAbsDelta = Math.max(1, ...items.map((item) => Math.abs(Number(item?.delta) || 0)));
+  const impactChart = renderDiagnosticsImpactChart(items);
 
   return el(
     "div",
     { className: "fw-list fw-merch-diagnostics" },
+    impactChart,
     ...visibleItems.map((item, idx) => {
       const rowKey = diagnosticsKey(item, idx);
       const expanded = Boolean(state.runtime.diagnosticsExpanded[rowKey]);
@@ -1246,6 +1273,308 @@ function setTrendHoverIndex(nextIndex) {
   }
   state.runtime.trendHoverIndex = normalized;
   return true;
+}
+
+function resolveTrendChartEngine() {
+  const requested = state.runtime.trendChartEngine === "native" ? "native" : "chartjs";
+  const hasChartJs = typeof window?.Chart === "function";
+  if (requested === "chartjs" && hasChartJs) {
+    return "chartjs";
+  }
+  return "native";
+}
+
+function chartJsStatusColor(status) {
+  const key = String(status || "").toLowerCase();
+  if (key === "healthy_momentum") {
+    return "#1f8f63";
+  }
+  if (key === "discount_led_growth") {
+    return "#c07c1d";
+  }
+  if (key === "margin_risk" || key === "velocity_gap" || key === "conversion_gap") {
+    return "#c44d57";
+  }
+  return "#7e8fa1";
+}
+
+function formatChartTick(value, metricConfig) {
+  if (metricConfig.key === "units") {
+    return compactNumber(value);
+  }
+  return formatCurrencyCompact(value);
+}
+
+function renderTrendChartChartJs(config) {
+  const { series, metricConfig, currentLabel, baselineLabelText, latestCurrent, latestBaseline, latestDeltaPct, momentumPct } = config;
+  const hasBaselineLatest = latestBaseline !== null && latestBaseline !== undefined;
+  const panel = el(
+    "section",
+    { className: "fw-panel fw-trend-chart-panel fw-merch-trend-panel" },
+    el(
+      "div",
+      { className: "fw-merch-trend-head" },
+      el("h3", { className: "fw-panel-title", text: metricConfig.title }),
+      el(
+        "div",
+        {},
+        el(
+          "div",
+          { className: "fw-merch-segmented", role: "tablist", "aria-label": "Trend metric selector" },
+          ...["revenue", "units"].map((metricOption) =>
+            el(
+              "button",
+              {
+                className: `fw-merch-segmented-btn ${metricOption === metricConfig.key ? "active" : ""}`,
+                type: "button",
+                role: "tab",
+                "aria-selected": metricOption === metricConfig.key ? "true" : "false",
+                onClick: () => {
+                  if (state.runtime.trendMetric === metricOption) {
+                    return;
+                  }
+                  markUserInteraction();
+                  state.runtime.trendMetric = metricOption;
+                  state.runtime.trendHoverIndex = null;
+                  render();
+                },
+              },
+              metricOption === "revenue" ? "Revenue" : "Units",
+            ),
+          ),
+        ),
+      ),
+    ),
+    el(
+      "div",
+      { className: "fw-merch-trend-kpis" },
+      el(
+        "div",
+        { className: "fw-merch-trend-kpi" },
+        el("span", { className: "fw-merch-trend-kpi-label", text: metricConfig.latestLabel }),
+        el("strong", { className: "fw-merch-trend-kpi-value", text: metricConfig.formatValue(latestCurrent) }),
+      ),
+      el(
+        "div",
+        { className: "fw-merch-trend-kpi" },
+        el("span", { className: "fw-merch-trend-kpi-label", text: `Vs ${baselineLabelText}` }),
+        el(
+          "strong",
+          { className: `fw-merch-trend-kpi-value ${valueToneClass(latestDeltaPct)}` },
+          hasBaselineLatest ? formatSignedPercent(latestDeltaPct, 1) : "No baseline",
+        ),
+      ),
+      el(
+        "div",
+        { className: "fw-merch-trend-kpi" },
+        el("span", { className: "fw-merch-trend-kpi-label", text: "4-Week Momentum" }),
+        el(
+          "strong",
+          { className: `fw-merch-trend-kpi-value ${valueToneClass(momentumPct)}` },
+          momentumPct === null ? "-" : formatSignedPercent(momentumPct, 1),
+        ),
+      ),
+    ),
+    el(
+      "div",
+      { className: "fw-trend-legend fw-merch-trend-legend" },
+      el("span", { className: "fw-chip", text: currentLabel }),
+      el("span", { className: "fw-chip subtle", text: baselineLabelText }),
+    ),
+    el(
+      "div",
+      { className: "fw-merch-chart-wrap fw-merch-trend-canvas" },
+      el("canvas", {
+        className: "fw-merch-chart-canvas fw-merch-trend-chartjs-canvas",
+        "data-role": "trend-chartjs-canvas",
+        "aria-label": `Weekly ${metricConfig.ariaMetricLabel} trend chart with baseline comparison`,
+      }),
+    ),
+    el("p", { className: "fw-empty", text: "Hover chart points for week-level details." }),
+  );
+
+  const canvas = panel.querySelector("[data-role='trend-chartjs-canvas']");
+  const ChartCtor = window?.Chart;
+  if (canvas && typeof ChartCtor === "function") {
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      const labels = series.map((point) => formatDateLabel(point.period_start, false));
+      const fullDateLabels = series.map((point) => formatDateLabel(point.period_start, true));
+      const datasetCurrent = series.map((point) => point[metricConfig.currentField]);
+      const datasetBaseline = series.map((point) => point[metricConfig.baselineField]);
+      const chart = new ChartCtor(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: currentLabel,
+              data: datasetCurrent,
+              borderColor: "#1f5d8f",
+              backgroundColor: "rgba(31, 93, 143, 0.1)",
+              pointRadius: 2.6,
+              pointHoverRadius: 4.4,
+              tension: 0.3,
+              borderWidth: 2.4,
+              fill: true,
+              spanGaps: true,
+            },
+            {
+              label: baselineLabelText,
+              data: datasetBaseline,
+              borderColor: "#7d8e9f",
+              pointRadius: 2.1,
+              pointHoverRadius: 3.6,
+              tension: 0.28,
+              borderWidth: 2,
+              fill: false,
+              spanGaps: true,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: "rgba(255,255,255,0.96)",
+              borderColor: "#c6d8e8",
+              borderWidth: 1,
+              titleColor: "#1e3449",
+              bodyColor: "#1e3449",
+              displayColors: false,
+              padding: 10,
+              callbacks: {
+                title: (items) => {
+                  if (!items?.length) {
+                    return "";
+                  }
+                  return fullDateLabels[items[0].dataIndex] || "";
+                },
+                label: (item) => `${item.dataset.label}: ${metricConfig.formatValue(item.parsed.y)}`,
+                afterBody: (items) => {
+                  const currentItem = items.find((item) => item.datasetIndex === 0);
+                  const baselineItem = items.find((item) => item.datasetIndex === 1);
+                  const currentValue = currentItem ? Number(currentItem.parsed.y) : null;
+                  const baselineValue = baselineItem ? Number(baselineItem.parsed.y) : null;
+                  if (!Number.isFinite(currentValue) || !Number.isFinite(baselineValue) || baselineValue === 0) {
+                    return "";
+                  }
+                  const deltaPct = ((currentValue - baselineValue) / baselineValue) * 100;
+                  return `Delta ${formatSignedPercent(deltaPct, 1)}`;
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { color: "#617386", maxTicksLimit: 3, autoSkip: true },
+            },
+            y: {
+              grid: { color: "#e4edf6" },
+              ticks: {
+                color: "#617386",
+                callback: (value) => formatChartTick(value, metricConfig),
+              },
+            },
+          },
+        },
+      });
+      registerChartCleanup(() => {
+        chart.destroy();
+      });
+    }
+  }
+  return panel;
+}
+
+function renderDiagnosticsImpactChart(items) {
+  const rows = Array.isArray(items) ? items.slice(0, 5) : [];
+  if (!rows.length) {
+    return null;
+  }
+  if (resolveTrendChartEngine() !== "chartjs") {
+    return null;
+  }
+  const ChartCtor = window?.Chart;
+  if (typeof ChartCtor !== "function") {
+    return null;
+  }
+  const panel = el(
+    "section",
+    { className: "fw-panel fw-merch-diag-chart-panel" },
+    el("h3", { className: "fw-panel-title", text: "Diagnostics Impact Overview" }),
+    el(
+      "div",
+      { className: "fw-merch-chart-wrap fw-merch-diag-chart-wrap" },
+      el("canvas", { className: "fw-merch-chart-canvas fw-merch-diag-chart-canvas", "data-role": "diag-chartjs-canvas" }),
+    ),
+  );
+  const canvas = panel.querySelector("[data-role='diag-chartjs-canvas']");
+  if (!canvas) {
+    return panel;
+  }
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return panel;
+  }
+
+  const labels = rows.map((item) => String(item.subject || "-"));
+  const values = rows.map((item) => Number(item.delta) || 0);
+  const maxAbs = Math.max(1, ...values.map((value) => Math.abs(value)));
+  const chart = new ChartCtor(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          data: values,
+          borderRadius: 5,
+          borderSkipped: false,
+          backgroundColor: rows.map((item) => chartJsStatusColor(item.status)),
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      indexAxis: "y",
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          displayColors: false,
+          callbacks: {
+            title: (items) => (items?.length ? String(items[0].label || "") : ""),
+            label: (item) => `Revenue delta ${formatSignedCompact(item.parsed.x, { maximumFractionDigits: 1 })}`,
+          },
+        },
+      },
+      scales: {
+        y: {
+          grid: { display: false },
+          ticks: { color: "#526578", font: { size: 11 } },
+        },
+        x: {
+          min: -maxAbs,
+          max: maxAbs,
+          grid: { color: "#e4edf6" },
+          ticks: {
+            color: "#617386",
+            callback: (value) => formatCurrencyCompact(value),
+          },
+        },
+      },
+    },
+  });
+  registerChartCleanup(() => {
+    chart.destroy();
+  });
+  return panel;
 }
 
 function mountNativeTrendInteraction(panel, config) {
@@ -1431,8 +1760,8 @@ function renderTrendChart(result) {
   if (!points.length) {
     return null;
   }
-  const requestedEngine = state.runtime.trendChartEngine === "uplot" ? "uplot" : "native";
-  const usingNativeFallback = requestedEngine === "uplot" && typeof window?.uPlot !== "function";
+  const resolvedEngine = resolveTrendChartEngine();
+  const usingNativeFallback = state.runtime.trendChartEngine !== "native" && resolvedEngine === "native";
   const metric = state.runtime.trendMetric === "units" ? "units" : "revenue";
   const metricConfig = trendMetricConfig(metric);
   const series = points.map((point) => {
@@ -1518,6 +1847,19 @@ function renderTrendChart(result) {
       : null;
   const momentumPct = trendMomentumPct(series, metricConfig.currentField);
 
+  if (resolvedEngine === "chartjs") {
+    return renderTrendChartChartJs({
+      series,
+      metricConfig,
+      currentLabel,
+      baselineLabelText,
+      latestCurrent,
+      latestBaseline,
+      latestDeltaPct,
+      momentumPct,
+    });
+  }
+
   const fallbackIndex = series.length - 1;
   const panel = el(
     "section",
@@ -1554,7 +1896,7 @@ function renderTrendChart(result) {
             ),
           ),
         ),
-        usingNativeFallback ? el("p", { className: "fw-merch-engine-note", text: "uPlot requested, native fallback active." }) : null,
+        usingNativeFallback ? el("p", { className: "fw-merch-engine-note", text: "Chart.js unavailable, native fallback active." }) : null,
       ),
     ),
     el(
@@ -1782,7 +2124,7 @@ function renderResults() {
 }
 
 function render() {
-  teardownTrendInteraction();
+  teardownMerchVisualControllers();
   const container = clear(root);
   syncPayloadFilters();
 
