@@ -838,6 +838,57 @@ function buildSelect(currentValue, options, onChange) {
   return node;
 }
 
+function clampNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function buildPercentLeverField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onNumberInput,
+  onSliderInput,
+}) {
+  const sliderValue = String(clampNumber(value, 0, min, max));
+  return el(
+    "div",
+    { className: "fw-field" },
+    el("label", { className: "fw-label", text: label }),
+    el("input", {
+      className: "fw-input",
+      type: "number",
+      min: String(min),
+      max: String(max),
+      step: String(step),
+      value: value,
+      onInput: (event) => {
+        markUserInteraction();
+        onNumberInput(event.target.value);
+        queueModelContextUpdate();
+      },
+    }),
+    el("input", {
+      className: "fw-range",
+      type: "range",
+      min: String(min),
+      max: String(max),
+      step: String(step),
+      value: sliderValue,
+      onInput: (event) => {
+        markUserInteraction();
+        onSliderInput(event.target.value);
+        queueModelContextUpdate();
+      },
+    }),
+  );
+}
+
 function storeSelectionSummary(selectedIds, optionsById) {
   if (!Array.isArray(selectedIds) || !selectedIds.length) {
     return "All stores";
@@ -1135,40 +1186,32 @@ function render() {
         { className: "fw-field fw-span-full" },
         el("h4", { className: "fw-panel-title", text: "Reallocate-To Levers" }),
       ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Discount on Reallocate-To (%)" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "0",
-          max: "60",
-          value: state.ui.discountPct,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.discountPct = event.target.value;
-            queueModelContextUpdate();
-          },
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Floor Space Shift to Reallocate-To (%)" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "-40",
-          max: "40",
-          value: state.ui.floorSpaceShiftPct,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.floorSpaceShiftPct = event.target.value;
-            queueModelContextUpdate();
-          },
-        }),
-      ),
+      buildPercentLeverField({
+        label: "Discount (%)",
+        value: state.ui.discountPct,
+        min: 0,
+        max: 60,
+        step: 1,
+        onNumberInput: (value) => {
+          state.ui.discountPct = value;
+        },
+        onSliderInput: (value) => {
+          state.ui.discountPct = value;
+        },
+      }),
+      buildPercentLeverField({
+        label: "Space Shift (%)",
+        value: state.ui.floorSpaceShiftPct,
+        min: -40,
+        max: 40,
+        step: 1,
+        onNumberInput: (value) => {
+          state.ui.floorSpaceShiftPct = value;
+        },
+        onSliderInput: (value) => {
+          state.ui.floorSpaceShiftPct = value;
+        },
+      }),
     ),
     el(
       "div",

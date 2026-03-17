@@ -1103,6 +1103,18 @@ def test_exec_overview_radar_and_simulator_tools(monkeypatch):
             from_category="womens_apparel",
             to_category="shoes",
         )
+        scoped_overview = mcp_server.fashion_exec_overview(store_ids=["1001"], lookback_days=90, top_k_stores=5)
+        scoped_radar = mcp_server.fashion_exec_event_readiness_radar(
+            store_ids=["1001"], lookback_days=56, events=["wedding", "workwear"]
+        )
+        scoped_simulation = mcp_server.fashion_exec_what_if_simulator(
+            store_ids=["1001"],
+            lookback_days=90,
+            discount_pct=12,
+            floor_space_shift_pct=6,
+            from_category="womens_apparel",
+            to_category="shoes",
+        )
 
         assert overview.total_revenue > 0
         assert overview.store_count >= 2
@@ -1111,6 +1123,12 @@ def test_exec_overview_radar_and_simulator_tools(monkeypatch):
         assert {row.event for row in radar.rows}.issubset({"wedding", "workwear"})
         assert simulation.expected_revenue > 0
         assert simulation.components
+        assert scoped_overview.store_count == 1
+        assert "1 selected store" in scoped_overview.summary
+        assert scoped_radar.rows
+        assert all(row.store_id == "1001" for row in scoped_radar.rows)
+        assert "1 selected store" in scoped_radar.summary
+        assert "1 selected store" in scoped_simulation.summary
 
 
 def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
@@ -1130,6 +1148,13 @@ def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
             top_k=4,
             events=["wedding", "holiday_party", "workwear"],
         )
+        scoped_draft = mcp_server.fashion_exec_campaign_autopilot_prepare(
+            store_ids=["1001"],
+            to_email="store.manager@example.com",
+            lookback_days=56,
+            top_k=4,
+            events=["wedding", "holiday_party", "workwear"],
+        )
         defaulted = mcp_server.fashion_exec_campaign_autopilot_prepare(
             lookback_days=56,
             top_k=3,
@@ -1139,6 +1164,7 @@ def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
 
         assert draft.status.value == "draft"
         assert draft.to_email == "store.manager@example.com"
+        assert all(candidate.store_id == "1001" for candidate in scoped_draft.candidates)
         assert defaulted.to_email == "djn12313@gmail.com"
         assert fetched.draft_id == draft.draft_id
 

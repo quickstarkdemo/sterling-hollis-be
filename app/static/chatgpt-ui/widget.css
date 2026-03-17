@@ -223,6 +223,12 @@ body {
   font: inherit;
 }
 
+.fw-range {
+  width: 100%;
+  accent-color: var(--accent);
+  margin-top: -2px;
+}
+
 .fw-multi-select {
   position: relative;
 }

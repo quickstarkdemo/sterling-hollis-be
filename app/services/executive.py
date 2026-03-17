@@ -64,6 +64,14 @@ def _normalized_events(events: list[str] | None) -> list[str]:
     return normalized or list(DEFAULT_EXEC_EVENTS)
 
 
+def _scope_label(*, resolved: ResolvedStore | None, explicit_store_ids: list[str]) -> str:
+    if resolved is not None:
+        return resolved.name
+    if explicit_store_ids:
+        return "1 selected store" if len(explicit_store_ids) == 1 else f"{len(explicit_store_ids)} selected stores"
+    return "company-wide network"
+
+
 def _resolved_scope(
     session: Session,
     *,
@@ -207,6 +215,7 @@ def executive_overview(
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
 ) -> ExecutiveOverviewResponse:
+    explicit_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
     bounded_lookback = _bounded_lookback(lookback_days)
     bounded_top_k = max(1, min(int(top_k_stores), 50))
     now = datetime.now(timezone.utc)
@@ -255,7 +264,7 @@ def executive_overview(
         )
 
     trend = _company_weekly_trend(session, store_ids=store_ids, since=since, until=now)
-    scope_label = resolved.name if resolved is not None else "company-wide network"
+    scope_label = _scope_label(resolved=resolved, explicit_store_ids=explicit_store_ids)
     summary = (
         f"Executive overview for {scope_label} across the last {bounded_lookback} days. "
         f"Objective: {objective.value.replace('_', ' ')}."
@@ -286,6 +295,7 @@ def event_readiness_radar(
     lookback_days: int = 56,
     events: list[str] | None = None,
 ) -> ExecutiveEventReadinessRadarResponse:
+    explicit_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
     bounded_lookback = _bounded_lookback(lookback_days)
     normalized_events = _normalized_events(events)
     now = datetime.now(timezone.utc)
@@ -391,7 +401,7 @@ def event_readiness_radar(
             )
 
     rows.sort(key=lambda row: row.risk_score, reverse=True)
-    scope_label = resolved.name if resolved is not None else "company-wide network"
+    scope_label = _scope_label(resolved=resolved, explicit_store_ids=explicit_store_ids)
     summary = f"Event readiness radar for {scope_label} over the last {bounded_lookback} days."
     return ExecutiveEventReadinessRadarResponse(
         summary=summary,
@@ -461,6 +471,7 @@ def what_if_simulator(
     from_category: str | None = None,
     to_category: str | None = None,
 ) -> ExecutiveWhatIfSimulatorResponse:
+    explicit_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
     bounded_lookback = _bounded_lookback(lookback_days)
     bounded_discount = max(0.0, min(float(discount_pct), 60.0))
     bounded_shift = max(-40.0, min(float(floor_space_shift_pct), 40.0))
@@ -533,7 +544,7 @@ def what_if_simulator(
     confidence_low = expected_revenue * (1.0 - uncertainty)
     confidence_high = expected_revenue * (1.0 + uncertainty)
 
-    scope_label = resolved.name if resolved is not None else "company-wide network"
+    scope_label = _scope_label(resolved=resolved, explicit_store_ids=explicit_store_ids)
     summary = (
         f"What-if simulation for {scope_label} over the last {bounded_lookback} days "
         f"using discount and category-exposure proxy assumptions."
