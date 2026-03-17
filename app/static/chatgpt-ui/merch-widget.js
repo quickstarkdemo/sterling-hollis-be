@@ -1436,7 +1436,6 @@ function renderTrendChart(result) {
           tabindex: "0",
           "aria-label": `Weekly ${metricConfig.ariaMetricLabel} trend chart with baseline comparison`,
           onMousemove: setHoverFromPointer,
-          onMouseleave: () => setTrendHoverIndex(null),
           onKeydown: (event) => {
             if (event.key === "ArrowLeft") {
               event.preventDefault();
@@ -1512,10 +1511,7 @@ function renderTrendChart(result) {
             fill: "#1f5d8f",
             stroke: "#fff",
             "stroke-width": isActive ? "1.5" : "0.8",
-            tabindex: "0",
             "aria-label": `${formatDateLabel(point.period_start, true)} ${metricConfig.ariaMetricLabel} ${metricConfig.formatValue(currentValue)}`,
-            onFocus: () => setTrendHoverIndex(idx),
-            onMouseenter: () => setTrendHoverIndex(idx),
           });
         }),
         ...yTicks.map((value) =>
