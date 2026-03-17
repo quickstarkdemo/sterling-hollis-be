@@ -59,6 +59,10 @@ const state = {
     userInteracted: false,
     modelContextHash: "",
     modelContextTimer: null,
+    trendMetric: "revenue",
+    trendHoverIndex: null,
+    diagnosticsShowAll: false,
+    diagnosticsExpanded: {},
   },
 };
 
@@ -227,6 +231,10 @@ function applyWorkspacePayload(raw) {
     return false;
   }
   state.payload = payload;
+  state.runtime.trendMetric = "revenue";
+  state.runtime.trendHoverIndex = null;
+  state.runtime.diagnosticsShowAll = false;
+  state.runtime.diagnosticsExpanded = {};
   hydrateUiFromFilters(payload.filters);
   if (payload.initial_notice) {
     setNotice(payload.initial_notice);
@@ -394,6 +402,54 @@ function formatCurrencyCompact(value) {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(numeric);
+}
+
+function formatSignedCompact(value, options = {}) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return String(value);
+  }
+  const maximumFractionDigits = Number.isFinite(Number(options.maximumFractionDigits))
+    ? Number(options.maximumFractionDigits)
+    : Math.abs(numeric) >= 1000
+      ? 1
+      : 2;
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  const formatted = new Intl.NumberFormat("en-US", {
+    notation: Math.abs(numeric) >= 1000 ? "compact" : "standard",
+    maximumFractionDigits,
+  }).format(Math.abs(numeric));
+  return `${sign}${formatted}`;
+}
+
+function formatSignedPercent(value, digits = 1) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  return `${sign}${Math.abs(numeric).toFixed(digits)}%`;
+}
+
+function formatDateLabel(value, withYear = false) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "-";
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: withYear ? "numeric" : undefined,
+  }).format(parsed);
 }
 
 function stableTextHash(raw) {
@@ -661,6 +717,10 @@ async function refreshMerch(toolName) {
   state.payload.last_result = data;
   state.payload.last_tool = toolName;
   state.ui.csvText = "";
+  state.runtime.trendMetric = "revenue";
+  state.runtime.trendHoverIndex = null;
+  state.runtime.diagnosticsShowAll = false;
+  state.runtime.diagnosticsExpanded = {};
   syncPayloadFilters();
   persistWidgetState();
   setNotice(`${toolLabel(toolName)} loaded.`);
@@ -905,52 +965,268 @@ function renderActions(result) {
   );
 }
 
+function baselineLabel(result) {
+  if (result?.compare_mode === "prior_period") {
+    return "Prior Period";
+  }
+  return result?.compare_store_name ? result.compare_store_name : "Peer Set";
+}
+
+function diagnosticsKey(item, idx) {
+  return `${String(item?.dimension || "metric")}::${String(item?.subject || "unknown")}::${idx}`;
+}
+
+function diagnosticsStatusClass(status) {
+  const key = String(status || "").toLowerCase();
+  if (key === "healthy_momentum") {
+    return "positive";
+  }
+  if (key === "discount_led_growth") {
+    return "caution";
+  }
+  if (key === "margin_risk" || key === "velocity_gap" || key === "conversion_gap") {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function valueToneClass(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric === 0) {
+    return "neutral";
+  }
+  return numeric > 0 ? "positive" : "negative";
+}
+
+function diagnosticsDeltaChip(label, value, suffix = "") {
+  return el(
+    "span",
+    { className: `fw-merch-micro-chip ${valueToneClass(value)}` },
+    `${label} ${formatSignedCompact(value, { maximumFractionDigits: 1 })}${suffix}`,
+  );
+}
+
+function diagnosticsDetailMetric(metricLabel, currentLabel, baselineLabelText, currentValue, peerValue, priorValue, formatter) {
+  const baselineValue = peerValue !== null && peerValue !== undefined ? peerValue : priorValue;
+  return el(
+    "div",
+    { className: "fw-merch-detail-card" },
+    el("h4", { className: "fw-merch-detail-title", text: metricLabel }),
+    el(
+      "div",
+      { className: "fw-merch-detail-row" },
+      el("span", { className: "fw-merch-detail-label", text: currentLabel }),
+      el("strong", { className: "fw-merch-detail-value", text: formatter(currentValue) }),
+    ),
+    el(
+      "div",
+      { className: "fw-merch-detail-row" },
+      el("span", { className: "fw-merch-detail-label", text: baselineLabelText }),
+      el("span", { className: "fw-merch-detail-value", text: formatter(baselineValue) }),
+    ),
+    el(
+      "div",
+      { className: "fw-merch-detail-row" },
+      el("span", { className: "fw-merch-detail-label", text: "Prior" }),
+      el("span", { className: "fw-merch-detail-value", text: formatter(priorValue) }),
+    ),
+  );
+}
+
 function renderDiagnostics(result) {
   const items = Array.isArray(result?.insights) ? result.insights : [];
   if (!items.length) {
     return el("p", { className: "fw-empty", text: state.payload.uiHints.emptyState });
   }
+
+  const defaultLimit = 5;
+  const visibleItems = state.runtime.diagnosticsShowAll ? items : items.slice(0, defaultLimit);
   const currentLabel = activeStoreName(result);
-  const peerLabel = peerBoxLabel(result);
+  const baselineLabelText = baselineLabel(result);
+  const maxAbsDelta = Math.max(1, ...items.map((item) => Math.abs(Number(item?.delta) || 0)));
+
   return el(
     "div",
-    { className: "fw-list" },
-    ...items.map((item) =>
-      el(
+    { className: "fw-list fw-merch-diagnostics" },
+    ...visibleItems.map((item, idx) => {
+      const rowKey = diagnosticsKey(item, idx);
+      const expanded = Boolean(state.runtime.diagnosticsExpanded[rowKey]);
+      const delta = Number(item?.delta) || 0;
+      const impactWidth = Math.min(50, (Math.abs(delta) / maxAbsDelta) * 50);
+      const leftPct = delta >= 0 ? 50 : 50 - impactWidth;
+      const priorUnits =
+        item?.prior_units !== null && item?.prior_units !== undefined ? Number(item.prior_units) : null;
+      const baselineUnits =
+        item?.peer_units !== null && item?.peer_units !== undefined ? Number(item.peer_units) : priorUnits;
+      const unitsDelta =
+        Number.isFinite(Number(item?.current_units)) && Number.isFinite(baselineUnits)
+          ? Number(item.current_units) - baselineUnits
+          : null;
+      const priorMargin =
+        item?.prior_margin_pct !== null && item?.prior_margin_pct !== undefined
+          ? Number(item.prior_margin_pct)
+          : null;
+      const baselineMargin =
+        item?.peer_margin_pct !== null && item?.peer_margin_pct !== undefined
+          ? Number(item.peer_margin_pct)
+          : priorMargin;
+      const marginDelta =
+        Number.isFinite(Number(item?.current_margin_pct)) && Number.isFinite(baselineMargin)
+          ? Number(item.current_margin_pct) - baselineMargin
+          : null;
+
+      return el(
         "article",
-        { className: "fw-result" },
+        { className: `fw-result fw-merch-impact-row ${expanded ? "expanded" : ""}` },
+        el(
+          "button",
+          {
+            className: "fw-merch-impact-head",
+            type: "button",
+            "aria-expanded": expanded ? "true" : "false",
+            onClick: () => {
+              markUserInteraction();
+              state.runtime.diagnosticsExpanded[rowKey] = !expanded;
+              render();
+            },
+          },
+          el(
+            "div",
+            { className: "fw-merch-impact-main" },
+            el(
+              "div",
+              { className: "fw-chip-row" },
+              el("span", { className: `fw-chip fw-merch-status-chip ${diagnosticsStatusClass(item?.status)}`, text: humanizeToken(item?.status) }),
+              el("span", { className: "fw-chip subtle", text: humanizeToken(item?.dimension) }),
+            ),
+            el("h3", { className: "fw-panel-title", text: item?.subject || "-" }),
+            el("p", { className: "fw-empty", text: item?.rationale || "No rationale provided." }),
+          ),
+          el(
+            "div",
+            { className: "fw-merch-impact-values" },
+            el("strong", { className: "fw-merch-impact-current", text: formatCurrencyCompact(item?.current_value) }),
+            el("span", { className: `fw-merch-impact-delta ${valueToneClass(delta)}`, text: `${formatSignedCompact(delta, { maximumFractionDigits: 1 })} vs baseline` }),
+          ),
+        ),
         el(
           "div",
-          { className: "fw-chip-row" },
-          el("span", { className: "fw-chip", text: humanizeToken(item.status) }),
-          el("span", { className: "fw-chip subtle", text: humanizeToken(item.dimension) }),
-        ),
-        el("h3", { className: "fw-panel-title", text: item.subject || "-" }),
-        el("p", { className: "fw-empty", text: item.rationale || "No rationale provided." }),
-        el(
-          "div",
-          { className: "fw-kpi-strip" },
-          kpi(currentLabel, compactNumber(item.current_value)),
-          kpi(peerLabel, compactNumber(item.peer_value)),
-          kpi("Prior", compactNumber(item.prior_value)),
+          { className: "fw-merch-impact-track" },
+          el("span", { className: "fw-merch-impact-center" }),
+          el("span", {
+            className: `fw-merch-impact-fill ${valueToneClass(delta)}`,
+            style: `left:${leftPct.toFixed(2)}%;width:${impactWidth.toFixed(2)}%;`,
+          }),
         ),
         el(
           "div",
-          { className: "fw-kpi-strip" },
-          kpi(`${currentLabel} Units`, compactNumber(item.current_units)),
-          kpi(`${peerLabel} Units`, compactNumber(item.peer_units)),
-          kpi("Prior Units", compactNumber(item.prior_units)),
+          { className: "fw-merch-micro-row" },
+          diagnosticsDeltaChip("Revenue", delta),
+          diagnosticsDeltaChip("Units", unitsDelta),
+          diagnosticsDeltaChip("Margin", marginDelta, "pt"),
         ),
-        el(
-          "div",
-          { className: "fw-kpi-strip" },
-          kpi(`${currentLabel} Margin`, compactNumber(item.current_margin_pct)),
-          kpi(`${peerLabel} Margin`, compactNumber(item.peer_margin_pct)),
-          kpi("Prior Margin", compactNumber(item.prior_margin_pct)),
-        ),
-      ),
-    ),
+        expanded
+          ? el(
+              "div",
+              { className: "fw-merch-impact-details" },
+              diagnosticsDetailMetric(
+                "Revenue",
+                currentLabel,
+                baselineLabelText,
+                item?.current_value,
+                item?.peer_value,
+                item?.prior_value,
+                formatCurrencyCompact,
+              ),
+              diagnosticsDetailMetric(
+                "Units",
+                currentLabel,
+                baselineLabelText,
+                item?.current_units,
+                item?.peer_units,
+                item?.prior_units,
+                compactNumber,
+              ),
+              diagnosticsDetailMetric(
+                "Margin",
+                currentLabel,
+                baselineLabelText,
+                item?.current_margin_pct,
+                item?.peer_margin_pct,
+                item?.prior_margin_pct,
+                (value) => {
+                  if (value === null || value === undefined) {
+                    return "-";
+                  }
+                  return `${compactNumber(value)}%`;
+                },
+              ),
+            )
+          : null,
+      );
+    }),
+    items.length > defaultLimit
+      ? el(
+          "button",
+          {
+            className: "fw-text-button fw-merch-show-more",
+            type: "button",
+            onClick: () => {
+              markUserInteraction();
+              state.runtime.diagnosticsShowAll = !state.runtime.diagnosticsShowAll;
+              render();
+            },
+          },
+          state.runtime.diagnosticsShowAll ? `Show top ${defaultLimit}` : `Show ${items.length - defaultLimit} more`,
+        )
+      : null,
   );
+}
+
+function trendMetricConfig(metric) {
+  if (metric === "units") {
+    return {
+      key: "units",
+      title: "Weekly Units Trend",
+      latestLabel: "Latest Units",
+      currentField: "current_units",
+      baselineField: "baseline_units",
+      formatValue: (value) => compactNumber(value),
+      ariaMetricLabel: "units",
+    };
+  }
+  return {
+    key: "revenue",
+    title: "Weekly Revenue Trend",
+    latestLabel: "Latest Revenue",
+    currentField: "current_revenue",
+    baselineField: "baseline_revenue",
+    formatValue: (value) => formatCurrencyCompact(value),
+    ariaMetricLabel: "revenue",
+  };
+}
+
+function trendMomentumPct(series, currentField) {
+  const valid = series.filter((point) => point[currentField] !== null);
+  const recent = valid.slice(-4);
+  if (recent.length < 2) {
+    return null;
+  }
+  const start = Number(recent[0][currentField]);
+  const end = Number(recent[recent.length - 1][currentField]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === 0) {
+    return null;
+  }
+  return ((end - start) / Math.abs(start)) * 100;
+}
+
+function setTrendHoverIndex(nextIndex) {
+  const normalized = Number.isInteger(nextIndex) ? nextIndex : null;
+  if (state.runtime.trendHoverIndex === normalized) {
+    return;
+  }
+  state.runtime.trendHoverIndex = normalized;
+  render();
 }
 
 function renderTrendChart(result) {
@@ -958,44 +1234,54 @@ function renderTrendChart(result) {
   if (!points.length) {
     return null;
   }
+  const metric = state.runtime.trendMetric === "units" ? "units" : "revenue";
+  const metricConfig = trendMetricConfig(metric);
   const series = points.map((point) => {
     const currentRevenue = Number(point?.current_revenue);
     const baselineRevenue =
       point?.baseline_revenue === null || point?.baseline_revenue === undefined ? null : Number(point?.baseline_revenue);
+    const currentUnits = Number(point?.current_units);
+    const baselineUnits = point?.baseline_units === null || point?.baseline_units === undefined ? null : Number(point?.baseline_units);
     return {
       period_start: typeof point?.period_start === "string" ? point.period_start : "",
       current_revenue: Number.isFinite(currentRevenue) ? currentRevenue : null,
       baseline_revenue: baselineRevenue !== null && Number.isFinite(baselineRevenue) ? baselineRevenue : null,
+      current_units: Number.isFinite(currentUnits) ? currentUnits : null,
+      baseline_units: baselineUnits !== null && Number.isFinite(baselineUnits) ? baselineUnits : null,
     };
   });
 
   const finiteValues = series
-    .flatMap((point) => [point.current_revenue, point.baseline_revenue])
+    .flatMap((point) => [point[metricConfig.currentField], point[metricConfig.baselineField]])
     .filter((value) => value !== null && Number.isFinite(value));
   if (!finiteValues.length) {
     return null;
   }
 
   const width = 760;
-  const height = 250;
-  const chartLeft = 76;
-  const chartRight = 16;
-  const chartTop = 20;
-  const chartBottom = 38;
+  const height = 220;
+  const chartLeft = 52;
+  const chartRight = 14;
+  const chartTop = 22;
+  const chartBottom = 34;
   const plotWidth = width - chartLeft - chartRight;
   const plotHeight = height - chartTop - chartBottom;
   let minValue = Math.min(...finiteValues);
   let maxValue = Math.max(...finiteValues);
   if (maxValue === minValue) {
-    const padding = Math.max(Math.abs(maxValue) * 0.05, 1);
+    const padding = Math.max(Math.abs(maxValue) * 0.08, 1);
     minValue -= padding;
     maxValue += padding;
   }
   const span = Math.max(maxValue - minValue, 1);
+  const yTicks = Array.from({ length: 4 }, (_, idx) => maxValue - (span * idx) / 3);
+  const xLabelIndices = Array.from(new Set([0, Math.floor((series.length - 1) / 2), series.length - 1])).filter(
+    (idx) => idx >= 0 && idx < series.length,
+  );
 
   const xFor = (idx) => {
     if (series.length <= 1) {
-      return chartLeft;
+      return chartLeft + plotWidth / 2;
     }
     return chartLeft + (idx / (series.length - 1)) * plotWidth;
   };
@@ -1010,6 +1296,7 @@ function renderTrendChart(result) {
     series.forEach((point, idx) => {
       const value = point[field];
       if (value === null || value === undefined || !Number.isFinite(Number(value))) {
+        started = false;
         return;
       }
       segments.push(`${started ? "L" : "M"} ${xFor(idx).toFixed(2)} ${yFor(value).toFixed(2)}`);
@@ -1018,143 +1305,255 @@ function renderTrendChart(result) {
     return segments.join(" ");
   };
 
-  const currentPath = buildPath("current_revenue");
-  let baselineStarted = false;
-  const baselinePath = series
-    .map((point, idx) => {
-      const value = point.baseline_revenue;
-      if (value === null || value === undefined) {
-        return null;
-      }
-      const command = baselineStarted ? "L" : "M";
-      baselineStarted = true;
-      return `${command} ${xFor(idx).toFixed(2)} ${yFor(value).toFixed(2)}`;
-    })
-    .filter(Boolean)
-    .join(" ");
+  const currentPath = buildPath(metricConfig.currentField);
+  const baselinePath = buildPath(metricConfig.baselineField);
   const currentLabel = activeStoreName(result);
-  const baselineLabel =
-    result?.compare_mode === "prior_period"
-      ? "Prior Period"
-      : result?.compare_store_name
-        ? result.compare_store_name
-        : "Peer Set";
+  const baselineLabelText = baselineLabel(result);
   const latestPoint = series[series.length - 1];
-  const hasBaselineLatest = latestPoint && latestPoint.baseline_revenue !== null && latestPoint.baseline_revenue !== undefined;
+  const latestCurrent = latestPoint ? latestPoint[metricConfig.currentField] : null;
+  const latestBaseline = latestPoint ? latestPoint[metricConfig.baselineField] : null;
+  const hasBaselineLatest = latestPoint && latestBaseline !== null && latestBaseline !== undefined;
   const latestDeltaPct =
-    hasBaselineLatest && Number(latestPoint.baseline_revenue) !== 0
-      ? ((Number(latestPoint.current_revenue) - Number(latestPoint.baseline_revenue)) / Number(latestPoint.baseline_revenue)) * 100
+    hasBaselineLatest && Number(latestBaseline) !== 0
+      ? ((Number(latestCurrent) - Number(latestBaseline)) / Number(latestBaseline)) * 100
       : null;
-  const yTicks = Array.from({ length: 5 }, (_, idx) => maxValue - (span * idx) / 4);
-  const xLabelIndices = Array.from(new Set([0, Math.floor((series.length - 1) / 2), series.length - 1])).filter(
-    (idx) => idx >= 0 && idx < series.length,
-  );
+  const momentumPct = trendMomentumPct(series, metricConfig.currentField);
 
+  const fallbackIndex = series.length - 1;
+  const activeIndex =
+    Number.isInteger(state.runtime.trendHoverIndex) && state.runtime.trendHoverIndex >= 0 && state.runtime.trendHoverIndex < series.length
+      ? state.runtime.trendHoverIndex
+      : fallbackIndex;
+  const activePoint = series[activeIndex];
+  const activeCurrent = activePoint?.[metricConfig.currentField];
+  const activeBaseline = activePoint?.[metricConfig.baselineField];
+  const activeHasBaseline = activeBaseline !== null && activeBaseline !== undefined;
+  const activeDeltaPct =
+    activeHasBaseline && Number(activeBaseline) !== 0
+      ? ((Number(activeCurrent) - Number(activeBaseline)) / Number(activeBaseline)) * 100
+      : null;
+  const activeX = xFor(activeIndex);
+  const activeY = Number.isFinite(Number(activeCurrent)) ? yFor(activeCurrent) : chartTop + plotHeight / 2;
+
+  const setHoverFromPointer = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width) {
+      return;
+    }
+    const ratio = (event.clientX - rect.left) / rect.width;
+    const viewX = Math.max(chartLeft, Math.min(width - chartRight, ratio * width));
+    let nearest = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (let idx = 0; idx < series.length; idx += 1) {
+      const distance = Math.abs(viewX - xFor(idx));
+      if (distance < nearestDistance) {
+        nearest = idx;
+        nearestDistance = distance;
+      }
+    }
+    setTrendHoverIndex(nearest);
+  };
+
+  const activeTooltipTop = Math.max(12, activeY - 12);
   return el(
     "section",
-    { className: "fw-panel fw-trend-chart-panel" },
-    el("h3", { className: "fw-panel-title", text: "Weekly Revenue Trend" }),
+    { className: "fw-panel fw-trend-chart-panel fw-merch-trend-panel" },
     el(
-      "p",
-      {
-        className: "fw-empty",
-        text: `Blue line is weekly revenue for ${currentLabel}. Gray line is weekly revenue for ${baselineLabel}.`,
-      },
+      "div",
+      { className: "fw-merch-trend-head" },
+      el("h3", { className: "fw-panel-title", text: metricConfig.title }),
+      el(
+        "div",
+        { className: "fw-merch-segmented", role: "tablist", "aria-label": "Trend metric selector" },
+        ...["revenue", "units"].map((metricOption) =>
+          el(
+            "button",
+            {
+              className: `fw-merch-segmented-btn ${metricOption === metric ? "active" : ""}`,
+              type: "button",
+              role: "tab",
+              "aria-selected": metricOption === metric ? "true" : "false",
+              onClick: () => {
+                if (state.runtime.trendMetric === metricOption) {
+                  return;
+                }
+                markUserInteraction();
+                state.runtime.trendMetric = metricOption;
+                state.runtime.trendHoverIndex = null;
+                render();
+              },
+            },
+            metricOption === "revenue" ? "Revenue" : "Units",
+          ),
+        ),
+      ),
     ),
     el(
       "div",
-      { className: "fw-trend-legend" },
-      el("span", { className: "fw-chip", text: currentLabel }),
-      baselinePath ? el("span", { className: "fw-chip subtle", text: baselineLabel }) : null,
+      { className: "fw-merch-trend-kpis" },
+      el(
+        "div",
+        { className: "fw-merch-trend-kpi" },
+        el("span", { className: "fw-merch-trend-kpi-label", text: metricConfig.latestLabel }),
+        el("strong", { className: "fw-merch-trend-kpi-value", text: metricConfig.formatValue(latestCurrent) }),
+      ),
+      el(
+        "div",
+        { className: "fw-merch-trend-kpi" },
+        el("span", { className: "fw-merch-trend-kpi-label", text: `Vs ${baselineLabelText}` }),
+        el(
+          "strong",
+          { className: `fw-merch-trend-kpi-value ${valueToneClass(latestDeltaPct)}` },
+          hasBaselineLatest ? formatSignedPercent(latestDeltaPct, 1) : "No baseline",
+        ),
+      ),
+      el(
+        "div",
+        { className: "fw-merch-trend-kpi" },
+        el("span", { className: "fw-merch-trend-kpi-label", text: "4-Week Momentum" }),
+        el(
+          "strong",
+          { className: `fw-merch-trend-kpi-value ${valueToneClass(momentumPct)}` },
+          momentumPct === null ? "-" : formatSignedPercent(momentumPct, 1),
+        ),
+      ),
     ),
     el(
-      "svg",
-      {
-        className: "fw-trend-chart",
-        viewBox: `0 0 ${width} ${height}`,
-        role: "img",
-        "aria-label": "Weekly trend chart for current store and baseline",
-      },
-      ...yTicks.map((value) => {
-        const y = yFor(value).toFixed(2);
-        return el("line", {
-          x1: chartLeft.toFixed(2),
-          y1: y,
-          x2: (width - chartRight).toFixed(2),
-          y2: y,
-          stroke: "#e1e8ef",
-          "stroke-width": "1",
-        });
-      }),
-      el("line", {
-        x1: chartLeft.toFixed(2),
-        y1: chartTop.toFixed(2),
-        x2: chartLeft.toFixed(2),
-        y2: (height - chartBottom).toFixed(2),
-        stroke: "#cbd8e4",
-        "stroke-width": "1",
-      }),
-      el("line", {
-        x1: chartLeft.toFixed(2),
-        y1: (height - chartBottom).toFixed(2),
-        x2: (width - chartRight).toFixed(2),
-        y2: (height - chartBottom).toFixed(2),
-        stroke: "#cbd8e4",
-        "stroke-width": "1",
-      }),
-      baselinePath ? el("path", { d: baselinePath, fill: "none", stroke: "#6f8498", "stroke-width": "2.2", "stroke-linecap": "round" }) : null,
-      el("path", { d: currentPath, fill: "none", stroke: "#1f5d8f", "stroke-width": "2.8", "stroke-linecap": "round" }),
-      ...series.map((point, idx) => {
-        if (point.baseline_revenue === null || point.baseline_revenue === undefined) {
-          return null;
-        }
-        return el("circle", {
-          cx: xFor(idx).toFixed(2),
-          cy: yFor(point.baseline_revenue).toFixed(2),
-          r: "2.2",
-          fill: "#6f8498",
-        });
-      }),
-      ...series.map((point, idx) => {
-        if (point.current_revenue === null || point.current_revenue === undefined) {
-          return null;
-        }
-        return el("circle", {
-          cx: xFor(idx).toFixed(2),
-          cy: yFor(point.current_revenue).toFixed(2),
-          r: "2.8",
-          fill: "#1f5d8f",
-        });
-      }),
-      ...yTicks.map((value) =>
-        el("text", {
-          x: String(chartLeft - 8),
-          y: yFor(value).toFixed(2),
-          class: "fw-trend-ylabel",
-          "text-anchor": "end",
-          "dominant-baseline": "middle",
-          text: formatCurrencyCompact(value),
+      "div",
+      { className: "fw-trend-legend fw-merch-trend-legend" },
+      el("span", { className: "fw-chip", text: currentLabel }),
+      baselinePath ? el("span", { className: "fw-chip subtle", text: baselineLabelText }) : null,
+    ),
+    el(
+      "div",
+      { className: "fw-merch-trend-canvas" },
+      el(
+        "svg",
+        {
+          className: "fw-trend-chart fw-merch-trend-chart",
+          viewBox: `0 0 ${width} ${height}`,
+          role: "img",
+          tabindex: "0",
+          "aria-label": `Weekly ${metricConfig.ariaMetricLabel} trend chart with baseline comparison`,
+          onMousemove: setHoverFromPointer,
+          onMouseleave: () => setTrendHoverIndex(null),
+          onKeydown: (event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              setTrendHoverIndex(Math.max(0, activeIndex - 1));
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              setTrendHoverIndex(Math.min(series.length - 1, activeIndex + 1));
+            }
+          },
+        },
+        el("defs", {}, el("linearGradient", { id: "fw-merch-grid-fade", x1: "0", y1: "0", x2: "0", y2: "1" }, el("stop", { offset: "0%", "stop-color": "#f3f8fd" }), el("stop", { offset: "100%", "stop-color": "#ffffff" }))),
+        el("rect", { x: "0", y: "0", width: String(width), height: String(height), fill: "url(#fw-merch-grid-fade)" }),
+        ...yTicks.map((value) => {
+          const y = yFor(value).toFixed(2);
+          return el("line", {
+            x1: chartLeft.toFixed(2),
+            y1: y,
+            x2: (width - chartRight).toFixed(2),
+            y2: y,
+            stroke: "#e4edf6",
+            "stroke-width": "1",
+          });
+        }),
+        el("line", {
+          x1: activeX.toFixed(2),
+          y1: chartTop.toFixed(2),
+          x2: activeX.toFixed(2),
+          y2: (height - chartBottom).toFixed(2),
+          stroke: "#b3c9dc",
+          "stroke-width": "1.1",
+          "stroke-dasharray": "3 3",
+        }),
+        baselinePath
+          ? el("path", {
+              d: baselinePath,
+              fill: "none",
+              stroke: "#7d8e9f",
+              "stroke-width": "2.1",
+              "stroke-linecap": "round",
+            })
+          : null,
+        el("path", {
+          d: currentPath,
+          fill: "none",
+          stroke: "#1f5d8f",
+          "stroke-width": "2.7",
+          "stroke-linecap": "round",
+        }),
+        ...series.map((point, idx) => {
+          const baselineValue = point[metricConfig.baselineField];
+          if (baselineValue === null || baselineValue === undefined) {
+            return null;
+          }
+          const isActive = idx === activeIndex;
+          return el("circle", {
+            cx: xFor(idx).toFixed(2),
+            cy: yFor(baselineValue).toFixed(2),
+            r: isActive ? "3.2" : "2.1",
+            fill: "#7d8e9f",
+            opacity: isActive ? "1" : "0.85",
+          });
+        }),
+        ...series.map((point, idx) => {
+          const currentValue = point[metricConfig.currentField];
+          if (currentValue === null || currentValue === undefined) {
+            return null;
+          }
+          const isActive = idx === activeIndex;
+          return el("circle", {
+            cx: xFor(idx).toFixed(2),
+            cy: yFor(currentValue).toFixed(2),
+            r: isActive ? "4.2" : "2.6",
+            fill: "#1f5d8f",
+            stroke: "#fff",
+            "stroke-width": isActive ? "1.5" : "0.8",
+            tabindex: "0",
+            "aria-label": `${formatDateLabel(point.period_start, true)} ${metricConfig.ariaMetricLabel} ${metricConfig.formatValue(currentValue)}`,
+            onFocus: () => setTrendHoverIndex(idx),
+            onMouseenter: () => setTrendHoverIndex(idx),
+          });
+        }),
+        ...yTicks.map((value) =>
+          el("text", {
+            x: String(chartLeft - 7),
+            y: yFor(value).toFixed(2),
+            "text-anchor": "end",
+            "dominant-baseline": "middle",
+            fill: "#617386",
+            "font-size": "10.5",
+            text: metricConfig.formatValue(value),
+          }),
+        ),
+        ...xLabelIndices.map((idx, idxPosition) => {
+          const anchor = idxPosition === 0 ? "start" : idxPosition === xLabelIndices.length - 1 ? "end" : "middle";
+          return el("text", {
+            x: xFor(idx).toFixed(2),
+            y: String(height - 11),
+            "text-anchor": anchor,
+            fill: "#617386",
+            "font-size": "10.5",
+            text: formatDateLabel(series[idx].period_start, false),
+          });
         }),
       ),
-    ),
-    el(
-      "div",
-      { className: "fw-trend-axis" },
-      ...xLabelIndices.map((idx) =>
-        el("span", { className: "fw-axis-label", text: series[idx].period_start }),
+      el(
+        "div",
+        {
+          className: "fw-merch-trend-tooltip",
+          style: `left:${((activeX / width) * 100).toFixed(2)}%;top:${activeTooltipTop.toFixed(2)}px;`,
+        },
+        el("strong", { text: formatDateLabel(activePoint?.period_start, true) }),
+        el("span", { text: `${currentLabel}: ${metricConfig.formatValue(activeCurrent)}` }),
+        activeHasBaseline ? el("span", { text: `${baselineLabelText}: ${metricConfig.formatValue(activeBaseline)}` }) : null,
+        activeHasBaseline ? el("span", { className: valueToneClass(activeDeltaPct), text: `Delta ${formatSignedPercent(activeDeltaPct, 1)}` }) : null,
       ),
     ),
-    latestPoint
-      ? el(
-          "p",
-          {
-            className: "fw-empty",
-            text: hasBaselineLatest
-              ? `Latest week (${latestPoint.period_start}): ${currentLabel} ${formatCurrencyCompact(latestPoint.current_revenue)} vs ${baselineLabel} ${formatCurrencyCompact(latestPoint.baseline_revenue)} (${compactNumber(latestDeltaPct)}%).`
-              : `Latest week (${latestPoint.period_start}): ${currentLabel} ${formatCurrencyCompact(latestPoint.current_revenue)}.`,
-          },
-        )
-      : null,
+    el("p", { className: "fw-empty", text: "Hover or use left/right arrows for week-level detail." }),
   );
 }
 
@@ -1175,16 +1574,16 @@ function renderTrends(result) {
         el(
           "div",
           { className: "fw-chip-row" },
-          el("span", { className: "fw-chip", text: `Delta ${compactNumber(item.pct_change)}%` }),
+          el("span", { className: `fw-chip ${valueToneClass(item?.pct_change) === "negative" ? "subtle" : ""}`, text: `Delta ${formatSignedPercent(item?.pct_change, 1)}` }),
         ),
         el("h3", { className: "fw-panel-title", text: item.subject || "-" }),
         el("p", { className: "fw-empty", text: item.rationale || "No rationale provided." }),
         el(
           "div",
           { className: "fw-kpi-strip" },
-          kpi(activeStoreName(result), compactNumber(item.current_value)),
-          kpi(peerBoxLabel(result), compactNumber(item.peer_value)),
-          kpi("Prior", compactNumber(item.prior_value)),
+          kpi(activeStoreName(result), formatCurrencyCompact(item.current_value)),
+          kpi(peerBoxLabel(result), formatCurrencyCompact(item.peer_value)),
+          kpi("Prior", formatCurrencyCompact(item.prior_value)),
         ),
       ),
     ),
