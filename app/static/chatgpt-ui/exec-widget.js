@@ -838,34 +838,97 @@ function buildSelect(currentValue, options, onChange) {
   return node;
 }
 
-function buildStoreMultiSelect(selectedStoreIds, options) {
-  const selected = new Set(normalizeStoreIds(selectedStoreIds));
-  const node = el("select", {
-    className: "fw-input fw-select",
-    multiple: "true",
-    size: "6",
-    onChange: (event) => {
-      markUserInteraction();
-      const values = Array.from(event.target.selectedOptions).map((item) => String(item.value).trim()).filter(Boolean);
-      state.ui.storeIds = normalizeStoreIds(values);
-      queueModelContextUpdate();
-      render();
-    },
-  });
+function storeSelectionSummary(selectedIds, optionsById) {
+  if (!Array.isArray(selectedIds) || !selectedIds.length) {
+    return "All stores";
+  }
+  if (selectedIds.length === 1) {
+    const label = optionsById.get(selectedIds[0]);
+    return label || "1 store selected";
+  }
+  return `${selectedIds.length} stores selected`;
+}
 
+function buildStoreMultiSelect(selectedStoreIds, options) {
+  const normalizedSelected = normalizeStoreIds(selectedStoreIds);
+  const selected = new Set(normalizedSelected);
+  const normalizedOptions = [];
   (Array.isArray(options) ? options : []).forEach((option) => {
     const value = String(option.value || "").trim();
     const label = String(option.label || value).trim();
     if (!value || !label) {
       return;
     }
-    const optionNode = el("option", { value, text: label });
-    if (selected.has(value)) {
-      optionNode.selected = true;
-    }
-    node.appendChild(optionNode);
+    normalizedOptions.push({ value, label });
   });
-  return node;
+  const optionsById = new Map(normalizedOptions.map((item) => [item.value, item.label]));
+  const details = el("details", { className: "fw-multi-select" });
+  const summary = el("summary", {
+    className: "fw-input fw-multi-select-summary",
+    text: storeSelectionSummary(normalizedSelected, optionsById),
+  });
+  const list = el("div", { className: "fw-multi-select-list" });
+
+  if (!normalizedOptions.length) {
+    list.appendChild(el("p", { className: "fw-empty", text: "No stores available." }));
+  } else {
+    normalizedOptions.forEach((option) => {
+      const checkbox = el("input", { type: "checkbox", checked: selected.has(option.value) ? "true" : null });
+      const label = el(
+        "label",
+        { className: "fw-multi-select-option" },
+        checkbox,
+        el("span", { text: option.label }),
+      );
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          selected.add(option.value);
+        } else {
+          selected.delete(option.value);
+        }
+      });
+      list.appendChild(label);
+    });
+  }
+
+  const actions = el(
+    "div",
+    { className: "fw-multi-select-actions" },
+    el(
+      "button",
+      {
+        className: "fw-text-button",
+        type: "button",
+        onClick: () => {
+          list.querySelectorAll("input[type='checkbox']").forEach((node) => {
+            node.checked = false;
+          });
+          selected.clear();
+        },
+      },
+      "Clear",
+    ),
+    el(
+      "button",
+      {
+        className: "fw-button secondary",
+        type: "button",
+        onClick: () => {
+          state.ui.storeIds = normalizeStoreIds(Array.from(selected));
+          summary.textContent = storeSelectionSummary(state.ui.storeIds, optionsById);
+          details.open = false;
+          markUserInteraction();
+          queueModelContextUpdate();
+          render();
+        },
+      },
+      "Apply",
+    ),
+  );
+
+  details.appendChild(summary);
+  details.appendChild(el("div", { className: "fw-multi-select-panel" }, list, actions));
+  return details;
 }
 
 function render() {
@@ -970,7 +1033,7 @@ function render() {
               },
             }),
           )
-        : el("div", { className: "fw-field" }, el("p", { className: "fw-empty", text: `Window: ${normalizedLookbackDays} days` })),
+        : null,
       el(
         "div",
         { className: "fw-field" },
@@ -991,7 +1054,7 @@ function render() {
         "div",
         { className: "fw-field fw-span-full" },
         el("h3", { className: "fw-panel-title", text: "Event + Autopilot Inputs" }),
-        el("p", { className: "fw-empty", text: "These controls affect Event Readiness Radar and Campaign Autopilot." }),
+        el("p", { className: "fw-empty", text: "Store scope + lookback + events apply to all tabs. Email and shortlist size apply to Campaign Autopilot." }),
       ),
       el(
         "div",
@@ -1044,12 +1107,38 @@ function render() {
         "div",
         { className: "fw-field fw-span-full" },
         el("h3", { className: "fw-panel-title", text: "What-if Scenario Inputs" }),
-        el("p", { className: "fw-empty", text: "Configure a pricing + category exposure scenario, then run the What-if Simulator tab." }),
+        el("p", { className: "fw-empty", text: "Configure category reallocation, then apply pricing/space levers on the Reallocate To category." }),
+      ),
+      el(
+        "div",
+        { className: "fw-field fw-span-full" },
+        el("h4", { className: "fw-panel-title", text: "Category Reallocation Pair" }),
       ),
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Discount Percent" }),
+        el("label", { className: "fw-label", text: "Reallocate From Category" }),
+        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
+          state.ui.fromCategory = value;
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Reallocate To Category" }),
+        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
+          state.ui.toCategory = value;
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field fw-span-full" },
+        el("h4", { className: "fw-panel-title", text: "Reallocate-To Levers" }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Discount on Reallocate-To (%)" }),
         el("input", {
           className: "fw-input",
           type: "number",
@@ -1066,7 +1155,7 @@ function render() {
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Exposure Shift Percent" }),
+        el("label", { className: "fw-label", text: "Floor Space Shift to Reallocate-To (%)" }),
         el("input", {
           className: "fw-input",
           type: "number",
@@ -1078,22 +1167,6 @@ function render() {
             state.ui.floorSpaceShiftPct = event.target.value;
             queueModelContextUpdate();
           },
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Reallocate From Category" }),
-        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
-          state.ui.fromCategory = value;
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Reallocate To Category" }),
-        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
-          state.ui.toCategory = value;
         }),
       ),
     ),
