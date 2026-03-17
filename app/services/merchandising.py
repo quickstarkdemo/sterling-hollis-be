@@ -87,25 +87,26 @@ def _price_band_for_value(price: float) -> PriceBand:
 
 def parse_merch_query(
     question: str | None,
-    objective: Objective = Objective.sell_through,
-    lookback_days: int = 90,
+    objective: Objective | None = Objective.sell_through,
+    lookback_days: int | None = 90,
     category: str | None = None,
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
 ) -> MerchQuery:
     normalized = _normalize(question)
-    parsed_objective = objective
+    parsed_objective = objective or Objective.sell_through
     parsed_action: MerchAction | None = None
     parsed_category = category
     parsed_brand = brand
     parsed_price_band = price_band
     parsed_occasion = occasion
 
-    for candidate, terms in _OBJECTIVE_TERMS.items():
-        if any(term in normalized for term in terms):
-            parsed_objective = candidate
-            break
+    if objective is None:
+        for candidate, terms in _OBJECTIVE_TERMS.items():
+            if any(term in normalized for term in terms):
+                parsed_objective = candidate
+                break
 
     for candidate, terms in _ACTION_TERMS.items():
         if any(term in normalized for term in terms):
@@ -138,21 +139,23 @@ def parse_merch_query(
                 parsed_occasion = occasion_term.replace(" ", "_")
                 break
 
-    if "last " in normalized and " days" in normalized:
-        try:
-            lookback_days = int(normalized.split("last ", 1)[1].split(" days", 1)[0].strip())
-        except Exception:
-            pass
-    elif "last " in normalized and " weeks" in normalized:
-        try:
-            lookback_days = int(normalized.split("last ", 1)[1].split(" weeks", 1)[0].strip()) * 7
-        except Exception:
-            pass
-    elif "last " in normalized and " months" in normalized:
-        try:
-            lookback_days = int(normalized.split("last ", 1)[1].split(" months", 1)[0].strip()) * 30
-        except Exception:
-            pass
+    resolved_lookback = lookback_days if lookback_days is not None else 90
+    if lookback_days is None:
+        if "last " in normalized and " days" in normalized:
+            try:
+                resolved_lookback = int(normalized.split("last ", 1)[1].split(" days", 1)[0].strip())
+            except Exception:
+                pass
+        elif "last " in normalized and " weeks" in normalized:
+            try:
+                resolved_lookback = int(normalized.split("last ", 1)[1].split(" weeks", 1)[0].strip()) * 7
+            except Exception:
+                pass
+        elif "last " in normalized and " months" in normalized:
+            try:
+                resolved_lookback = int(normalized.split("last ", 1)[1].split(" months", 1)[0].strip()) * 30
+            except Exception:
+                pass
 
     intent = question or f"{parsed_objective.value} merchandising review"
     return MerchQuery(
@@ -162,9 +165,22 @@ def parse_merch_query(
         brand=parsed_brand,
         price_band=parsed_price_band,
         occasion=parsed_occasion,
-        lookback_days=max(7, min(lookback_days, 730)),
+        lookback_days=max(7, min(resolved_lookback, 730)),
         intent=intent,
     )
+
+
+def _brand_filters(brand: str | None) -> list[str]:
+    if not brand:
+        return []
+    tokens: list[str] = []
+    for chunk in str(brand).replace(";", ",").replace("|", ",").split(","):
+        value = chunk.strip().lower()
+        if not value:
+            continue
+        if value not in tokens:
+            tokens.append(value)
+    return tokens
 
 
 def _resolved_store(session: Session, store_query: str | None = None, store_id: str | None = None) -> ResolvedStore:
@@ -271,8 +287,9 @@ def _base_query(
     )
     if category:
         query = query.where(Product.category == category)
-    if brand:
-        query = query.where(func.lower(Product.brand) == brand.lower())
+    brand_values = _brand_filters(brand)
+    if brand_values:
+        query = query.where(func.lower(Product.brand).in_(brand_values))
     if occasion:
         query = query.where(Order.occasion == occasion)
     floor, ceiling = _price_band_bounds(price_band)
@@ -324,8 +341,9 @@ def _dimension_aggregate_query(
     )
     if category:
         query = query.where(Product.category == category)
-    if brand:
-        query = query.where(func.lower(Product.brand) == brand.lower())
+    brand_values = _brand_filters(brand)
+    if brand_values:
+        query = query.where(func.lower(Product.brand).in_(brand_values))
     if occasion:
         query = query.where(Order.occasion == occasion)
     floor, ceiling = _price_band_bounds(price_band)
@@ -375,8 +393,9 @@ def _sales_events(
     )
     if category:
         query = query.where(Product.category == category)
-    if brand:
-        query = query.where(func.lower(Product.brand) == brand.lower())
+    brand_values = _brand_filters(brand)
+    if brand_values:
+        query = query.where(func.lower(Product.brand).in_(brand_values))
     if occasion:
         query = query.where(Order.occasion == occasion)
     floor, ceiling = _price_band_bounds(price_band)

@@ -23,9 +23,10 @@ const DEFAULT_PAYLOAD = {
   last_tool: "fashion_merch_action_recommendations",
   initial_notice: null,
   uiHints: {
-    questionPlaceholder: "What should this store prioritize, promote, or deprioritize?",
+    questionPlaceholder: "Optional context (e.g., wedding occasion, protect margin, next 8 weeks)",
     emptyState: "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
     categoryOptions: [],
+    brandOptions: [],
     compareStoreOptions: [{ value: "", label: "Auto peer set" }],
     actionDefinitions: {
       feature: "High-confidence winners for full-price visibility.",
@@ -66,6 +67,7 @@ const state = {
     trendInteractionCleanup: null,
     trendInteractionUpdateCount: 0,
     chartCleanupFns: [],
+    filtersDirty: false,
     diagnosticsShowAll: false,
     diagnosticsExpanded: {},
   },
@@ -135,6 +137,32 @@ function normalizeCategoryOptions(raw) {
     seen.add(value);
     options.push({ value, label });
   });
+  return options;
+}
+
+function normalizeBrandOptions(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const options = [];
+  const seen = new Set();
+  raw.forEach((item) => {
+    if (!isObject(item)) {
+      return;
+    }
+    const value = typeof item.value === "string" ? item.value.trim() : "";
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    if (!value || !label) {
+      return;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({ value, label });
+  });
+  options.sort((left, right) => left.label.localeCompare(right.label, "en", { sensitivity: "base" }));
   return options;
 }
 
@@ -259,6 +287,7 @@ function normalizeWorkspacePayload(raw) {
           ? raw.uiHints.emptyState
           : DEFAULT_PAYLOAD.uiHints.emptyState,
       categoryOptions: normalizeCategoryOptions(raw.uiHints && raw.uiHints.categoryOptions),
+      brandOptions: normalizeBrandOptions(raw.uiHints && raw.uiHints.brandOptions),
       compareStoreOptions: normalizeCompareStoreOptions(raw.uiHints && raw.uiHints.compareStoreOptions),
       actionDefinitions: normalizeActionDefinitions(raw.uiHints && raw.uiHints.actionDefinitions),
     },
@@ -275,6 +304,7 @@ function applyWorkspacePayload(raw) {
   state.runtime.trendMetric = "revenue";
   state.runtime.trendHoverIndex = null;
   state.runtime.trendInteractionUpdateCount = 0;
+  state.runtime.filtersDirty = false;
   state.runtime.diagnosticsShowAll = false;
   state.runtime.diagnosticsExpanded = {};
   hydrateUiFromFilters(payload.filters);
@@ -299,6 +329,11 @@ function applyInitialToolOutput(raw, options = {}) {
 
 function markUserInteraction() {
   state.runtime.userInteracted = true;
+}
+
+function markFilterChange() {
+  markUserInteraction();
+  state.runtime.filtersDirty = true;
 }
 
 function hydrateUiFromFilters(filters) {
@@ -763,12 +798,18 @@ async function refreshMerch(toolName) {
   state.runtime.trendMetric = "revenue";
   state.runtime.trendHoverIndex = null;
   state.runtime.trendInteractionUpdateCount = 0;
+  state.runtime.filtersDirty = false;
   state.runtime.diagnosticsShowAll = false;
   state.runtime.diagnosticsExpanded = {};
   syncPayloadFilters();
   persistWidgetState();
   setNotice(`${toolLabel(toolName)} loaded.`);
   render();
+}
+
+async function refreshActiveView() {
+  const toolName = state.payload.last_tool || "fashion_merch_action_recommendations";
+  await refreshMerch(toolName);
 }
 
 async function copyTextToClipboard(text) {
@@ -847,11 +888,124 @@ async function exportCsv() {
   render();
 }
 
+function parseBrandSelections(value) {
+  if (!value || typeof value !== "string") {
+    return [];
+  }
+  const unique = [];
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((item) => {
+      if (!unique.some((existing) => existing.toLowerCase() === item.toLowerCase())) {
+        unique.push(item);
+      }
+    });
+  return unique;
+}
+
+function serializeBrandSelections(values) {
+  if (!Array.isArray(values) || !values.length) {
+    return "";
+  }
+  return values.join(", ");
+}
+
+function brandSelectionSummary(values) {
+  if (!Array.isArray(values) || !values.length) {
+    return "Any brands";
+  }
+  if (values.length === 1) {
+    return values[0];
+  }
+  return `${values.length} brands selected`;
+}
+
+function buildBrandMultiSelect(selectedCsv, options) {
+  const currentValues = parseBrandSelections(selectedCsv);
+  const selected = new Set(currentValues.map((value) => value.toLowerCase()));
+  const byKey = new Map(
+    (Array.isArray(options) ? options : []).map((option) => [String(option.value).toLowerCase(), option]),
+  );
+  const details = el("details", { className: "fw-multi-select" });
+  const summary = el("summary", { className: "fw-input fw-multi-select-summary", text: brandSelectionSummary(currentValues) });
+  const list = el("div", { className: "fw-multi-select-list" });
+
+  if (!Array.isArray(options) || !options.length) {
+    list.appendChild(el("p", { className: "fw-empty", text: "No brand options available for this store." }));
+  } else {
+    options.forEach((option) => {
+      const key = String(option.value).toLowerCase();
+      const checked = selected.has(key);
+      const checkbox = el("input", { type: "checkbox", checked: checked ? "true" : null });
+      const label = el(
+        "label",
+        { className: "fw-multi-select-option" },
+        checkbox,
+        el("span", { text: option.label }),
+      );
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          selected.add(key);
+        } else {
+          selected.delete(key);
+        }
+      });
+      list.appendChild(label);
+    });
+  }
+
+  const actions = el(
+    "div",
+    { className: "fw-multi-select-actions" },
+    el(
+      "button",
+      {
+        className: "fw-text-button",
+        type: "button",
+        onClick: () => {
+          list.querySelectorAll("input[type='checkbox']").forEach((node) => {
+            node.checked = false;
+          });
+          selected.clear();
+        },
+      },
+      "Clear",
+    ),
+    el(
+      "button",
+      {
+        className: "fw-button secondary",
+        type: "button",
+        onClick: () => {
+          const selectedValues = Array.from(selected)
+            .map((key) => byKey.get(key))
+            .filter(Boolean)
+            .map((option) => option.value);
+          const nextValue = serializeBrandSelections(selectedValues);
+          state.ui.brand = nextValue;
+          summary.textContent = brandSelectionSummary(selectedValues);
+          details.open = false;
+          markFilterChange();
+          persistWidgetState();
+          render();
+        },
+      },
+      "Apply",
+    ),
+  );
+
+  details.appendChild(summary);
+  details.appendChild(el("div", { className: "fw-multi-select-panel" }, list, actions));
+  return details;
+}
+
 function buildSelect(currentValue, options, onChange) {
   const node = el("select", {
     className: "fw-input fw-select",
     onChange: (event) => {
-      markUserInteraction();
+      markFilterChange();
       onChange(event.target.value);
       persistWidgetState();
       render();
@@ -871,12 +1025,13 @@ function resultHeader(result) {
   if (!result) {
     return null;
   }
+  const peerCount = Array.isArray(result.peer_store_ids) ? result.peer_store_ids.length : 0;
   return el(
     "div",
     { className: "fw-kpi-strip" },
-    kpi("Baseline", result.compare_mode === "prior_period" ? "Prior Period" : result.compare_store_name || "Peer Set"),
+    kpi("Baseline", baselineLabel(result)),
     kpi("Compare", humanizeToken(result.compare_mode || state.ui.compareMode)),
-    kpi("Peers", String((result.peer_store_ids || []).length || 0)),
+    kpi("Peers", String(peerCount || 0)),
     kpi("Window", `${result.lookback_days || parsePositiveInt(state.ui.lookbackDays, 90, 7, 730)}d`),
   );
 }
@@ -900,11 +1055,27 @@ function activeStoreName(result) {
   return "Current Store";
 }
 
+function peerCountForResult(result) {
+  return Array.isArray(result?.peer_store_ids) ? result.peer_store_ids.length : 0;
+}
+
+function autoPeerSetLabel(result) {
+  const count = peerCountForResult(result);
+  const mode = humanizeToken(result?.peer_mode || state.ui.peerMode || state.payload?.filters?.peer_mode || "state_and_profile");
+  if (count > 0) {
+    return `Auto peer set (${count} ${count === 1 ? "store" : "stores"} · ${mode})`;
+  }
+  return `Auto peer set (${mode})`;
+}
+
 function peerBoxLabel(result) {
+  if (result?.compare_mode === "prior_period") {
+    return "Prior Period";
+  }
   if (result && typeof result.compare_store_name === "string" && result.compare_store_name.trim()) {
     return result.compare_store_name.trim();
   }
-  return "Peer";
+  return autoPeerSetLabel(result);
 }
 
 function renderActions(result) {
@@ -1013,7 +1184,7 @@ function baselineLabel(result) {
   if (result?.compare_mode === "prior_period") {
     return "Prior Period";
   }
-  return result?.compare_store_name ? result.compare_store_name : "Peer Set";
+  return result?.compare_store_name ? result.compare_store_name : autoPeerSetLabel(result);
 }
 
 function diagnosticsKey(item, idx) {
@@ -2167,7 +2338,7 @@ function render() {
     value: state.ui.question,
     placeholder: state.payload.uiHints.questionPlaceholder,
     onInput: (event) => {
-      markUserInteraction();
+      markFilterChange();
       state.ui.question = event.target.value;
       persistWidgetState();
     },
@@ -2184,6 +2355,9 @@ function render() {
       state.ui.category = value;
     },
   );
+
+  const brandOptions = Array.isArray(state.payload.uiHints.brandOptions) ? state.payload.uiHints.brandOptions : [];
+  const brandMultiSelect = buildBrandMultiSelect(state.ui.brand, brandOptions);
 
   const objectiveSelect = buildSelect(
     state.ui.objective,
@@ -2235,15 +2409,16 @@ function render() {
     },
   );
 
-  const compareStoreSelect = buildSelect(
-    state.ui.compareStoreId,
+  const compareStoreBaseOptions =
     Array.isArray(state.payload.uiHints.compareStoreOptions) && state.payload.uiHints.compareStoreOptions.length
       ? state.payload.uiHints.compareStoreOptions
-      : [{ label: "Auto peer set", value: "" }],
-    (value) => {
-      state.ui.compareStoreId = value;
-    },
+      : [{ label: "Auto peer set", value: "" }];
+  const compareStoreOptions = compareStoreBaseOptions.map((option) =>
+    option.value === "" ? { ...option, label: autoPeerSetLabel(result) } : option,
   );
+  const compareStoreSelect = buildSelect(state.ui.compareStoreId, compareStoreOptions, (value) => {
+    state.ui.compareStoreId = value;
+  });
 
   const controlsPanel = el(
     "section",
@@ -2256,7 +2431,16 @@ function render() {
     el(
       "div",
       { className: "fw-grid merch-filters" },
-      el("div", { className: "fw-field fw-span-full" }, el("label", { className: "fw-label", text: "Question" }), questionInput),
+      el(
+        "div",
+        { className: "fw-field fw-span-full" },
+        el("label", { className: "fw-label", text: "Context (Optional)" }),
+        questionInput,
+        el("p", {
+          className: "fw-empty fw-merch-question-hint",
+          text: "Use this for nuance not captured by filters. It guides the analysis on refresh and never overrides selected controls.",
+        }),
+      ),
       el(
         "div",
         { className: "fw-field" },
@@ -2273,17 +2457,7 @@ function render() {
         "div",
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Brand" }),
-        el("input", {
-          className: "fw-input",
-          type: "text",
-          value: state.ui.brand,
-          placeholder: "Valentino",
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.brand = event.target.value;
-            persistWidgetState();
-          },
-        }),
+        brandMultiSelect,
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Price Band" }), priceBandSelect),
       el(
@@ -2296,7 +2470,7 @@ function render() {
           value: state.ui.occasion,
           placeholder: "wedding",
           onInput: (event) => {
-            markUserInteraction();
+            markFilterChange();
             state.ui.occasion = event.target.value;
             persistWidgetState();
           },
@@ -2313,7 +2487,7 @@ function render() {
           max: "730",
           value: state.ui.lookbackDays,
           onInput: (event) => {
-            markUserInteraction();
+            markFilterChange();
             state.ui.lookbackDays = event.target.value;
             persistWidgetState();
           },
@@ -2333,7 +2507,7 @@ function render() {
           max: "50",
           value: state.ui.topK,
           onInput: (event) => {
-            markUserInteraction();
+            markFilterChange();
             state.ui.topK = event.target.value;
             persistWidgetState();
           },
@@ -2342,12 +2516,14 @@ function render() {
     ),
     el(
       "div",
-      { className: "fw-tabs" },
+      { className: "fw-tabs", role: "tablist", "aria-label": "Merchandising views" },
       el(
         "button",
         {
           className: `fw-tab ${activeTool === "fashion_merch_action_recommendations" ? "active" : ""}`,
           type: "button",
+          role: "tab",
+          "aria-selected": activeTool === "fashion_merch_action_recommendations" ? "true" : "false",
           disabled: state.ui.isLoading ? "true" : null,
           onClick: () => {
             void refreshMerch("fashion_merch_action_recommendations");
@@ -2360,6 +2536,8 @@ function render() {
         {
           className: `fw-tab ${activeTool === "fashion_merch_diagnostics" ? "active" : ""}`,
           type: "button",
+          role: "tab",
+          "aria-selected": activeTool === "fashion_merch_diagnostics" ? "true" : "false",
           disabled: state.ui.isLoading ? "true" : null,
           onClick: () => {
             void refreshMerch("fashion_merch_diagnostics");
@@ -2372,12 +2550,33 @@ function render() {
         {
           className: `fw-tab ${activeTool === "fashion_merch_trend_summary" ? "active" : ""}`,
           type: "button",
+          role: "tab",
+          "aria-selected": activeTool === "fashion_merch_trend_summary" ? "true" : "false",
           disabled: state.ui.isLoading ? "true" : null,
           onClick: () => {
             void refreshMerch("fashion_merch_trend_summary");
           },
         },
         state.ui.isLoading && activeTool === "fashion_merch_trend_summary" ? "Loading..." : "Trends",
+      ),
+    ),
+    state.runtime.filtersDirty
+      ? el("p", { className: "fw-empty fw-merch-refresh-hint", text: "Filters changed. Click Refresh Results to rerun the active tab." })
+      : null,
+    el(
+      "div",
+      { className: "fw-toolbar" },
+      el(
+        "button",
+        {
+          className: `fw-button ${state.runtime.filtersDirty ? "" : "secondary"}`,
+          type: "button",
+          disabled: state.ui.isLoading ? "true" : null,
+          onClick: () => {
+            void refreshActiveView();
+          },
+        },
+        state.ui.isLoading ? "Refreshing..." : state.runtime.filtersDirty ? "Refresh Results" : "Refresh",
       ),
       el(
         "button",

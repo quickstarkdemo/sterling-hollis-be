@@ -210,6 +210,18 @@ def _merch_category_options() -> list[dict[str, str]]:
     return rows
 
 
+def _merch_brand_options(store_id: str) -> list[dict[str, str]]:
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(Product.brand)
+            .where(Product.store_id == store_id, Product.brand.is_not(None), func.length(func.trim(Product.brand)) > 0)
+            .group_by(Product.brand)
+            .order_by(Product.brand.asc())
+            .limit(300)
+        ).all()
+    return [{"value": str(row.brand), "label": str(row.brand)} for row in rows if row.brand]
+
+
 def _merch_compare_store_options(store_id: str) -> list[dict[str, str]]:
     with SessionLocal() as db:
         stores = db.scalars(select(Store).where(Store.id != store_id).order_by(Store.name.asc(), Store.id.asc())).all()
@@ -837,6 +849,7 @@ def _merch_workspace_payload(
         compare_store_id=compare_store_id,
     )
     compare_store_options = _merch_compare_store_options(initial_result.store.id)
+    brand_options = _merch_brand_options(initial_result.store.id)
     return {
         "store": initial_result.store.model_dump(mode="json"),
         "filters": MerchWorkspaceFilters(
@@ -857,9 +870,10 @@ def _merch_workspace_payload(
         "last_tool": "fashion_merch_action_recommendations",
         "initial_notice": initial_notice,
         "uiHints": {
-            "questionPlaceholder": "What should this store prioritize, promote, or deprioritize?",
+            "questionPlaceholder": "Optional context (e.g., wedding occasion, protect margin, next 8 weeks)",
             "emptyState": "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
             "categoryOptions": _merch_category_options(),
+            "brandOptions": brand_options,
             "compareStoreOptions": compare_store_options,
             "actionDefinitions": {
                 "feature": "High-confidence winners to prioritize in full-price placement.",

@@ -182,6 +182,63 @@ body {
   font: inherit;
 }
 
+.fw-multi-select {
+  position: relative;
+}
+
+.fw-multi-select-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fw-multi-select-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fw-multi-select[open] .fw-multi-select-summary {
+  border-color: var(--accent);
+  outline: 2px solid #cde3f5;
+}
+
+.fw-multi-select-panel {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 18px rgba(19, 33, 45, 0.12);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.fw-multi-select-list {
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.fw-multi-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.fw-multi-select-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
 .fw-textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -279,6 +336,15 @@ body {
 .fw-empty {
   color: var(--muted);
   font-size: 13px;
+}
+
+.fw-merch-question-hint {
+  margin: -2px 0 0;
+}
+
+.fw-merch-refresh-hint {
+  margin: -2px 0 0;
+  color: #21567f;
 }
 
 .fw-selected-name {
