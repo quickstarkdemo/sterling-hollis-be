@@ -966,9 +966,41 @@ body {
   line-height: 1.35;
 }
 
+.fw-exec-radar-meta,
+.fw-exec-radar-note,
+.fw-exec-radar-rationale,
+.fw-exec-problem {
+  margin: 0;
+}
+
+.fw-exec-problem {
+  color: #24567d;
+}
+
 .fw-exec-radar-meters {
   display: grid;
   gap: 7px;
+}
+
+.fw-exec-radar-signals {
+  display: grid;
+  gap: 8px;
+}
+
+.fw-exec-radar-signal {
+  border: 1px solid #d7e4ef;
+  border-radius: 9px;
+  padding: 8px;
+  background: #fbfdff;
+  display: grid;
+  gap: 7px;
+}
+
+.fw-exec-radar-signal-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 .fw-exec-radar-meter-row {
