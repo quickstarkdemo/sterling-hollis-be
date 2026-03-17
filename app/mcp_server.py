@@ -141,6 +141,7 @@ _WIDGET_TOOL_META = {
 _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE = "ui://widgets/customer-search/workspace"
 _MERCH_WORKSPACE_TEMPLATE_BASE = "ui://widgets/merch/workspace"
 _EXEC_WORKSPACE_TEMPLATE_BASE = "ui://widgets/exec/workspace"
+_DEFAULT_EXEC_TO_EMAIL = "djn12313@gmail.com"
 _WIDGET_BUILD_TAG = re.sub(r"[^A-Za-z0-9._-]", "-", settings.app_build_version or "dev")
 _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
 _MERCH_WORKSPACE_RESOURCE_URI = f"{_MERCH_WORKSPACE_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
@@ -250,6 +251,18 @@ def _merch_compare_store_options(store_id: str) -> list[dict[str, str]]:
                 }
                 for store in stores
             ],
+        ]
+
+
+def _exec_store_options() -> list[dict[str, str]]:
+    with SessionLocal() as db:
+        stores = db.scalars(select(Store).order_by(Store.name.asc(), Store.id.asc())).all()
+        return [
+            {
+                "value": store.id,
+                "label": f"{store.name} ({store.city}, {store.state})",
+            }
+            for store in stores
         ]
 
 
@@ -916,6 +929,7 @@ def _exec_workspace_payload(
     *,
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 90,
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
@@ -937,11 +951,14 @@ def _exec_workspace_payload(
             db,
             store_query=store_query,
             store_id=store_id,
+            store_ids=store_ids,
             lookback_days=bounded_lookback,
             objective=objective,
             top_k_stores=bounded_top_k,
         )
 
+    effective_store_ids = [value for value in (store_ids or []) if str(value).strip()]
+    effective_to_email = (to_email or "").strip().lower() or _DEFAULT_EXEC_TO_EMAIL
     return {
         "filters": ExecutiveWorkspaceFilters(
             lookback_days=bounded_lookback,
@@ -949,11 +966,12 @@ def _exec_workspace_payload(
             top_k_stores=bounded_top_k,
             events=events or ["wedding", "holiday_party", "workwear"],
             store_id=store_id,
+            store_ids=effective_store_ids,
             discount_pct=discount_pct,
             floor_space_shift_pct=floor_space_shift_pct,
             from_category=from_category,
             to_category=to_category,
-            to_email=to_email,
+            to_email=effective_to_email,
             autopilot_top_k=bounded_autopilot_top_k,
         ).model_dump(mode="json"),
         "initial_result": initial_result.model_dump(mode="json"),
@@ -964,6 +982,7 @@ def _exec_workspace_payload(
             "emptyState": "Run Overview, Radar, Simulator, or Autopilot to populate this workspace.",
             "events": ["wedding", "holiday_party", "workwear"],
             "categoryOptions": _merch_category_options(),
+            "storeOptions": _exec_store_options(),
         },
     }
 
@@ -1446,6 +1465,7 @@ def fashion_open_merch_workspace(
 def fashion_render_exec_workspace(
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 90,
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
@@ -1462,6 +1482,7 @@ def fashion_render_exec_workspace(
     workspace_payload = _exec_workspace_payload(
         store_query=store_query,
         store_id=store_id,
+        store_ids=store_ids,
         lookback_days=lookback_days,
         objective=objective,
         top_k_stores=top_k_stores,
@@ -1938,6 +1959,7 @@ def fashion_merch_trend_summary(
 def fashion_exec_overview(
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 90,
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
@@ -1948,6 +1970,7 @@ def fashion_exec_overview(
             db,
             store_query=store_query,
             store_id=store_id,
+            store_ids=store_ids,
             lookback_days=lookback_days,
             objective=objective,
             top_k_stores=top_k_stores,
@@ -1962,6 +1985,7 @@ def fashion_exec_overview(
 def fashion_exec_event_readiness_radar(
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 56,
     events: list[str] | None = None,
 ) -> ExecutiveEventReadinessRadarResponse:
@@ -1971,6 +1995,7 @@ def fashion_exec_event_readiness_radar(
             db,
             store_query=store_query,
             store_id=store_id,
+            store_ids=store_ids,
             lookback_days=lookback_days,
             events=events,
         )
@@ -1984,6 +2009,7 @@ def fashion_exec_event_readiness_radar(
 def fashion_exec_what_if_simulator(
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 90,
     discount_pct: float = 0.0,
     floor_space_shift_pct: float = 0.0,
@@ -1996,6 +2022,7 @@ def fashion_exec_what_if_simulator(
             db,
             store_query=store_query,
             store_id=store_id,
+            store_ids=store_ids,
             lookback_days=lookback_days,
             discount_pct=discount_pct,
             floor_space_shift_pct=floor_space_shift_pct,
@@ -2010,7 +2037,10 @@ def fashion_exec_what_if_simulator(
     meta=_WIDGET_TOOL_META,
 )
 def fashion_exec_campaign_autopilot_prepare(
-    to_email: str,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    to_email: str | None = None,
     lookback_days: int = 56,
     top_k: int = 6,
     events: list[str] | None = None,
@@ -2021,7 +2051,10 @@ def fashion_exec_campaign_autopilot_prepare(
     with SessionLocal() as db:
         return campaign_autopilot_prepare(
             db,
-            to_email=to_email,
+            store_query=store_query,
+            store_id=store_id,
+            store_ids=store_ids,
+            to_email=(to_email or "").strip().lower() or _DEFAULT_EXEC_TO_EMAIL,
             lookback_days=lookback_days,
             top_k=top_k,
             events=events,

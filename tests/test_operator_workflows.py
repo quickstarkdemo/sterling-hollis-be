@@ -1130,10 +1130,16 @@ def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
             top_k=4,
             events=["wedding", "holiday_party", "workwear"],
         )
+        defaulted = mcp_server.fashion_exec_campaign_autopilot_prepare(
+            lookback_days=56,
+            top_k=3,
+            events=["wedding", "holiday_party", "workwear"],
+        )
         fetched = mcp_server.fashion_exec_get_campaign_autopilot_draft(draft.draft_id)
 
         assert draft.status.value == "draft"
         assert draft.to_email == "store.manager@example.com"
+        assert defaulted.to_email == "djn12313@gmail.com"
         assert fetched.draft_id == draft.draft_id
 
         with pytest.raises(ValueError):

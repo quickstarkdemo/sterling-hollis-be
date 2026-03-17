@@ -1,6 +1,17 @@
 const root = document.getElementById("fashion-widget-root");
 const meta = window.__FASHION_WIDGET__ || {};
 const MODEL_CONTEXT_UPDATE_DEBOUNCE_MS = 600;
+const DEFAULT_EXEC_TO_EMAIL = "djn12313@gmail.com";
+
+const LOOKBACK_PRESET_OPTIONS = [
+  { label: "Last 2 Weeks", value: "14" },
+  { label: "Last 4 Weeks", value: "28" },
+  { label: "Last 8 Weeks", value: "56" },
+  { label: "Last Quarter (13 Weeks)", value: "90" },
+  { label: "Last 6 Months", value: "180" },
+  { label: "Last 12 Months", value: "365" },
+  { label: "Custom Days", value: "custom" },
+];
 
 const DEFAULT_PAYLOAD = {
   filters: {
@@ -9,11 +20,12 @@ const DEFAULT_PAYLOAD = {
     top_k_stores: 12,
     events: ["wedding", "holiday_party", "workwear"],
     store_id: null,
+    store_ids: [],
     discount_pct: 10,
     floor_space_shift_pct: 5,
     from_category: "womens_apparel",
     to_category: "shoes",
-    to_email: "",
+    to_email: DEFAULT_EXEC_TO_EMAIL,
     autopilot_top_k: 6,
   },
   initial_result: null,
@@ -24,22 +36,23 @@ const DEFAULT_PAYLOAD = {
     emptyState: "Run one of the executive tabs to populate this workspace.",
     categoryOptions: [],
     events: ["wedding", "holiday_party", "workwear"],
+    storeOptions: [],
   },
 };
 
 const state = {
   payload: clone(DEFAULT_PAYLOAD),
   ui: {
+    lookbackPreset: "90",
     lookbackDays: "90",
     objective: "revenue",
-    topKStores: "12",
+    storeIds: [],
     eventsCsv: "wedding, holiday_party, workwear",
-    storeId: "",
     discountPct: "10",
     floorSpaceShiftPct: "5",
     fromCategory: "womens_apparel",
     toCategory: "shoes",
-    toEmail: "",
+    toEmail: DEFAULT_EXEC_TO_EMAIL,
     autopilotTopK: "6",
     notice: "",
     noticeTone: "info",
@@ -114,19 +127,34 @@ function normalizeWorkspacePayload(raw) {
     return null;
   }
   const rawFilters = isObject(raw.filters) ? raw.filters : {};
+  const explicitStoreIds = Array.isArray(rawFilters.store_ids)
+    ? rawFilters.store_ids.map((value) => String(value).trim()).filter(Boolean)
+    : [];
+  const legacyStoreId =
+    typeof rawFilters.store_id === "string" && rawFilters.store_id.trim() ? rawFilters.store_id.trim() : null;
+  const normalizedStoreIds = explicitStoreIds.length
+    ? Array.from(new Set(explicitStoreIds))
+    : legacyStoreId
+      ? [legacyStoreId]
+      : [];
+
   return {
     filters: {
       lookback_days: Number(rawFilters.lookback_days) > 0 ? Number(rawFilters.lookback_days) : 90,
       objective: typeof rawFilters.objective === "string" ? rawFilters.objective : "revenue",
       top_k_stores: Number(rawFilters.top_k_stores) > 0 ? Number(rawFilters.top_k_stores) : 12,
       events: Array.isArray(rawFilters.events) ? clone(rawFilters.events) : ["wedding", "holiday_party", "workwear"],
-      store_id: typeof rawFilters.store_id === "string" ? rawFilters.store_id : null,
+      store_id: legacyStoreId,
+      store_ids: normalizedStoreIds,
       discount_pct: Number.isFinite(Number(rawFilters.discount_pct)) ? Number(rawFilters.discount_pct) : 10,
       floor_space_shift_pct:
         Number.isFinite(Number(rawFilters.floor_space_shift_pct)) ? Number(rawFilters.floor_space_shift_pct) : 5,
       from_category: typeof rawFilters.from_category === "string" ? rawFilters.from_category : "womens_apparel",
       to_category: typeof rawFilters.to_category === "string" ? rawFilters.to_category : "shoes",
-      to_email: typeof rawFilters.to_email === "string" ? rawFilters.to_email : "",
+      to_email:
+        typeof rawFilters.to_email === "string" && rawFilters.to_email.trim()
+          ? rawFilters.to_email.trim()
+          : DEFAULT_EXEC_TO_EMAIL,
       autopilot_top_k: Number(rawFilters.autopilot_top_k) > 0 ? Number(rawFilters.autopilot_top_k) : 6,
     },
     initial_result: isObject(raw.initial_result) ? clone(raw.initial_result) : null,
@@ -144,15 +172,15 @@ function applyWorkspacePayload(raw) {
   }
   state.payload = payload;
   state.ui.lookbackDays = String(payload.filters.lookback_days || 90);
+  state.ui.lookbackPreset = resolveLookbackPreset(state.ui.lookbackDays);
   state.ui.objective = payload.filters.objective || "revenue";
-  state.ui.topKStores = String(payload.filters.top_k_stores || 12);
+  state.ui.storeIds = clone(payload.filters.store_ids || []);
   state.ui.eventsCsv = Array.isArray(payload.filters.events) ? payload.filters.events.join(", ") : "wedding, holiday_party, workwear";
-  state.ui.storeId = payload.filters.store_id || "";
   state.ui.discountPct = String(payload.filters.discount_pct ?? 10);
   state.ui.floorSpaceShiftPct = String(payload.filters.floor_space_shift_pct ?? 5);
   state.ui.fromCategory = payload.filters.from_category || "";
   state.ui.toCategory = payload.filters.to_category || "";
-  state.ui.toEmail = payload.filters.to_email || "";
+  state.ui.toEmail = (payload.filters.to_email || DEFAULT_EXEC_TO_EMAIL).trim() || DEFAULT_EXEC_TO_EMAIL;
   state.ui.autopilotTopK = String(payload.filters.autopilot_top_k ?? 6);
   if (payload.initial_notice) {
     setNotice(payload.initial_notice);
@@ -206,6 +234,10 @@ function el(tag, props = {}, ...children) {
     }
     if (key === "value") {
       node.value = String(value);
+      return;
+    }
+    if (key === "checked") {
+      node.checked = Boolean(value);
       return;
     }
     if (key.startsWith("on") && typeof value === "function") {
@@ -275,15 +307,66 @@ function activeResult() {
   return null;
 }
 
+function parseEventsCsv(raw) {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return ["wedding", "holiday_party", "workwear"];
+  }
+  const values = [];
+  raw.split(",").forEach((item) => {
+    const token = item.trim().toLowerCase().replace(/\s+/g, "_");
+    if (!token || values.includes(token)) {
+      return;
+    }
+    values.push(token);
+  });
+  return values.length ? values : ["wedding", "holiday_party", "workwear"];
+}
+
+function normalizeStoreIds(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const unique = [];
+  raw.forEach((item) => {
+    const value = String(item || "").trim();
+    if (!value || unique.includes(value)) {
+      return;
+    }
+    unique.push(value);
+  });
+  return unique;
+}
+
+function parsePositiveInt(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+function resolveLookbackPreset(daysValue) {
+  const normalized = String(parsePositiveInt(daysValue, 90, 7, 730));
+  const supported = new Set(["14", "28", "56", "90", "180", "365"]);
+  return supported.has(normalized) ? normalized : "custom";
+}
+
+function normalizeLookbackDays(value, preset) {
+  if (preset && preset !== "custom") {
+    return parsePositiveInt(preset, 90, 7, 730);
+  }
+  return parsePositiveInt(value, 90, 7, 730);
+}
+
 function buildModelContextPayload() {
   return {
     workspace: "exec_workspace",
     active_tool: state.payload.last_tool || "fashion_exec_overview",
-    lookback_days: Number(state.ui.lookbackDays || 90),
+    lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
     objective: state.ui.objective,
-    store_id: state.ui.storeId || null,
+    store_ids: normalizeStoreIds(state.ui.storeIds),
     events: parseEventsCsv(state.ui.eventsCsv),
-    to_email: state.ui.toEmail || null,
+    to_email: state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL,
     autopilot_draft_id: state.runtime.autopilotDraftId || null,
   };
 }
@@ -323,27 +406,13 @@ function queueModelContextUpdate(options = {}) {
   state.runtime.modelContextTimer = window.setTimeout(send, MODEL_CONTEXT_UPDATE_DEBOUNCE_MS);
 }
 
-function parseEventsCsv(raw) {
-  if (typeof raw !== "string" || !raw.trim()) {
-    return ["wedding", "holiday_party", "workwear"];
-  }
-  const values = [];
-  raw.split(",").forEach((item) => {
-    const token = item.trim().toLowerCase().replace(/\s+/g, "_");
-    if (!token || values.includes(token)) {
-      return;
-    }
-    values.push(token);
-  });
-  return values.length ? values : ["wedding", "holiday_party", "workwear"];
-}
-
 function buildCommonArgs() {
   const args = {
-    lookback_days: Number(state.ui.lookbackDays || 90),
+    lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
   };
-  if (state.ui.storeId.trim()) {
-    args.store_id = state.ui.storeId.trim();
+  const selectedStoreIds = normalizeStoreIds(state.ui.storeIds);
+  if (selectedStoreIds.length) {
+    args.store_ids = selectedStoreIds;
   }
   return args;
 }
@@ -351,10 +420,11 @@ function buildCommonArgs() {
 function buildToolArgs(toolName) {
   const common = buildCommonArgs();
   if (toolName === "fashion_exec_overview") {
+    const selectedStoreIds = normalizeStoreIds(state.ui.storeIds);
     return {
       ...common,
       objective: state.ui.objective || "revenue",
-      top_k_stores: Number(state.ui.topKStores || 12),
+      top_k_stores: selectedStoreIds.length ? Math.max(5, selectedStoreIds.length) : 12,
     };
   }
   if (toolName === "fashion_exec_event_readiness_radar") {
@@ -374,9 +444,10 @@ function buildToolArgs(toolName) {
   }
   if (toolName === "fashion_exec_campaign_autopilot_prepare") {
     return {
-      to_email: (state.ui.toEmail || "").trim(),
-      lookback_days: Number(state.ui.lookbackDays || 56),
-      top_k: Number(state.ui.autopilotTopK || 6),
+      ...common,
+      to_email: (state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL).trim() || DEFAULT_EXEC_TO_EMAIL,
+      lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
+      top_k: parsePositiveInt(state.ui.autopilotTopK, 6, 1, 20),
       events: parseEventsCsv(state.ui.eventsCsv),
     };
   }
@@ -390,7 +461,7 @@ function toolLabel(toolName) {
   if (toolName === "fashion_exec_what_if_simulator") {
     return "What-if Simulator";
   }
-  if (toolName === "fashion_exec_campaign_autopilot_prepare") {
+  if (toolName === "fashion_exec_campaign_autopilot_prepare" || toolName === "fashion_exec_campaign_autopilot_send") {
     return "Campaign Autopilot";
   }
   return "Executive Overview";
@@ -504,7 +575,7 @@ function renderOverview(result) {
         { className: "fw-kpi-strip" },
         kpi("Revenue", formatCurrency(result?.total_revenue)),
         kpi("Units", compactNumber(result?.total_units, 0)),
-        kpi("Margin", formatPct((Number(result?.margin_rate || 0) * 100), 1)),
+        kpi("Margin", formatPct(Number(result?.margin_rate || 0) * 100, 1)),
         kpi("Vs Prior", formatPct(result?.revenue_delta_pct, 1)),
       ),
     ),
@@ -513,13 +584,17 @@ function renderOverview(result) {
           "section",
           { className: "fw-panel" },
           el("h3", { className: "fw-panel-title", text: "Revenue Trend" }),
-          el("div", { className: "fw-merch-chart-wrap" }, el("canvas", { className: "fw-merch-chart-canvas", "data-role": "exec-overview-chart" })),
+          el(
+            "div",
+            { className: "fw-merch-chart-wrap" },
+            el("canvas", { className: "fw-merch-chart-canvas", "data-role": "exec-overview-chart" }),
+          ),
         )
       : null,
     el(
       "section",
       { className: "fw-panel" },
-      el("h3", { className: "fw-panel-title", text: "Top Stores" }),
+      el("h3", { className: "fw-panel-title", text: "Store Contributions" }),
       stores.length
         ? el(
             "div",
@@ -552,7 +627,16 @@ function renderOverview(result) {
       type: "line",
       data: {
         labels,
-        datasets: [{ label: "Revenue", data: values, borderColor: "#1f5d8f", backgroundColor: "rgba(31,93,143,0.14)", fill: true, tension: 0.25 }],
+        datasets: [
+          {
+            label: "Revenue",
+            data: values,
+            borderColor: "#1f5d8f",
+            backgroundColor: "rgba(31,93,143,0.14)",
+            fill: true,
+            tension: 0.25,
+          },
+        ],
       },
       options: {
         responsive: true,
@@ -592,7 +676,12 @@ function renderRadar(result) {
         el("p", { className: "fw-empty", text: `${row.city}, ${row.state}` }),
         el(
           "p",
-          { className: "fw-empty", text: `Action: ${row.recommendation?.action || "monitor"} ${row.recommendation?.suggested_discount_pct ? `(${row.recommendation.suggested_discount_pct}% discount)` : ""}` },
+          {
+            className: "fw-empty",
+            text: `Action: ${row.recommendation?.action || "monitor"} ${
+              row.recommendation?.suggested_discount_pct ? `(${row.recommendation.suggested_discount_pct}% discount)` : ""
+            }`,
+          },
         ),
         el("p", { className: "fw-empty", text: row.recommendation?.rationale || "" }),
       ),
@@ -613,9 +702,15 @@ function renderSimulator(result) {
         kpi("Baseline Revenue", formatCurrency(result?.baseline_revenue)),
         kpi("Expected Revenue", formatCurrency(result?.expected_revenue)),
         kpi("Revenue Delta", formatCurrency(result?.revenue_delta)),
-        kpi("Margin Delta", formatPct((Number(result?.margin_rate_delta || 0) * 100), 2)),
+        kpi("Margin Delta", formatPct(Number(result?.margin_rate_delta || 0) * 100, 2)),
       ),
-      el("p", { className: "fw-empty", text: `Confidence band: ${formatCurrency(result?.confidence_interval_low)} to ${formatCurrency(result?.confidence_interval_high)}` }),
+      el(
+        "p",
+        {
+          className: "fw-empty",
+          text: `Confidence band: ${formatCurrency(result?.confidence_interval_low)} to ${formatCurrency(result?.confidence_interval_high)}`,
+        },
+      ),
     ),
     el(
       "section",
@@ -632,7 +727,7 @@ function renderSimulator(result) {
                 "div",
                 { className: "fw-chip-row" },
                 el("span", { className: "fw-chip", text: `Revenue ${formatCurrency(component.revenue_delta)}` }),
-                el("span", { className: "fw-chip subtle", text: `Margin ${formatPct((Number(component.margin_rate_delta || 0) * 100), 2)}` }),
+                el("span", { className: "fw-chip subtle", text: `Margin ${formatPct(Number(component.margin_rate_delta || 0) * 100, 2)}` }),
               ),
             ),
           )
@@ -655,7 +750,9 @@ function renderAutopilot(result) {
       result?.draft_id ? el("p", { className: "fw-empty", text: `Draft ID: ${result.draft_id}` }) : null,
       result?.to_email ? el("p", { className: "fw-empty", text: `Recipient: ${result.to_email}` }) : null,
       result?.subject ? el("p", { className: "fw-empty", text: `Subject: ${result.subject}` }) : null,
-      result?.body_text ? el("textarea", { className: "fw-textarea", rows: "10", readonly: "true", value: result.body_text }) : null,
+      result?.body_text
+        ? el("textarea", { className: "fw-textarea", rows: "10", readonly: "true", value: result.body_text })
+        : null,
       canSend
         ? el(
             "button",
@@ -727,12 +824,43 @@ function buildSelect(currentValue, options, onChange) {
     onChange: (event) => {
       markUserInteraction();
       onChange(event.target.value);
+      queueModelContextUpdate();
       render();
     },
   });
   options.forEach((option) => {
     const optionNode = el("option", { value: option.value, text: option.label });
     if (option.value === currentValue) {
+      optionNode.selected = true;
+    }
+    node.appendChild(optionNode);
+  });
+  return node;
+}
+
+function buildStoreMultiSelect(selectedStoreIds, options) {
+  const selected = new Set(normalizeStoreIds(selectedStoreIds));
+  const node = el("select", {
+    className: "fw-input fw-select",
+    multiple: "true",
+    size: "6",
+    onChange: (event) => {
+      markUserInteraction();
+      const values = Array.from(event.target.selectedOptions).map((item) => String(item.value).trim()).filter(Boolean);
+      state.ui.storeIds = normalizeStoreIds(values);
+      queueModelContextUpdate();
+      render();
+    },
+  });
+
+  (Array.isArray(options) ? options : []).forEach((option) => {
+    const value = String(option.value || "").trim();
+    const label = String(option.label || value).trim();
+    if (!value || !label) {
+      return;
+    }
+    const optionNode = el("option", { value, text: label });
+    if (selected.has(value)) {
       optionNode.selected = true;
     }
     node.appendChild(optionNode);
@@ -786,6 +914,16 @@ function render() {
       value: item.value,
     }))),
   ];
+  const storeOptions = Array.isArray(state.payload.uiHints?.storeOptions) ? state.payload.uiHints.storeOptions : [];
+  const selectedStoreCount = normalizeStoreIds(state.ui.storeIds).length;
+  const normalizedLookbackDays = String(normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset));
+
+  const lookbackPresetSelect = buildSelect(state.ui.lookbackPreset, LOOKBACK_PRESET_OPTIONS, (value) => {
+    state.ui.lookbackPreset = value;
+    if (value !== "custom") {
+      state.ui.lookbackDays = value;
+    }
+  });
 
   const controlsPanel = el(
     "section",
@@ -796,24 +934,47 @@ function render() {
       { className: "fw-grid merch-filters" },
       el(
         "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Lookback Days" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "7",
-          max: "730",
-          value: state.ui.lookbackDays,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.lookbackDays = event.target.value;
+        { className: "fw-field fw-span-full" },
+        el("label", { className: "fw-label", text: "Store Scope (multi-select)" }),
+        buildStoreMultiSelect(state.ui.storeIds, storeOptions),
+        el(
+          "p",
+          {
+            className: "fw-empty",
+            text: selectedStoreCount ? `${selectedStoreCount} store(s) selected.` : "No stores selected: defaults to company-wide network.",
           },
-        }),
+        ),
       ),
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Objective" }),
+        el("label", { className: "fw-label", text: "Lookback Window" }),
+        lookbackPresetSelect,
+      ),
+      state.ui.lookbackPreset === "custom"
+        ? el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Custom Days" }),
+            el("input", {
+              className: "fw-input",
+              type: "number",
+              min: "7",
+              max: "730",
+              value: normalizedLookbackDays,
+              onInput: (event) => {
+                markUserInteraction();
+                state.ui.lookbackDays = event.target.value;
+                state.ui.lookbackPreset = "custom";
+                queueModelContextUpdate();
+              },
+            }),
+          )
+        : el("div", { className: "fw-field" }, el("p", { className: "fw-empty", text: `Window: ${normalizedLookbackDays} days` })),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Overview Objective" }),
         buildSelect(
           state.ui.objective,
           [
@@ -828,23 +989,13 @@ function render() {
       ),
       el(
         "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Top Stores" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "1",
-          max: "50",
-          value: state.ui.topKStores,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.topKStores = event.target.value;
-          },
-        }),
+        { className: "fw-field fw-span-full" },
+        el("h3", { className: "fw-panel-title", text: "Event + Autopilot Inputs" }),
+        el("p", { className: "fw-empty", text: "These controls affect Event Readiness Radar and Campaign Autopilot." }),
       ),
       el(
         "div",
-        { className: "fw-field fw-span-full" },
+        { className: "fw-field" },
         el("label", { className: "fw-label", text: "Events (comma separated)" }),
         el("input", {
           className: "fw-input",
@@ -853,75 +1004,14 @@ function render() {
           onInput: (event) => {
             markUserInteraction();
             state.ui.eventsCsv = event.target.value;
+            queueModelContextUpdate();
           },
         }),
       ),
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Store ID (optional)" }),
-        el("input", {
-          className: "fw-input",
-          type: "text",
-          value: state.ui.storeId,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.storeId = event.target.value;
-          },
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Discount % (Simulator)" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "0",
-          max: "60",
-          value: state.ui.discountPct,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.discountPct = event.target.value;
-          },
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Floor Shift % (Simulator)" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "-40",
-          max: "40",
-          value: state.ui.floorSpaceShiftPct,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.floorSpaceShiftPct = event.target.value;
-          },
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "From Category" }),
-        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
-          state.ui.fromCategory = value;
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "To Category" }),
-        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
-          state.ui.toCategory = value;
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Autopilot Recipient" }),
+        el("label", { className: "fw-label", text: "Manager Email" }),
         el("input", {
           className: "fw-input",
           type: "email",
@@ -929,13 +1019,14 @@ function render() {
           onInput: (event) => {
             markUserInteraction();
             state.ui.toEmail = event.target.value;
+            queueModelContextUpdate();
           },
         }),
       ),
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Autopilot Top K" }),
+        el("label", { className: "fw-label", text: "Weekly Shortlist Size" }),
         el("input", {
           className: "fw-input",
           type: "number",
@@ -945,7 +1036,64 @@ function render() {
           onInput: (event) => {
             markUserInteraction();
             state.ui.autopilotTopK = event.target.value;
+            queueModelContextUpdate();
           },
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field fw-span-full" },
+        el("h3", { className: "fw-panel-title", text: "What-if Scenario Inputs" }),
+        el("p", { className: "fw-empty", text: "Configure a pricing + category exposure scenario, then run the What-if Simulator tab." }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Discount Percent" }),
+        el("input", {
+          className: "fw-input",
+          type: "number",
+          min: "0",
+          max: "60",
+          value: state.ui.discountPct,
+          onInput: (event) => {
+            markUserInteraction();
+            state.ui.discountPct = event.target.value;
+            queueModelContextUpdate();
+          },
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Exposure Shift Percent" }),
+        el("input", {
+          className: "fw-input",
+          type: "number",
+          min: "-40",
+          max: "40",
+          value: state.ui.floorSpaceShiftPct,
+          onInput: (event) => {
+            markUserInteraction();
+            state.ui.floorSpaceShiftPct = event.target.value;
+            queueModelContextUpdate();
+          },
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Reallocate From Category" }),
+        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
+          state.ui.fromCategory = value;
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Reallocate To Category" }),
+        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
+          state.ui.toCategory = value;
         }),
       ),
     ),

@@ -69,7 +69,15 @@ def _resolved_scope(
     *,
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
 ) -> tuple[list[str], ResolvedStore | None]:
+    normalized_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
+    if normalized_store_ids:
+        existing = set(session.scalars(select(Store.id).where(Store.id.in_(normalized_store_ids))).all())
+        missing = [value for value in normalized_store_ids if value not in existing]
+        if missing:
+            raise ValueError(f"Unknown store_ids: {', '.join(missing)}")
+        return list(dict.fromkeys(normalized_store_ids)), None
     if store_id or store_query:
         resolved = resolve_store(session, store_query=store_query, store_id=store_id).resolved
         return [resolved.id], resolved
@@ -194,6 +202,7 @@ def executive_overview(
     *,
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 90,
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
@@ -203,7 +212,7 @@ def executive_overview(
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=bounded_lookback)
     prior_since = since - timedelta(days=bounded_lookback)
-    store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id)
+    store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id, store_ids=store_ids)
     stores = _store_map(session, store_ids)
     current = _store_sales(session, store_ids=store_ids, since=since, until=now)
     prior = _store_sales(session, store_ids=store_ids, since=prior_since, until=since)
@@ -273,6 +282,7 @@ def event_readiness_radar(
     *,
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 56,
     events: list[str] | None = None,
 ) -> ExecutiveEventReadinessRadarResponse:
@@ -283,7 +293,7 @@ def event_readiness_radar(
     prior_since = since - timedelta(days=bounded_lookback)
     weeks = max(1.0, bounded_lookback / 7.0)
 
-    store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id)
+    store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id, store_ids=store_ids)
     stores = _store_map(session, store_ids)
     rows: list[ExecutiveReadinessRow] = []
 
@@ -444,6 +454,7 @@ def what_if_simulator(
     *,
     store_query: str | None = None,
     store_id: str | None = None,
+    store_ids: list[str] | None = None,
     lookback_days: int = 90,
     discount_pct: float = 0.0,
     floor_space_shift_pct: float = 0.0,
@@ -456,7 +467,7 @@ def what_if_simulator(
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=bounded_lookback)
-    store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id)
+    store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id, store_ids=store_ids)
 
     sales = _category_sales(session, store_ids=store_ids, since=since, until=now)
     inventory = _category_inventory(session, store_ids=store_ids)
@@ -559,6 +570,9 @@ def what_if_simulator(
 def campaign_autopilot_prepare(
     session: Session,
     *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
     to_email: str,
     lookback_days: int = 56,
     top_k: int = 6,
@@ -571,7 +585,14 @@ def campaign_autopilot_prepare(
         raise ValueError("to_email is required.")
 
     bounded_top_k = max(1, min(int(top_k), 20))
-    radar = event_readiness_radar(session, lookback_days=lookback_days, events=events)
+    radar = event_readiness_radar(
+        session,
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids,
+        lookback_days=lookback_days,
+        events=events,
+    )
     scored: list[tuple[float, ExecutiveCampaignCandidate]] = []
 
     for row in radar.rows:
@@ -669,6 +690,11 @@ def campaign_autopilot_prepare(
                 "max_discount_pct": max_discount_pct,
                 "max_candidates": bounded_top_k,
                 "exclude_critical_shortage": True,
+            },
+            "scope": {
+                "store_query": store_query,
+                "store_id": store_id,
+                "store_ids": [value for value in (store_ids or []) if str(value).strip()],
             },
             "events": radar.events,
             "candidates": [item.model_dump(mode="json") for item in shortlist],
