@@ -1,6 +1,7 @@
 const root = document.getElementById("fashion-widget-root");
 const meta = window.__FASHION_WIDGET__ || {};
 const MODEL_CONTEXT_UPDATE_DEBOUNCE_MS = 600;
+const TREND_DEBUG_ENABLED = meta?.trendDebug === true;
 
 const DEFAULT_PAYLOAD = {
   store: null,
@@ -59,8 +60,11 @@ const state = {
     userInteracted: false,
     modelContextHash: "",
     modelContextTimer: null,
+    trendChartEngine: typeof meta?.trendChartEngine === "string" ? meta.trendChartEngine.toLowerCase() : "native",
     trendMetric: "revenue",
     trendHoverIndex: null,
+    trendInteractionCleanup: null,
+    trendInteractionUpdateCount: 0,
     diagnosticsShowAll: false,
     diagnosticsExpanded: {},
   },
@@ -75,6 +79,17 @@ function clone(value) {
     return value;
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+function teardownTrendInteraction() {
+  if (typeof state.runtime.trendInteractionCleanup === "function") {
+    try {
+      state.runtime.trendInteractionCleanup();
+    } catch {
+      // Best-effort cleanup.
+    }
+  }
+  state.runtime.trendInteractionCleanup = null;
 }
 
 function normalizeCategoryOptions(raw) {
@@ -230,9 +245,11 @@ function applyWorkspacePayload(raw) {
   if (!payload) {
     return false;
   }
+  teardownTrendInteraction();
   state.payload = payload;
   state.runtime.trendMetric = "revenue";
   state.runtime.trendHoverIndex = null;
+  state.runtime.trendInteractionUpdateCount = 0;
   state.runtime.diagnosticsShowAll = false;
   state.runtime.diagnosticsExpanded = {};
   hydrateUiFromFilters(payload.filters);
@@ -714,11 +731,13 @@ async function refreshMerch(toolName) {
     return;
   }
 
+  teardownTrendInteraction();
   state.payload.last_result = data;
   state.payload.last_tool = toolName;
   state.ui.csvText = "";
   state.runtime.trendMetric = "revenue";
   state.runtime.trendHoverIndex = null;
+  state.runtime.trendInteractionUpdateCount = 0;
   state.runtime.diagnosticsShowAll = false;
   state.runtime.diagnosticsExpanded = {};
   syncPayloadFilters();
@@ -1223,10 +1242,188 @@ function trendMomentumPct(series, currentField) {
 function setTrendHoverIndex(nextIndex) {
   const normalized = Number.isInteger(nextIndex) ? nextIndex : null;
   if (state.runtime.trendHoverIndex === normalized) {
-    return;
+    return false;
   }
   state.runtime.trendHoverIndex = normalized;
-  render();
+  return true;
+}
+
+function mountNativeTrendInteraction(panel, config) {
+  const {
+    series,
+    metricConfig,
+    currentLabel,
+    baselineLabelText,
+    width,
+    chartLeft,
+    chartRight,
+    chartTop,
+    chartBottom,
+    plotHeight,
+    xFor,
+    yFor,
+    fallbackIndex,
+  } = config;
+  const svg = panel.querySelector("[data-role='trend-svg']");
+  const crosshair = panel.querySelector("[data-role='trend-crosshair']");
+  const tooltip = panel.querySelector("[data-role='trend-tooltip']");
+  const tooltipDate = panel.querySelector("[data-role='trend-tooltip-date']");
+  const tooltipCurrent = panel.querySelector("[data-role='trend-tooltip-current']");
+  const tooltipBaseline = panel.querySelector("[data-role='trend-tooltip-baseline']");
+  const tooltipDelta = panel.querySelector("[data-role='trend-tooltip-delta']");
+  const currentPoints = Array.from(panel.querySelectorAll(".fw-merch-point.current"));
+  const baselinePoints = Array.from(panel.querySelectorAll(".fw-merch-point.baseline"));
+  if (!svg || !crosshair || !tooltip || !tooltipDate || !tooltipCurrent || !tooltipBaseline || !tooltipDelta) {
+    return () => {};
+  }
+
+  let activeIndex =
+    Number.isInteger(state.runtime.trendHoverIndex) && state.runtime.trendHoverIndex >= 0 && state.runtime.trendHoverIndex < series.length
+      ? state.runtime.trendHoverIndex
+      : fallbackIndex;
+  let pointerRaf = null;
+  let resizeRaf = null;
+  let pendingClientX = null;
+  let chartRect = null;
+
+  const measureChart = () => {
+    chartRect = svg.getBoundingClientRect();
+  };
+
+  const updatePointStyles = () => {
+    currentPoints.forEach((node) => {
+      const idx = Number(node.getAttribute("data-index"));
+      const isActive = idx === activeIndex;
+      node.setAttribute("r", isActive ? "4.2" : "2.6");
+      node.setAttribute("stroke-width", isActive ? "1.5" : "0.8");
+      node.setAttribute("opacity", isActive ? "1" : "0.92");
+    });
+    baselinePoints.forEach((node) => {
+      const idx = Number(node.getAttribute("data-index"));
+      const isActive = idx === activeIndex;
+      node.setAttribute("r", isActive ? "3.2" : "2.1");
+      node.setAttribute("opacity", isActive ? "1" : "0.85");
+    });
+  };
+
+  const updateTooltip = () => {
+    const activePoint = series[activeIndex];
+    const currentValue = activePoint?.[metricConfig.currentField];
+    const baselineValue = activePoint?.[metricConfig.baselineField];
+    const hasBaseline = baselineValue !== null && baselineValue !== undefined;
+    const deltaPct =
+      hasBaseline && Number(baselineValue) !== 0
+        ? ((Number(currentValue) - Number(baselineValue)) / Number(baselineValue)) * 100
+        : null;
+    const activeX = xFor(activeIndex);
+    const activeY = Number.isFinite(Number(currentValue)) ? yFor(currentValue) : chartTop + plotHeight / 2;
+    crosshair.setAttribute("x1", activeX.toFixed(2));
+    crosshair.setAttribute("x2", activeX.toFixed(2));
+    tooltip.style.left = `${((activeX / width) * 100).toFixed(2)}%`;
+    tooltip.style.top = `${Math.max(12, activeY - 12).toFixed(2)}px`;
+    tooltipDate.textContent = formatDateLabel(activePoint?.period_start, true);
+    tooltipCurrent.textContent = `${currentLabel}: ${metricConfig.formatValue(currentValue)}`;
+    if (hasBaseline) {
+      tooltipBaseline.textContent = `${baselineLabelText}: ${metricConfig.formatValue(baselineValue)}`;
+      tooltipBaseline.classList.remove("is-hidden");
+      tooltipDelta.textContent = `Delta ${formatSignedPercent(deltaPct, 1)}`;
+      tooltipDelta.className = `fw-merch-trend-tooltip-delta ${valueToneClass(deltaPct)}`;
+      tooltipDelta.classList.remove("is-hidden");
+    } else {
+      tooltipBaseline.classList.add("is-hidden");
+      tooltipDelta.classList.add("is-hidden");
+      tooltipDelta.className = "fw-merch-trend-tooltip-delta is-hidden";
+    }
+  };
+
+  const setActiveIndex = (nextIndex) => {
+    const normalized = Number.isInteger(nextIndex) ? Math.max(0, Math.min(series.length - 1, nextIndex)) : fallbackIndex;
+    if (normalized === activeIndex) {
+      return;
+    }
+    activeIndex = normalized;
+    setTrendHoverIndex(normalized);
+    updatePointStyles();
+    updateTooltip();
+    state.runtime.trendInteractionUpdateCount += 1;
+    if (TREND_DEBUG_ENABLED && state.runtime.trendInteractionUpdateCount % 25 === 0) {
+      console.debug("[merch-trend] local updates", state.runtime.trendInteractionUpdateCount);
+    }
+  };
+
+  const nearestIndexFromClientX = (clientX) => {
+    if (!chartRect || !chartRect.width) {
+      return activeIndex;
+    }
+    const ratio = (clientX - chartRect.left) / chartRect.width;
+    const viewX = Math.max(chartLeft, Math.min(width - chartRight, ratio * width));
+    let nearest = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (let idx = 0; idx < series.length; idx += 1) {
+      const distance = Math.abs(viewX - xFor(idx));
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = idx;
+      }
+    }
+    return nearest;
+  };
+
+  const onMouseMove = (event) => {
+    pendingClientX = event.clientX;
+    if (pointerRaf !== null) {
+      return;
+    }
+    pointerRaf = window.requestAnimationFrame(() => {
+      pointerRaf = null;
+      if (!Number.isFinite(pendingClientX)) {
+        return;
+      }
+      setActiveIndex(nearestIndexFromClientX(pendingClientX));
+    });
+  };
+
+  const onKeyDown = (event) => {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setActiveIndex(activeIndex - 1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setActiveIndex(activeIndex + 1);
+    }
+  };
+
+  const onResize = () => {
+    if (resizeRaf !== null) {
+      return;
+    }
+    resizeRaf = window.requestAnimationFrame(() => {
+      resizeRaf = null;
+      measureChart();
+    });
+  };
+
+  measureChart();
+  setTrendHoverIndex(activeIndex);
+  updatePointStyles();
+  updateTooltip();
+  svg.addEventListener("mousemove", onMouseMove);
+  svg.addEventListener("keydown", onKeyDown);
+  window.addEventListener("resize", onResize);
+
+  return () => {
+    svg.removeEventListener("mousemove", onMouseMove);
+    svg.removeEventListener("keydown", onKeyDown);
+    window.removeEventListener("resize", onResize);
+    if (pointerRaf !== null) {
+      window.cancelAnimationFrame(pointerRaf);
+      pointerRaf = null;
+    }
+    if (resizeRaf !== null) {
+      window.cancelAnimationFrame(resizeRaf);
+      resizeRaf = null;
+    }
+  };
 }
 
 function renderTrendChart(result) {
@@ -1234,6 +1431,8 @@ function renderTrendChart(result) {
   if (!points.length) {
     return null;
   }
+  const requestedEngine = state.runtime.trendChartEngine === "uplot" ? "uplot" : "native";
+  const usingNativeFallback = requestedEngine === "uplot" && typeof window?.uPlot !== "function";
   const metric = state.runtime.trendMetric === "units" ? "units" : "revenue";
   const metricConfig = trendMetricConfig(metric);
   const series = points.map((point) => {
@@ -1320,42 +1519,7 @@ function renderTrendChart(result) {
   const momentumPct = trendMomentumPct(series, metricConfig.currentField);
 
   const fallbackIndex = series.length - 1;
-  const activeIndex =
-    Number.isInteger(state.runtime.trendHoverIndex) && state.runtime.trendHoverIndex >= 0 && state.runtime.trendHoverIndex < series.length
-      ? state.runtime.trendHoverIndex
-      : fallbackIndex;
-  const activePoint = series[activeIndex];
-  const activeCurrent = activePoint?.[metricConfig.currentField];
-  const activeBaseline = activePoint?.[metricConfig.baselineField];
-  const activeHasBaseline = activeBaseline !== null && activeBaseline !== undefined;
-  const activeDeltaPct =
-    activeHasBaseline && Number(activeBaseline) !== 0
-      ? ((Number(activeCurrent) - Number(activeBaseline)) / Number(activeBaseline)) * 100
-      : null;
-  const activeX = xFor(activeIndex);
-  const activeY = Number.isFinite(Number(activeCurrent)) ? yFor(activeCurrent) : chartTop + plotHeight / 2;
-
-  const setHoverFromPointer = (event) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (!rect.width) {
-      return;
-    }
-    const ratio = (event.clientX - rect.left) / rect.width;
-    const viewX = Math.max(chartLeft, Math.min(width - chartRight, ratio * width));
-    let nearest = 0;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    for (let idx = 0; idx < series.length; idx += 1) {
-      const distance = Math.abs(viewX - xFor(idx));
-      if (distance < nearestDistance) {
-        nearest = idx;
-        nearestDistance = distance;
-      }
-    }
-    setTrendHoverIndex(nearest);
-  };
-
-  const activeTooltipTop = Math.max(12, activeY - 12);
-  return el(
+  const panel = el(
     "section",
     { className: "fw-panel fw-trend-chart-panel fw-merch-trend-panel" },
     el(
@@ -1364,28 +1528,33 @@ function renderTrendChart(result) {
       el("h3", { className: "fw-panel-title", text: metricConfig.title }),
       el(
         "div",
-        { className: "fw-merch-segmented", role: "tablist", "aria-label": "Trend metric selector" },
-        ...["revenue", "units"].map((metricOption) =>
-          el(
-            "button",
-            {
-              className: `fw-merch-segmented-btn ${metricOption === metric ? "active" : ""}`,
-              type: "button",
-              role: "tab",
-              "aria-selected": metricOption === metric ? "true" : "false",
-              onClick: () => {
-                if (state.runtime.trendMetric === metricOption) {
-                  return;
-                }
-                markUserInteraction();
-                state.runtime.trendMetric = metricOption;
-                state.runtime.trendHoverIndex = null;
-                render();
+        {},
+        el(
+          "div",
+          { className: "fw-merch-segmented", role: "tablist", "aria-label": "Trend metric selector" },
+          ...["revenue", "units"].map((metricOption) =>
+            el(
+              "button",
+              {
+                className: `fw-merch-segmented-btn ${metricOption === metric ? "active" : ""}`,
+                type: "button",
+                role: "tab",
+                "aria-selected": metricOption === metric ? "true" : "false",
+                onClick: () => {
+                  if (state.runtime.trendMetric === metricOption) {
+                    return;
+                  }
+                  markUserInteraction();
+                  state.runtime.trendMetric = metricOption;
+                  state.runtime.trendHoverIndex = null;
+                  render();
+                },
               },
-            },
-            metricOption === "revenue" ? "Revenue" : "Units",
+              metricOption === "revenue" ? "Revenue" : "Units",
+            ),
           ),
         ),
+        usingNativeFallback ? el("p", { className: "fw-merch-engine-note", text: "uPlot requested, native fallback active." }) : null,
       ),
     ),
     el(
@@ -1431,20 +1600,11 @@ function renderTrendChart(result) {
         "svg",
         {
           className: "fw-trend-chart fw-merch-trend-chart",
+          "data-role": "trend-svg",
           viewBox: `0 0 ${width} ${height}`,
           role: "img",
           tabindex: "0",
           "aria-label": `Weekly ${metricConfig.ariaMetricLabel} trend chart with baseline comparison`,
-          onMousemove: setHoverFromPointer,
-          onKeydown: (event) => {
-            if (event.key === "ArrowLeft") {
-              event.preventDefault();
-              setTrendHoverIndex(Math.max(0, activeIndex - 1));
-            } else if (event.key === "ArrowRight") {
-              event.preventDefault();
-              setTrendHoverIndex(Math.min(series.length - 1, activeIndex + 1));
-            }
-          },
         },
         el("defs", {}, el("linearGradient", { id: "fw-merch-grid-fade", x1: "0", y1: "0", x2: "0", y2: "1" }, el("stop", { offset: "0%", "stop-color": "#f3f8fd" }), el("stop", { offset: "100%", "stop-color": "#ffffff" }))),
         el("rect", { x: "0", y: "0", width: String(width), height: String(height), fill: "url(#fw-merch-grid-fade)" }),
@@ -1460,9 +1620,10 @@ function renderTrendChart(result) {
           });
         }),
         el("line", {
-          x1: activeX.toFixed(2),
+          "data-role": "trend-crosshair",
+          x1: xFor(fallbackIndex).toFixed(2),
           y1: chartTop.toFixed(2),
-          x2: activeX.toFixed(2),
+          x2: xFor(fallbackIndex).toFixed(2),
           y2: (height - chartBottom).toFixed(2),
           stroke: "#b3c9dc",
           "stroke-width": "1.1",
@@ -1489,13 +1650,14 @@ function renderTrendChart(result) {
           if (baselineValue === null || baselineValue === undefined) {
             return null;
           }
-          const isActive = idx === activeIndex;
           return el("circle", {
+            className: "fw-merch-point baseline",
+            "data-index": String(idx),
             cx: xFor(idx).toFixed(2),
             cy: yFor(baselineValue).toFixed(2),
-            r: isActive ? "3.2" : "2.1",
+            r: "2.1",
             fill: "#7d8e9f",
-            opacity: isActive ? "1" : "0.85",
+            opacity: "0.85",
           });
         }),
         ...series.map((point, idx) => {
@@ -1503,14 +1665,15 @@ function renderTrendChart(result) {
           if (currentValue === null || currentValue === undefined) {
             return null;
           }
-          const isActive = idx === activeIndex;
           return el("circle", {
+            className: "fw-merch-point current",
+            "data-index": String(idx),
             cx: xFor(idx).toFixed(2),
             cy: yFor(currentValue).toFixed(2),
-            r: isActive ? "4.2" : "2.6",
+            r: "2.6",
             fill: "#1f5d8f",
             stroke: "#fff",
-            "stroke-width": isActive ? "1.5" : "0.8",
+            "stroke-width": "0.8",
             "aria-label": `${formatDateLabel(point.period_start, true)} ${metricConfig.ariaMetricLabel} ${metricConfig.formatValue(currentValue)}`,
           });
         }),
@@ -1541,16 +1704,33 @@ function renderTrendChart(result) {
         "div",
         {
           className: "fw-merch-trend-tooltip",
-          style: `left:${((activeX / width) * 100).toFixed(2)}%;top:${activeTooltipTop.toFixed(2)}px;`,
+          "data-role": "trend-tooltip",
+          style: `left:${((xFor(fallbackIndex) / width) * 100).toFixed(2)}%;top:24px;`,
         },
-        el("strong", { text: formatDateLabel(activePoint?.period_start, true) }),
-        el("span", { text: `${currentLabel}: ${metricConfig.formatValue(activeCurrent)}` }),
-        activeHasBaseline ? el("span", { text: `${baselineLabelText}: ${metricConfig.formatValue(activeBaseline)}` }) : null,
-        activeHasBaseline ? el("span", { className: valueToneClass(activeDeltaPct), text: `Delta ${formatSignedPercent(activeDeltaPct, 1)}` }) : null,
+        el("strong", { "data-role": "trend-tooltip-date", text: "" }),
+        el("span", { "data-role": "trend-tooltip-current", text: "" }),
+        el("span", { "data-role": "trend-tooltip-baseline", text: "" }),
+        el("span", { className: "fw-merch-trend-tooltip-delta", "data-role": "trend-tooltip-delta", text: "" }),
       ),
     ),
     el("p", { className: "fw-empty", text: "Hover or use left/right arrows for week-level detail." }),
   );
+  state.runtime.trendInteractionCleanup = mountNativeTrendInteraction(panel, {
+    series,
+    metricConfig,
+    currentLabel,
+    baselineLabelText,
+    width,
+    chartLeft,
+    chartRight,
+    chartTop,
+    chartBottom,
+    plotHeight,
+    xFor,
+    yFor,
+    fallbackIndex,
+  });
+  return panel;
 }
 
 function renderTrends(result) {
@@ -1602,6 +1782,7 @@ function renderResults() {
 }
 
 function render() {
+  teardownTrendInteraction();
   const container = clear(root);
   syncPayloadFilters();
 
