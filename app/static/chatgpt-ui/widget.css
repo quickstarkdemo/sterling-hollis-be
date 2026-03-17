@@ -138,6 +138,47 @@ body {
   cursor: default;
 }
 
+.fw-merch-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fw-merch-tabs {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #c8d6e3;
+  border-radius: 14px;
+  background: #f4f8fc;
+}
+
+.fw-merch-tab {
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #2c4c66;
+  min-width: 120px;
+  text-align: center;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.fw-merch-tab:hover:not(.active):not(:disabled) {
+  background: #e4edf6;
+}
+
+.fw-merch-tab.active {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+  color: #fff;
+}
+
+.fw-toolbar-merch {
+  margin-left: auto;
+}
+
 .fw-control-row {
   display: grid;
   gap: 10px;
@@ -958,6 +999,24 @@ body {
 
   .fw-control-row {
     grid-template-columns: 1fr;
+  }
+
+  .fw-merch-nav {
+    align-items: stretch;
+  }
+
+  .fw-merch-tabs {
+    width: 100%;
+  }
+
+  .fw-merch-tab {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .fw-toolbar-merch {
+    width: 100%;
+    margin-left: 0;
   }
 
   .fw-rec-layout {

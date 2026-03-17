@@ -2420,6 +2420,60 @@ function render() {
     state.ui.compareStoreId = value;
   });
 
+  const tabDefinitions = [
+    { id: "actions", tool: "fashion_merch_action_recommendations", label: "Prioritize" },
+    { id: "diagnostics", tool: "fashion_merch_diagnostics", label: "Diagnostics" },
+    { id: "trends", tool: "fashion_merch_trend_summary", label: "Trends" },
+  ];
+  const activeTabIndex = Math.max(
+    0,
+    tabDefinitions.findIndex((tab) => tab.tool === activeTool),
+  );
+  const handleTabKeyDown = (event, index) => {
+    if (state.ui.isLoading) {
+      return;
+    }
+    let nextIndex = null;
+    if (event.key === "ArrowRight") {
+      nextIndex = (index + 1) % tabDefinitions.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (index - 1 + tabDefinitions.length) % tabDefinitions.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = tabDefinitions.length - 1;
+    }
+    if (nextIndex === null) {
+      return;
+    }
+    event.preventDefault();
+    void refreshMerch(tabDefinitions[nextIndex].tool);
+  };
+  const tabButtons = tabDefinitions.map((tab, index) => {
+    const isActive = index === activeTabIndex;
+    return el(
+      "button",
+      {
+        id: `fw-tab-${tab.id}`,
+        className: `fw-tab fw-merch-tab ${isActive ? "active" : ""}`,
+        type: "button",
+        role: "tab",
+        "aria-selected": isActive ? "true" : "false",
+        "aria-controls": "fw-merch-view-panel",
+        tabindex: isActive ? "0" : "-1",
+        disabled: state.ui.isLoading ? "true" : null,
+        onKeydown: (event) => {
+          handleTabKeyDown(event, index);
+        },
+        onClick: () => {
+          void refreshMerch(tab.tool);
+        },
+      },
+      state.ui.isLoading && isActive ? "Loading..." : tab.label,
+    );
+  });
+  const activeTabId = tabDefinitions[activeTabIndex] ? `fw-tab-${tabDefinitions[activeTabIndex].id}` : "fw-tab-actions";
+
   const controlsPanel = el(
     "section",
     { className: "fw-panel" },
@@ -2516,81 +2570,49 @@ function render() {
     ),
     el(
       "div",
-      { className: "fw-tabs", role: "tablist", "aria-label": "Merchandising views" },
+      { className: "fw-merch-nav" },
       el(
-        "button",
+        "div",
         {
-          className: `fw-tab ${activeTool === "fashion_merch_action_recommendations" ? "active" : ""}`,
-          type: "button",
-          role: "tab",
-          "aria-selected": activeTool === "fashion_merch_action_recommendations" ? "true" : "false",
-          disabled: state.ui.isLoading ? "true" : null,
-          onClick: () => {
-            void refreshMerch("fashion_merch_action_recommendations");
-          },
+          className: "fw-tabs fw-merch-tabs",
+          role: "tablist",
+          "aria-label": "Merchandising views",
+          "aria-orientation": "horizontal",
         },
-        state.ui.isLoading && activeTool === "fashion_merch_action_recommendations" ? "Loading..." : "Prioritize",
+        ...tabButtons,
       ),
       el(
-        "button",
-        {
-          className: `fw-tab ${activeTool === "fashion_merch_diagnostics" ? "active" : ""}`,
-          type: "button",
-          role: "tab",
-          "aria-selected": activeTool === "fashion_merch_diagnostics" ? "true" : "false",
-          disabled: state.ui.isLoading ? "true" : null,
-          onClick: () => {
-            void refreshMerch("fashion_merch_diagnostics");
+        "div",
+        { className: "fw-toolbar fw-toolbar-merch" },
+        el(
+          "button",
+          {
+            className: `fw-button ${state.runtime.filtersDirty ? "" : "secondary"}`,
+            type: "button",
+            disabled: state.ui.isLoading ? "true" : null,
+            onClick: () => {
+              void refreshActiveView();
+            },
           },
-        },
-        state.ui.isLoading && activeTool === "fashion_merch_diagnostics" ? "Loading..." : "Diagnostics",
-      ),
-      el(
-        "button",
-        {
-          className: `fw-tab ${activeTool === "fashion_merch_trend_summary" ? "active" : ""}`,
-          type: "button",
-          role: "tab",
-          "aria-selected": activeTool === "fashion_merch_trend_summary" ? "true" : "false",
-          disabled: state.ui.isLoading ? "true" : null,
-          onClick: () => {
-            void refreshMerch("fashion_merch_trend_summary");
+          state.ui.isLoading ? "Refreshing..." : state.runtime.filtersDirty ? "Refresh Results" : "Refresh",
+        ),
+        el(
+          "button",
+          {
+            className: "fw-button secondary",
+            type: "button",
+            disabled: state.ui.isExporting ? "true" : null,
+            onClick: () => {
+              void exportCsv();
+            },
           },
-        },
-        state.ui.isLoading && activeTool === "fashion_merch_trend_summary" ? "Loading..." : "Trends",
+          state.ui.isExporting ? "Exporting..." : "Copy CSV",
+        ),
       ),
     ),
     state.runtime.filtersDirty
       ? el("p", { className: "fw-empty fw-merch-refresh-hint", text: "Filters changed. Click Refresh Results to rerun the active tab." })
       : null,
-    el(
-      "div",
-      { className: "fw-toolbar" },
-      el(
-        "button",
-        {
-          className: `fw-button ${state.runtime.filtersDirty ? "" : "secondary"}`,
-          type: "button",
-          disabled: state.ui.isLoading ? "true" : null,
-          onClick: () => {
-            void refreshActiveView();
-          },
-        },
-        state.ui.isLoading ? "Refreshing..." : state.runtime.filtersDirty ? "Refresh Results" : "Refresh",
-      ),
-      el(
-        "button",
-        {
-          className: "fw-button secondary",
-          type: "button",
-          disabled: state.ui.isExporting ? "true" : null,
-          onClick: () => {
-            void exportCsv();
-          },
-        },
-        state.ui.isExporting ? "Exporting..." : "Copy CSV",
-      ),
-    ),
     activeTool === "fashion_merch_action_recommendations"
       ? el(
           "p",
@@ -2604,7 +2626,7 @@ function render() {
 
   const contextPanel = el(
     "section",
-    { className: "fw-panel" },
+    { className: "fw-panel", id: "fw-merch-view-panel", role: "tabpanel", "aria-labelledby": activeTabId },
     el("h2", { className: "fw-panel-title", text: toolLabel(activeTool) }),
     result
       ? el("p", { className: "fw-empty", text: result.summary || result.parsed_intent || "Current merchandising frame" })
