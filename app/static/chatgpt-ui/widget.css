@@ -939,6 +939,82 @@ body {
   color: #4e6377;
 }
 
+.fw-exec-radar-list {
+  gap: 10px;
+}
+
+.fw-exec-radar-card {
+  gap: 8px;
+  background: #fff;
+}
+
+.fw-exec-radar-head {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.fw-exec-radar-action {
+  justify-self: end;
+  font-weight: 700;
+}
+
+.fw-exec-radar-meta,
+.fw-exec-radar-note,
+.fw-exec-radar-rationale {
+  line-height: 1.35;
+}
+
+.fw-exec-radar-meters {
+  display: grid;
+  gap: 7px;
+}
+
+.fw-exec-radar-meter-row {
+  display: grid;
+  gap: 4px;
+}
+
+.fw-exec-radar-meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #5d7083;
+  font-size: 11.5px;
+}
+
+.fw-exec-radar-meter-track {
+  position: relative;
+  height: 9px;
+  border-radius: 999px;
+  border: 1px solid #d6e2ee;
+  background: #eff4f9;
+  overflow: hidden;
+}
+
+.fw-exec-radar-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.fw-exec-radar-meter-fill.positive {
+  background: linear-gradient(90deg, #3e9b74 0%, #1d7a58 100%);
+}
+
+.fw-exec-radar-meter-fill.caution {
+  background: linear-gradient(90deg, #d0922f 0%, #ad7417 100%);
+}
+
+.fw-exec-radar-meter-fill.negative {
+  background: linear-gradient(90deg, #cb6f73 0%, #a64a52 100%);
+}
+
+.fw-exec-radar-meter-fill.neutral {
+  background: #93a5b6;
+}
+
 .fw-merch-impact-details {
   border-top: 1px solid #dbe7f1;
   padding-top: 8px;
@@ -1102,5 +1178,13 @@ body {
 
   .fw-merch-impact-details {
     grid-template-columns: 1fr;
+  }
+
+  .fw-exec-radar-head {
+    grid-template-columns: 1fr;
+  }
+
+  .fw-exec-radar-action {
+    justify-self: start;
   }
 }

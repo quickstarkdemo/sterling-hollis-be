@@ -653,37 +653,146 @@ function renderOverview(result) {
   return panel;
 }
 
+function radarRiskTone(level) {
+  const key = String(level || "").toLowerCase();
+  if (key === "critical" || key === "high") {
+    return "negative";
+  }
+  if (key === "medium") {
+    return "caution";
+  }
+  return "positive";
+}
+
+function radarCoverageTone(weeks) {
+  const numeric = Number(weeks || 0);
+  if (!Number.isFinite(numeric) || numeric < 3) {
+    return "negative";
+  }
+  if (numeric < 6) {
+    return "caution";
+  }
+  return "positive";
+}
+
+function radarActionTone(action) {
+  const key = String(action || "").toLowerCase();
+  if (key === "transfer") {
+    return "negative";
+  }
+  if (key === "promotion") {
+    return "positive";
+  }
+  return "neutral";
+}
+
+function radarActionLabel(row) {
+  const action = String(row?.recommendation?.action || "monitor").toLowerCase();
+  if (action === "promotion") {
+    const discount = Number(row?.recommendation?.suggested_discount_pct || 0);
+    return discount > 0 ? `Promotion (${compactNumber(discount)}% off)` : "Promotion";
+  }
+  if (action === "transfer") {
+    const sourceName = typeof row?.recommendation?.source_store_name === "string" ? row.recommendation.source_store_name : "";
+    return sourceName ? `Transfer from ${sourceName}` : "Transfer replenishment";
+  }
+  return "Monitor";
+}
+
+function radarMeter(label, valueText, pct, tone) {
+  return el(
+    "div",
+    { className: "fw-exec-radar-meter-row" },
+    el(
+      "div",
+      { className: "fw-exec-radar-meter-head" },
+      el("span", { text: label }),
+      el("span", { text: valueText }),
+    ),
+    el(
+      "div",
+      { className: "fw-exec-radar-meter-track" },
+      el("span", {
+        className: `fw-exec-radar-meter-fill ${tone}`,
+        style: `width:${clampNumber(pct, 0, 0, 100).toFixed(2)}%;`,
+      }),
+    ),
+  );
+}
+
 function renderRadar(result) {
   const rows = Array.isArray(result?.rows) ? result.rows.slice(0, 30) : [];
   if (!rows.length) {
     return el("p", { className: "fw-empty", text: state.payload.uiHints.emptyState });
   }
+  const criticalHighCount = rows.filter((row) => {
+    const level = String(row?.risk_level || "").toLowerCase();
+    return level === "critical" || level === "high";
+  }).length;
+  const transferCount = rows.filter((row) => String(row?.recommendation?.action || "").toLowerCase() === "transfer").length;
+  const avgRisk = rows.reduce((acc, row) => acc + Number(row?.risk_score || 0), 0) / rows.length;
+  const avgCover = rows.reduce((acc, row) => acc + Number(row?.coverage_weeks || 0), 0) / rows.length;
+
   return el(
     "div",
     { className: "fw-list" },
-    ...rows.map((row) =>
+    el(
+      "section",
+      { className: "fw-panel" },
       el(
-        "article",
-        { className: "fw-result" },
+        "div",
+        { className: "fw-kpi-strip" },
+        kpi("Rows", compactNumber(rows.length, 0)),
+        kpi("High/Critical", compactNumber(criticalHighCount, 0)),
+        kpi("Transfer Flags", compactNumber(transferCount, 0)),
+        kpi("Avg Risk", compactNumber(avgRisk, 1)),
+        kpi("Avg Cover", `${compactNumber(avgCover, 1)}w`),
+      ),
+      el("div", { className: "fw-empty fw-exec-radar-note", text: "Rows are sorted by highest risk score." }),
+    ),
+    el(
+      "div",
+      { className: "fw-list fw-exec-radar-list" },
+      ...rows.map((row) =>
         el(
-          "div",
-          { className: "fw-chip-row" },
-          el("span", { className: "fw-chip", text: row.event }),
-          el("span", { className: "fw-chip subtle", text: `Risk ${compactNumber(row.risk_score)} (${row.risk_level})` }),
-          el("span", { className: "fw-chip subtle", text: `Cover ${compactNumber(row.coverage_weeks)}w` }),
+          "article",
+          { className: "fw-result fw-exec-radar-card" },
+          el(
+            "div",
+            { className: "fw-exec-radar-head" },
+            el(
+              "div",
+              { className: "fw-chip-row" },
+              el("span", { className: "fw-chip", text: row.event }),
+              el("span", {
+                className: `fw-chip fw-merch-status-chip ${radarRiskTone(row.risk_level)}`,
+                text: `Risk ${compactNumber(row.risk_score, 1)} (${row.risk_level})`,
+              }),
+              el("span", {
+                className: `fw-chip fw-merch-status-chip ${radarCoverageTone(row.coverage_weeks)}`,
+                text: `Cover ${compactNumber(row.coverage_weeks, 1)}w`,
+              }),
+            ),
+            el("span", {
+              className: `fw-chip fw-merch-status-chip ${radarActionTone(row?.recommendation?.action)} fw-exec-radar-action`,
+              text: radarActionLabel(row),
+            }),
+          ),
+          el("h4", { className: "fw-panel-title", text: row.store_name }),
+          el("div", { className: "fw-empty fw-exec-radar-meta", text: `${row.city}, ${row.state}` }),
+          el(
+            "div",
+            { className: "fw-exec-radar-meters" },
+            radarMeter("Risk Score", `${compactNumber(row.risk_score, 1)} / 100`, Number(row.risk_score || 0), radarRiskTone(row.risk_level)),
+            radarMeter(
+              "Coverage Weeks",
+              `${compactNumber(row.coverage_weeks, 1)}w`,
+              (Number(row.coverage_weeks || 0) / 12) * 100,
+              radarCoverageTone(row.coverage_weeks),
+            ),
+          ),
+          el("div", { className: "fw-empty fw-exec-radar-rationale", text: row.recommendation?.rationale || "" }),
         ),
-        el("h4", { className: "fw-panel-title", text: row.store_name }),
-        el("p", { className: "fw-empty", text: `${row.city}, ${row.state}` }),
-        el(
-          "p",
-          {
-            className: "fw-empty",
-            text: `Action: ${row.recommendation?.action || "monitor"} ${
-              row.recommendation?.suggested_discount_pct ? `(${row.recommendation.suggested_discount_pct}% discount)` : ""
-            }`,
-          },
-        ),
-        el("p", { className: "fw-empty", text: row.recommendation?.rationale || "" }),
       ),
     ),
   );
