@@ -564,6 +564,168 @@ class MerchWorkspaceBootstrapResponse(BaseModel):
     last_tool: str | None = None
 
 
+class ExecutiveWorkspaceFilters(BaseModel):
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    objective: Objective = Objective.revenue
+    top_k_stores: int = Field(default=12, ge=1, le=50)
+    events: list[str] = Field(default_factory=lambda: ["wedding", "holiday_party", "workwear"])
+    store_id: str | None = None
+    discount_pct: float = Field(default=0.0, ge=0.0, le=60.0)
+    floor_space_shift_pct: float = Field(default=0.0, ge=-40.0, le=40.0)
+    from_category: str | None = None
+    to_category: str | None = None
+    to_email: str | None = None
+    autopilot_top_k: int = Field(default=6, ge=1, le=20)
+
+
+class ExecutiveRiskLevel(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class ExecutiveCampaignAction(str, Enum):
+    promotion = "promotion"
+    transfer = "transfer"
+    monitor = "monitor"
+
+
+class ExecutiveCampaignStatus(str, Enum):
+    draft = "draft"
+    sent = "sent"
+    failed = "failed"
+
+
+class ExecutiveStoreInsight(BaseModel):
+    store_id: str
+    store_name: str
+    city: str
+    state: str
+    revenue: float
+    units: float
+    margin_rate: float
+    revenue_share_pct: float
+    revenue_delta_pct: float | None = None
+    rank: int
+
+
+class ExecutiveTrendPoint(BaseModel):
+    period_start: str
+    revenue: float
+    units: float
+    margin_rate: float
+
+
+class ExecutiveOverviewResponse(BaseModel):
+    summary: str
+    lookback_days: int
+    objective: Objective
+    generated_at: datetime
+    total_revenue: float
+    total_units: float
+    margin_rate: float
+    prior_revenue: float | None = None
+    prior_margin_rate: float | None = None
+    revenue_delta_pct: float | None = None
+    store_count: int
+    stores: list[ExecutiveStoreInsight] = Field(default_factory=list)
+    trend: list[ExecutiveTrendPoint] = Field(default_factory=list)
+
+
+class ExecutiveReadinessRecommendation(BaseModel):
+    action: ExecutiveCampaignAction
+    source_store_id: str | None = None
+    source_store_name: str | None = None
+    suggested_discount_pct: float | None = None
+    rationale: str
+
+
+class ExecutiveReadinessRow(BaseModel):
+    event: str
+    store_id: str
+    store_name: str
+    city: str
+    state: str
+    risk_score: float
+    risk_level: ExecutiveRiskLevel
+    coverage_weeks: float
+    inventory_units: float
+    recent_units: float
+    prior_units: float
+    demand_change_pct: float | None = None
+    margin_rate: float
+    recommendation: ExecutiveReadinessRecommendation
+
+
+class ExecutiveEventReadinessRadarResponse(BaseModel):
+    summary: str
+    lookback_days: int
+    generated_at: datetime
+    events: list[str] = Field(default_factory=list)
+    rows: list[ExecutiveReadinessRow] = Field(default_factory=list)
+
+
+class ExecutiveWhatIfComponent(BaseModel):
+    name: str
+    revenue_delta: float
+    margin_rate_delta: float
+    rationale: str
+
+
+class ExecutiveWhatIfSimulatorResponse(BaseModel):
+    summary: str
+    lookback_days: int
+    generated_at: datetime
+    baseline_revenue: float
+    baseline_margin_rate: float
+    expected_revenue: float
+    expected_margin_rate: float
+    revenue_delta: float
+    margin_rate_delta: float
+    confidence_interval_low: float
+    confidence_interval_high: float
+    components: list[ExecutiveWhatIfComponent] = Field(default_factory=list)
+
+
+class ExecutiveCampaignCandidate(BaseModel):
+    store_id: str
+    store_name: str
+    city: str
+    state: str
+    event: str
+    risk_score: float
+    risk_level: ExecutiveRiskLevel
+    coverage_weeks: float
+    margin_rate: float
+    action: ExecutiveCampaignAction
+    suggested_discount_pct: float | None = None
+    source_store_id: str | None = None
+    source_store_name: str | None = None
+    rationale: str
+
+
+class ExecutiveCampaignAutopilotDraftResponse(BaseModel):
+    draft_id: str
+    status: ExecutiveCampaignStatus
+    to_email: str
+    subject: str
+    body_text: str
+    lookback_days: int
+    generated_at: datetime
+    guardrails: dict[str, float | int | str]
+    candidates: list[ExecutiveCampaignCandidate] = Field(default_factory=list)
+
+
+class ExecutiveCampaignAutopilotSendResponse(BaseModel):
+    draft_id: str
+    status: ExecutiveCampaignStatus
+    to_email: str
+    provider_message_id: str | None = None
+    error_message: str | None = None
+    sent_at: datetime | None = None
+
+
 class MerchExportCsvRequest(BaseModel):
     view: MerchWorkspaceView = MerchWorkspaceView.actions
     store_query: str | None = None

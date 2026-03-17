@@ -29,6 +29,12 @@ from app.schemas import (
     CustomerRecommendationResponse,
     CustomerResolutionResponse,
     CustomerSearchResponse,
+    ExecutiveCampaignAutopilotDraftResponse,
+    ExecutiveCampaignAutopilotSendResponse,
+    ExecutiveEventReadinessRadarResponse,
+    ExecutiveOverviewResponse,
+    ExecutiveWhatIfSimulatorResponse,
+    ExecutiveWorkspaceFilters,
     IndexJobListResponse,
     IndexJobResponse,
     IndexProductsRequest,
@@ -86,6 +92,14 @@ from app.services.loader import (
     reset_synthetic_tables,
 )
 from app.services.lookup import find_customers, resolve_customer, resolve_store
+from app.services.executive import (
+    campaign_autopilot_prepare,
+    campaign_autopilot_send,
+    event_readiness_radar,
+    executive_overview,
+    get_campaign_autopilot_draft,
+    what_if_simulator,
+)
 from app.services.merchandising import (
     merchandising_action_recommendations,
     merchandising_diagnostics,
@@ -126,9 +140,11 @@ _WIDGET_TOOL_META = {
 }
 _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE = "ui://widgets/customer-search/workspace"
 _MERCH_WORKSPACE_TEMPLATE_BASE = "ui://widgets/merch/workspace"
+_EXEC_WORKSPACE_TEMPLATE_BASE = "ui://widgets/exec/workspace"
 _WIDGET_BUILD_TAG = re.sub(r"[^A-Za-z0-9._-]", "-", settings.app_build_version or "dev")
 _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
 _MERCH_WORKSPACE_RESOURCE_URI = f"{_MERCH_WORKSPACE_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
+_EXEC_WORKSPACE_RESOURCE_URI = f"{_EXEC_WORKSPACE_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
 
 
 class LatestRunResponse(BaseModel):
@@ -479,6 +495,18 @@ def customer_search_widget_resource() -> str:
 )
 def merch_workspace_resource() -> str:
     return render_widget_html("Merchandising Workspace", "merch_workspace")
+
+
+@mcp.resource(
+    _EXEC_WORKSPACE_RESOURCE_URI,
+    mime_type="text/html;profile=mcp-app",
+    meta={
+        **_WIDGET_RESOURCE_META,
+        "openai/widgetDescription": "Executive workspace for company overview, readiness radar, what-if simulation, and campaign approvals.",
+    },
+)
+def exec_workspace_resource() -> str:
+    return render_widget_html("Executive Overview Workspace", "exec_workspace")
 
 
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
@@ -880,6 +908,62 @@ def _merch_workspace_payload(
                 "promote": "Featured Campaign candidates: margin >= 42%, inventory >= 6 units, and softer demand that can respond to campaign support.",
                 "deprioritize": "Inventory pressure plus below-baseline demand; reduce exposure and floor priority.",
             },
+        },
+    }
+
+
+def _exec_workspace_payload(
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k_stores: int = 12,
+    events: list[str] | None = None,
+    discount_pct: float = 10.0,
+    floor_space_shift_pct: float = 5.0,
+    from_category: str | None = "womens_apparel",
+    to_category: str | None = "shoes",
+    to_email: str | None = None,
+    autopilot_top_k: int = 6,
+    initial_notice: str | None = None,
+) -> dict:
+    bounded_lookback = max(7, min(lookback_days, 730))
+    bounded_top_k = max(1, min(top_k_stores, 50))
+    bounded_autopilot_top_k = max(1, min(autopilot_top_k, 20))
+
+    with SessionLocal() as db:
+        initial_result = executive_overview(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            lookback_days=bounded_lookback,
+            objective=objective,
+            top_k_stores=bounded_top_k,
+        )
+
+    return {
+        "filters": ExecutiveWorkspaceFilters(
+            lookback_days=bounded_lookback,
+            objective=objective,
+            top_k_stores=bounded_top_k,
+            events=events or ["wedding", "holiday_party", "workwear"],
+            store_id=store_id,
+            discount_pct=discount_pct,
+            floor_space_shift_pct=floor_space_shift_pct,
+            from_category=from_category,
+            to_category=to_category,
+            to_email=to_email,
+            autopilot_top_k=bounded_autopilot_top_k,
+        ).model_dump(mode="json"),
+        "initial_result": initial_result.model_dump(mode="json"),
+        "last_result": None,
+        "last_tool": "fashion_exec_overview",
+        "initial_notice": initial_notice,
+        "uiHints": {
+            "emptyState": "Run Overview, Radar, Simulator, or Autopilot to populate this workspace.",
+            "events": ["wedding", "holiday_party", "workwear"],
+            "categoryOptions": _merch_category_options(),
         },
     }
 
@@ -1350,6 +1434,88 @@ def fashion_open_merch_workspace(
 
 
 @mcp.tool(
+    name="fashion_render_exec_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _EXEC_WORKSPACE_RESOURCE_URI,
+        invoking="Opening executive workspace...",
+        invoked="Executive workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_render_exec_workspace(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k_stores: int = 12,
+    events: list[str] | None = None,
+    discount_pct: float = 10.0,
+    floor_space_shift_pct: float = 5.0,
+    from_category: str | None = "womens_apparel",
+    to_category: str | None = "shoes",
+    to_email: str | None = None,
+    autopilot_top_k: int = 6,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Render the executive workspace inside ChatGPT."""
+    workspace_payload = _exec_workspace_payload(
+        store_query=store_query,
+        store_id=store_id,
+        lookback_days=lookback_days,
+        objective=objective,
+        top_k_stores=top_k_stores,
+        events=events,
+        discount_pct=discount_pct,
+        floor_space_shift_pct=floor_space_shift_pct,
+        from_category=from_category,
+        to_category=to_category,
+        to_email=to_email,
+        autopilot_top_k=autopilot_top_k,
+        initial_notice=initial_notice,
+    )
+    structured_payload = {"kind": "exec_workspace", "payload": workspace_payload}
+    summary = "Opened executive workspace."
+    return _calltool_result(
+        text=summary,
+        payload=structured_payload,
+        meta=_render_tool_meta(
+            _EXEC_WORKSPACE_RESOURCE_URI,
+            invoking="Opening executive workspace...",
+            invoked="Executive workspace ready.",
+        ),
+    )
+
+
+@mcp.tool(
+    name="fashion_open_exec_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _EXEC_WORKSPACE_RESOURCE_URI,
+        invoking="Opening executive workspace...",
+        invoked="Executive workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_open_exec_workspace(
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k_stores: int = 12,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Open the executive workspace with company-wide defaults."""
+    notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
+    if notice is None:
+        notice = "Company-wide executive scope loaded."
+    return fashion_render_exec_workspace(
+        lookback_days=lookback_days,
+        objective=objective,
+        top_k_stores=top_k_stores,
+        initial_notice=notice,
+    )
+
+
+@mcp.tool(
     name="fashion_store_associate_recommend",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_WIDGET_TOOL_META,
@@ -1762,6 +1928,131 @@ def fashion_merch_trend_summary(
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
         )
+
+
+@mcp.tool(
+    name="fashion_exec_overview",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_overview(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k_stores: int = 12,
+) -> ExecutiveOverviewResponse:
+    """Return company-wide executive KPIs with store contribution and trend context."""
+    with SessionLocal() as db:
+        return executive_overview(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            lookback_days=lookback_days,
+            objective=objective,
+            top_k_stores=top_k_stores,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_event_readiness_radar",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_event_readiness_radar(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 56,
+    events: list[str] | None = None,
+) -> ExecutiveEventReadinessRadarResponse:
+    """Return proactive risk flags for event demand readiness with transfer/promotion recommendations."""
+    with SessionLocal() as db:
+        return event_readiness_radar(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            lookback_days=lookback_days,
+            events=events,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_what_if_simulator",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_what_if_simulator(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 90,
+    discount_pct: float = 0.0,
+    floor_space_shift_pct: float = 0.0,
+    from_category: str | None = None,
+    to_category: str | None = None,
+) -> ExecutiveWhatIfSimulatorResponse:
+    """Simulate discount and category-exposure shifts with expected revenue/margin impact."""
+    with SessionLocal() as db:
+        return what_if_simulator(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            lookback_days=lookback_days,
+            discount_pct=discount_pct,
+            floor_space_shift_pct=floor_space_shift_pct,
+            from_category=from_category,
+            to_category=to_category,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_campaign_autopilot_prepare",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_campaign_autopilot_prepare(
+    to_email: str,
+    lookback_days: int = 56,
+    top_k: int = 6,
+    events: list[str] | None = None,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+) -> ExecutiveCampaignAutopilotDraftResponse:
+    """Generate a guardrailed weekly campaign shortlist and draft comms package for approval."""
+    with SessionLocal() as db:
+        return campaign_autopilot_prepare(
+            db,
+            to_email=to_email,
+            lookback_days=lookback_days,
+            top_k=top_k,
+            events=events,
+            min_margin_rate=min_margin_rate,
+            max_discount_pct=max_discount_pct,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_campaign_autopilot_send",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_campaign_autopilot_send(
+    draft_id: str,
+    approved: bool = False,
+) -> ExecutiveCampaignAutopilotSendResponse:
+    """Send a prepared campaign package only when explicit approval is provided."""
+    with SessionLocal() as db:
+        return campaign_autopilot_send(db, draft_id=draft_id, approved=approved)
+
+
+@mcp.tool(
+    name="fashion_exec_get_campaign_autopilot_draft",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_get_campaign_autopilot_draft(draft_id: str) -> ExecutiveCampaignAutopilotDraftResponse:
+    """Fetch an existing campaign autopilot draft for workspace or chat review."""
+    with SessionLocal() as db:
+        return get_campaign_autopilot_draft(db, draft_id)
 
 
 @mcp.tool(

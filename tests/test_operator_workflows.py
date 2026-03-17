@@ -4,12 +4,13 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Customer, Order, OrderItem, Product, Store, SyntheticRun
+from app.models import Customer, CustomerCommunication, Order, OrderItem, Product, Store, SyntheticRun
 from app.schemas import CompareMode, CustomerRecommendationRequest, Objective, PeerMode, PriceBand, RetrievalMode, StyleConstraints
 from app.services.communications import (
     customer_message_history,
@@ -36,6 +37,10 @@ class _DummyPineconeService:
 class _BoomEmbeddingService:
     def embed_text(self, text):
         raise AssertionError("embedding path should not run in fast mode")
+
+
+def test_customer_communication_destination_supports_email_length():
+    assert CustomerCommunication.__table__.c.destination_e164.type.length == 255
 
 
 def test_style_constraints_normalize_fields():
@@ -871,6 +876,13 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_open_customer_workspace" in tool_names
         assert "fashion_render_merch_workspace" in tool_names
         assert "fashion_open_merch_workspace" in tool_names
+        assert "fashion_render_exec_workspace" in tool_names
+        assert "fashion_open_exec_workspace" in tool_names
+        assert "fashion_exec_overview" in tool_names
+        assert "fashion_exec_event_readiness_radar" in tool_names
+        assert "fashion_exec_what_if_simulator" in tool_names
+        assert "fashion_exec_campaign_autopilot_prepare" in tool_names
+        assert "fashion_exec_campaign_autopilot_send" in tool_names
         assert "fashion_merch_export_csv" in tool_names
         assert "fashion_prepare_customer_email_draft" in tool_names
         assert "fashion_update_customer_email_draft" in tool_names
@@ -895,10 +907,15 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         merch_workspace_keys = [
             key for key in resources.keys() if key.startswith("ui://widgets/merch/workspace-")
         ]
+        exec_workspace_keys = [
+            key for key in resources.keys() if key.startswith("ui://widgets/exec/workspace-")
+        ]
         assert customer_workspace_keys
         assert merch_workspace_keys
+        assert exec_workspace_keys
         assert resources[customer_workspace_keys[0]].mime_type == "text/html;profile=mcp-app"
         assert resources[merch_workspace_keys[0]].mime_type == "text/html;profile=mcp-app"
+        assert resources[exec_workspace_keys[0]].mime_type == "text/html;profile=mcp-app"
         assert "ui://widgets/associate/workspace.html" not in resources
         assert "ui://widgets/sms/review.html" not in resources
         assert "ui://widgets/merch/board.html" not in resources
@@ -1048,3 +1065,80 @@ def test_start_and_process_index_job(monkeypatch):
         assert fetched.status.value == "succeeded"
         assert listed.jobs
         assert listed.jobs[0].id == queued.id
+
+
+def test_render_exec_workspace_returns_template_and_payload(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        result = mcp_server.fashion_render_exec_workspace(
+            lookback_days=84,
+            objective=Objective.revenue,
+            top_k_stores=10,
+            to_email="manager@example.com",
+        )
+        html = mcp_server.exec_workspace_resource()
+
+        template_uri = result.meta["openai/outputTemplate"]
+        assert template_uri.startswith("ui://widgets/exec/workspace-")
+        assert result.structuredContent["kind"] == "exec_workspace"
+        payload = result.structuredContent["payload"]
+        assert payload["last_tool"] == "fashion_exec_overview"
+        assert payload["filters"]["lookback_days"] == 84
+        assert payload["filters"]["to_email"] == "manager@example.com"
+        assert "Executive Overview Workspace" in html
+        assert "window.__FASHION_WIDGET__" in html
+
+
+def test_exec_overview_radar_and_simulator_tools(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        overview = mcp_server.fashion_exec_overview(lookback_days=90, top_k_stores=5)
+        radar = mcp_server.fashion_exec_event_readiness_radar(lookback_days=56, events=["wedding", "workwear"])
+        simulation = mcp_server.fashion_exec_what_if_simulator(
+            lookback_days=90,
+            discount_pct=12,
+            floor_space_shift_pct=6,
+            from_category="womens_apparel",
+            to_category="shoes",
+        )
+
+        assert overview.total_revenue > 0
+        assert overview.store_count >= 2
+        assert overview.stores
+        assert radar.rows
+        assert {row.event for row in radar.rows}.issubset({"wedding", "workwear"})
+        assert simulation.expected_revenue > 0
+        assert simulation.components
+
+
+def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):
+    import app.services.executive as executive
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        monkeypatch.setattr(
+            executive.SesEmailService,
+            "send_email",
+            lambda self, to_email, subject, text_body, html_body=None: {"message_id": "SES_EXEC_123"},
+        )
+
+        draft = mcp_server.fashion_exec_campaign_autopilot_prepare(
+            to_email="store.manager@example.com",
+            lookback_days=56,
+            top_k=4,
+            events=["wedding", "holiday_party", "workwear"],
+        )
+        fetched = mcp_server.fashion_exec_get_campaign_autopilot_draft(draft.draft_id)
+
+        assert draft.status.value == "draft"
+        assert draft.to_email == "store.manager@example.com"
+        assert fetched.draft_id == draft.draft_id
+
+        with pytest.raises(ValueError):
+            mcp_server.fashion_exec_campaign_autopilot_send(draft_id=draft.draft_id, approved=False)
+
+        sent = mcp_server.fashion_exec_campaign_autopilot_send(draft_id=draft.draft_id, approved=True)
+        assert sent.status.value == "sent"
+        assert sent.provider_message_id == "SES_EXEC_123"

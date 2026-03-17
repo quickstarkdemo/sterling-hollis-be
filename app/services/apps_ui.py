@@ -60,7 +60,11 @@ def _widget_css() -> str:
 
 
 def _widget_js(kind: str) -> str:
-    script_name = "merch-widget.js" if kind == "merch_workspace" else "widget.js"
+    script_name = {
+        "customer_search_workspace": "widget.js",
+        "merch_workspace": "merch-widget.js",
+        "exec_workspace": "exec-widget.js",
+    }.get(kind, "widget.js")
     return (_STATIC_DIR / script_name).read_text(encoding="utf-8")
 
 
@@ -75,13 +79,14 @@ def render_widget_html(
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
     vendor_script = (
         f'<script src="{html.escape(asset_base)}/vendor/chart.umd.min.js"></script>'
-        if kind == "merch_workspace"
+        if kind in {"merch_workspace", "exec_workspace"}
         else ""
     )
     build_version = settings.app_build_version or "dev"
     widget_summary = summary or {
         "customer_search_workspace": "Search customers by name, email, or phone and select a profile for follow-up actions.",
         "merch_workspace": "Evaluate store performance, compare peers, and export merchandising decisions to CSV.",
+        "exec_workspace": "Review company-wide performance, readiness risks, what-if scenarios, and campaign approvals.",
     }.get(kind, "Operator workspace")
     return f"""<!doctype html>
 <html lang="en">

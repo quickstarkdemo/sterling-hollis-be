@@ -301,6 +301,8 @@ Operator/customer tools:
 
 Render tools:
 - `fashion_render_customer_search_workspace`
+- `fashion_render_merch_workspace`
+- `fashion_render_exec_workspace`
 
 ### Customer lookup behavior
 
@@ -369,6 +371,8 @@ Human-first operator tools:
 
 Apps SDK render tools:
 - `fashion_render_customer_search_workspace`
+- `fashion_render_merch_workspace`
+- `fashion_render_exec_workspace`
 
 ### Local MCP smoke test
 
@@ -446,6 +450,11 @@ Human-first examples:
 - `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
 - `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", category="shoes", compare_mode="peer_and_prior_period", lookback_days=90)`
 - `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.", category="handbags", compare_mode="peer_and_prior_period")`
+- `fashion_exec_overview(lookback_days=90, objective="revenue", top_k_stores=12)`
+- `fashion_exec_event_readiness_radar(lookback_days=56, events=["wedding","holiday_party","workwear"])`
+- `fashion_exec_what_if_simulator(lookback_days=90, discount_pct=10, floor_space_shift_pct=5, from_category="womens_apparel", to_category="shoes")`
+- `fashion_exec_campaign_autopilot_prepare(to_email="store.manager@example.com", lookback_days=56, top_k=6)`
+- `fashion_exec_campaign_autopilot_send(draft_id="<DRAFT_ID>", approved=true)`
 
 Render-tool examples for ChatGPT Apps:
 
@@ -545,6 +554,8 @@ Image-guided recommendation notes:
 The repo now includes Apps SDK-ready render tools layered on top of the human-first MCP tools:
 
 - customer search workspace
+- merchandising workspace
+- executive overview workspace
 
 This widget is mounted as an MCP resource and is intended for ChatGPT app usage. It relies on `PUBLIC_BASE_URL` for widget CSP and remote access.
 

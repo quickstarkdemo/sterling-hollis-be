@@ -218,7 +218,7 @@ class CustomerCommunication(Base):
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), nullable=False, index=True)
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default="sms")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
-    destination_e164: Mapped[str] = mapped_column(String(32), nullable=False)
+    destination_e164: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(255))
     body_text: Mapped[str] = mapped_column(Text, nullable=False)
     product_ids: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -279,3 +279,20 @@ class IndexJob(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExecutiveCampaignDraft(Base):
+    __tablename__ = "executive_campaign_drafts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+    to_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    provider_message_id: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
