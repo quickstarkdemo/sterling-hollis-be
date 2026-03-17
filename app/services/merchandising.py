@@ -45,7 +45,7 @@ class MerchQuery:
 _ACTION_TERMS = {
     MerchAction.feature: ["feature", "push", "showcase", "front", "hero"],
     MerchAction.deprioritize: ["deprioritize", "pull back", "reduce", "slow", "underperform"],
-    MerchAction.promote: ["promote", "discount", "markdown", "sale", "offer"],
+    MerchAction.promote: ["promote", "campaign", "featured campaign", "discount", "markdown", "sale", "offer"],
 }
 
 _OBJECTIVE_TERMS = {
@@ -517,6 +517,9 @@ def merchandising_action_recommendations(
 
     recs: list[MerchActionRecommendationItem] = []
     action_order = [MerchAction.feature, MerchAction.promote, MerchAction.deprioritize]
+    campaign_margin_min = 0.42
+    campaign_inventory_min = 6.0
+    deprioritize_negative_floor = 150.0
     for row in store_rows:
         units = float(row.units or 0.0)
         revenue = float(row.revenue or 0.0)
@@ -535,34 +538,51 @@ def merchandising_action_recommendations(
         negative_signal = max(-peer_delta, 0.0) + max(-prior_delta, 0.0)
 
         # Distinct action intent:
-        # - feature: full-price visibility for demand winners
-        # - promote: campaign/offer candidates with inventory + margin headroom
-        # - deprioritize: reduced exposure for weak movers with inventory pressure
-        feature_score = metric_value + positive_signal * 1.2 - negative_signal * 0.5
-        promote_score = (margin * 80) + inventory * 2.5 + negative_signal - positive_signal * 0.8
-        deprioritize_score = inventory * 4 + negative_signal * 1.3 - (margin * 40) - positive_signal * 0.9
+        # - feature: demand winners suitable for full-price visibility.
+        # - promote: featured campaign candidates with margin + inventory headroom.
+        # - deprioritize: weaker movers with inventory pressure.
+        feature_score = metric_value + (positive_signal * 1.05) - (negative_signal * 0.35) + (margin * 35)
+        campaign_pressure = negative_signal - (positive_signal * 0.55)
+        promote_score = (margin * 120) + (inventory * 3.2) + max(campaign_pressure, 0.0) * 0.7
+        deprioritize_score = (inventory * 4.2) + (negative_signal * 1.25) - (margin * 28) - (positive_signal * 0.6)
+
+        is_deprioritize = inventory >= 4 and negative_signal > max(positive_signal * 1.15, deprioritize_negative_floor)
+        is_campaign = (
+            margin >= campaign_margin_min
+            and inventory >= campaign_inventory_min
+            and (negative_signal > positive_signal * 0.55 or positive_signal < 250)
+        )
+
+        comparison_bits: list[str] = []
+        if compare_mode in {CompareMode.peer, CompareMode.peer_and_prior_period}:
+            comparison_bits.append(f"peer {peer_delta:+.0f}")
+        if compare_mode in {CompareMode.prior_period, CompareMode.peer_and_prior_period}:
+            comparison_bits.append(f"prior {prior_delta:+.0f}")
+        baseline_signal = ", ".join(comparison_bits) if comparison_bits else "baseline n/a"
 
         action_scores = {
             MerchAction.feature: (
                 feature_score,
-                "strong demand and positive peer/prior signals support full-price featuring",
+                f"Criteria: strongest demand momentum ({baseline_signal}), margin {margin * 100:.1f}%, inventory {inventory:.0f} units, and full-price visibility potential.",
             ),
             MerchAction.promote: (
                 promote_score,
-                "inventory headroom with margin potential suggests a campaign or offer",
+                f"Criteria: Featured Campaign candidate with margin {margin * 100:.1f}% (>= {campaign_margin_min * 100:.0f}%), inventory {inventory:.0f} units (>= {campaign_inventory_min:.0f}), softer demand signal ({baseline_signal}), and room for a campaign or offer.",
             ),
             MerchAction.deprioritize: (
                 deprioritize_score,
-                "weaker demand versus peer/prior with inventory pressure suggests lower floor priority",
+                f"Criteria: inventory pressure ({inventory:.0f} units) with below-baseline demand ({baseline_signal}); reduce floor priority.",
             ),
         }
 
         selected_actions = [parsed.action_hint] if parsed.action_hint else None
         if selected_actions is None:
-            best_action = max(
-                action_order,
-                key=lambda action: action_scores[action][0],
-            )
+            if is_deprioritize:
+                best_action = MerchAction.deprioritize
+            elif is_campaign:
+                best_action = MerchAction.promote
+            else:
+                best_action = MerchAction.feature
             selected_actions = [best_action]
 
         for action in selected_actions:

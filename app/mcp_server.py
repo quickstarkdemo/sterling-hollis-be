@@ -876,9 +876,9 @@ def _merch_workspace_payload(
             "brandOptions": brand_options,
             "compareStoreOptions": compare_store_options,
             "actionDefinitions": {
-                "feature": "High-confidence winners to prioritize in full-price placement.",
-                "promote": "Inventory with margin headroom where campaigns/offers can accelerate sell-through.",
-                "deprioritize": "Lower-priority items with weaker demand and inventory pressure.",
+                "feature": "Strongest demand momentum versus baseline with healthy margin/inventory for full-price placement.",
+                "promote": "Featured Campaign candidates: margin >= 42%, inventory >= 6 units, and softer demand that can respond to campaign support.",
+                "deprioritize": "Inventory pressure plus below-baseline demand; reduce exposure and floor priority.",
             },
         },
     }

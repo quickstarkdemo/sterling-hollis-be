@@ -29,9 +29,9 @@ const DEFAULT_PAYLOAD = {
     brandOptions: [],
     compareStoreOptions: [{ value: "", label: "Auto peer set" }],
     actionDefinitions: {
-      feature: "High-confidence winners for full-price visibility.",
-      promote: "Inventory where campaign/offer can accelerate sell-through.",
-      deprioritize: "Lower-priority items to reduce exposure.",
+      feature: "Strongest demand momentum versus baseline with healthy margin/inventory for full-price placement.",
+      promote: "Featured Campaign candidates: margin >= 42%, inventory >= 6 units, and softer demand that can respond to campaign support.",
+      deprioritize: "Inventory pressure plus below-baseline demand; reduce exposure and floor priority.",
     },
   },
 };
@@ -1083,6 +1083,11 @@ function renderActions(result) {
   if (!items.length) {
     return el("p", { className: "fw-empty", text: state.payload.uiHints.emptyState });
   }
+  const actionMeta = {
+    feature: { kicker: "Full-Price Priority", title: "Feature" },
+    promote: { kicker: "Campaign Candidate", title: "Featured Campaign" },
+    deprioritize: { kicker: "Floor Space Recovery", title: "Deprioritize" },
+  };
   const groups = { feature: [], promote: [], deprioritize: [] };
   items.forEach((item) => {
     const key = String(item.action || "").toLowerCase();
@@ -1105,8 +1110,9 @@ function renderActions(result) {
           el(
             "div",
             {},
-            el("div", { className: "fw-kicker", text: action }),
-            el("h3", { className: "fw-panel-title", text: humanizeToken(action) }),
+            el("div", { className: "fw-kicker", text: actionMeta[action].kicker }),
+            el("h3", { className: "fw-panel-title", text: actionMeta[action].title }),
+            el("p", { className: "fw-empty", text: `Criteria: ${state.payload.uiHints.actionDefinitions[action]}` }),
           ),
           el("span", { className: "fw-chip subtle", text: `${groups[action].length} products` }),
         ),
@@ -2618,7 +2624,7 @@ function render() {
           "p",
           {
             className: "fw-empty",
-            text: `Feature: ${state.payload.uiHints.actionDefinitions.feature} Promote: ${state.payload.uiHints.actionDefinitions.promote} Deprioritize: ${state.payload.uiHints.actionDefinitions.deprioritize}`,
+            text: `Feature: ${state.payload.uiHints.actionDefinitions.feature} Featured Campaign: ${state.payload.uiHints.actionDefinitions.promote} Deprioritize: ${state.payload.uiHints.actionDefinitions.deprioritize} All filters (brand, category, price band, occasion, and lookback) apply to all three sections.`,
           },
         )
       : null,
