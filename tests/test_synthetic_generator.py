@@ -259,3 +259,30 @@ def test_products_are_distributed_across_multiple_stores(tmp_path: Path):
     multi_store_titles = [title for title, store_ids in title_store_map.items() if len(store_ids) > 1]
     assert multi_store_titles
     assert len(multi_store_titles) / max(len(title_store_map), 1) >= 0.25
+
+
+def test_orders_show_holiday_seasonality_curve(tmp_path: Path):
+    run_id = "run_test_8"
+    stores = _sample_stores(run_id)
+    volumes = GenerationVolumes(stores=2, products=120, customers=120, orders=2200)
+
+    artifacts = generate_synthetic_dataset(
+        seed=20260317,
+        run_id=run_id,
+        stores=stores,
+        volumes=volumes,
+        trailing_months=12,
+        output_root=tmp_path,
+        raw_snapshot={"stores": []},
+        now=datetime(2026, 3, 13, tzinfo=timezone.utc),
+    )
+
+    orders = _read_csv(artifacts.output_dir / "orders.csv")
+    counts_by_month: dict[int, int] = {}
+    for order in orders:
+        month = int(order["ordered_at"][5:7])
+        counts_by_month[month] = counts_by_month.get(month, 0) + 1
+
+    assert counts_by_month[12] > counts_by_month[11]
+    assert counts_by_month[11] > counts_by_month[2]
+    assert counts_by_month[12] > counts_by_month[1]

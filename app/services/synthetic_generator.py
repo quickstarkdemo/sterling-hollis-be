@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from typing import TypeVar
 
 from app.services.taxonomy import (
     CATEGORY_TAXONOMY,
@@ -68,6 +69,7 @@ LAST_NAMES = [
 LOYALTY_TIERS = ["standard", "silver", "gold", "platinum"]
 CHANNELS = ["in_store", "online", "hybrid"]
 OCCASIONS = ["wedding", "vacation", "workwear", "holiday_party", "everyday_luxury"]
+T = TypeVar("T")
 
 
 @dataclass
@@ -85,7 +87,7 @@ class SyntheticArtifacts:
     row_counts: dict[str, int]
 
 
-def _weighted_choice(rng: random.Random, options: list[tuple[str, float]]) -> str:
+def _weighted_choice(rng: random.Random, options: list[tuple[T, float]]) -> T:
     total = sum(weight for _, weight in options)
     roll = rng.random() * total
     acc = 0.0
@@ -136,6 +138,66 @@ def _store_inventory_multiplier(profile_type: str) -> float:
         "suburban_affluent": 0.88,
     }
     return multipliers.get(profile_type, 1.0)
+
+
+def _month_order_multiplier(month: int) -> float:
+    # Keeps a recognizable luxury retail calendar shape with Nov/Dec peak.
+    multipliers = {
+        1: 0.82,   # post-holiday dip
+        2: 0.88,
+        3: 0.96,
+        4: 1.03,
+        5: 1.10,   # spring occasion lift
+        6: 1.08,
+        7: 0.98,
+        8: 0.96,
+        9: 1.03,   # fall collection lift
+        10: 1.14,
+        11: 1.42,  # holiday build
+        12: 1.72,  # holiday peak
+    }
+    return multipliers.get(month, 1.0)
+
+
+def _primary_season_for_month(month: int) -> str:
+    if month in {12, 1, 2}:
+        return "winter"
+    if month in {3, 4, 5}:
+        return "spring"
+    if month in {6, 7, 8}:
+        return "summer"
+    return "fall"
+
+
+def _season_match_multiplier(product_season: str | None, month: int) -> float:
+    season = str(product_season or "all-season").strip().lower()
+    if season == "all-season":
+        return 1.0
+    primary = _primary_season_for_month(month)
+    shoulder = {
+        "winter": {"fall", "spring"},
+        "spring": {"winter", "summer"},
+        "summer": {"spring", "fall"},
+        "fall": {"summer", "winter"},
+    }
+    if season == primary:
+        return 1.28
+    if season in shoulder.get(primary, set()):
+        return 1.07
+    return 0.72
+
+
+def _daily_order_weight(order_day: date, day_index: int, total_days: int) -> float:
+    progress = (day_index + 1) / max(total_days, 1)
+    recency_factor = 0.85 + (progress ** 0.70) * 0.35
+    weekday = order_day.weekday()
+    if weekday in {4, 5}:  # Friday/Saturday
+        weekday_factor = 1.08
+    elif weekday == 6:  # Sunday
+        weekday_factor = 0.97
+    else:
+        weekday_factor = 1.0
+    return recency_factor * _month_order_multiplier(order_day.month) * weekday_factor
 
 
 def _occasion_for_month(rng: random.Random, month: int) -> str:
@@ -436,6 +498,13 @@ def generate_orders_and_items(
 
     start_date = now - timedelta(days=30 * trailing_months)
     total_days = max(1, (now - start_date).days)
+    order_day_weights = [
+        (
+            (start_date + timedelta(days=day_offset)).date(),
+            _daily_order_weight((start_date + timedelta(days=day_offset)).date(), day_offset, total_days),
+        )
+        for day_offset in range(total_days)
+    ]
 
     item_idx = 1
     for oidx in range(order_count):
@@ -447,9 +516,13 @@ def generate_orders_and_items(
         else:
             store_id = rng.choice(stores)["id"]
 
-        # Recency bias + seasonal spikes
-        day_offset = int(total_days * (rng.random() ** 0.62))
-        ordered_at = start_date + timedelta(days=day_offset, hours=rng.randint(8, 21), minutes=rng.randint(0, 59))
+        # Month-level demand seasonality + controlled recency.
+        order_day = _weighted_choice(rng, order_day_weights)
+        ordered_at = datetime.combine(
+            order_day,
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        ) + timedelta(hours=rng.randint(8, 21), minutes=rng.randint(0, 59))
 
         occasion = _occasion_for_month(rng, ordered_at.month)
         channel = customer["channel_preference"]
@@ -457,7 +530,11 @@ def generate_orders_and_items(
             channel = _weighted_choice(rng, [("online", 0.52), ("in_store", 0.48)])
 
         base_categories = OCCASION_TO_CATEGORY.get(occasion, list(CATEGORY_TAXONOMY.keys()))
-        n_items = _weighted_choice(rng, [("1", 0.45), ("2", 0.34), ("3", 0.17), ("4", 0.04)])
+        if ordered_at.month in {11, 12}:
+            basket_options = [("1", 0.36), ("2", 0.36), ("3", 0.22), ("4", 0.06)]
+        else:
+            basket_options = [("1", 0.45), ("2", 0.34), ("3", 0.17), ("4", 0.04)]
+        n_items = _weighted_choice(rng, basket_options)
         n_items_int = int(n_items)
 
         subtotal = Decimal("0.00")
@@ -473,13 +550,35 @@ def generate_orders_and_items(
             if not pool:
                 continue
 
-            product = rng.choice(pool)
+            weighted_pool = []
+            for candidate in pool:
+                availability = str(candidate.get("availability") or "").lower()
+                if availability == "in stock":
+                    availability_factor = 1.0
+                elif availability == "preorder":
+                    availability_factor = 0.65
+                else:
+                    availability_factor = 0.18
+                season_factor = _season_match_multiplier(candidate.get("season"), ordered_at.month)
+                weighted_pool.append((candidate, season_factor * availability_factor))
+            product = _weighted_choice(rng, weighted_pool)
             qty = 1 if rng.random() < 0.88 else 2
             unit_price = Decimal(product["price"])
 
             discount_rate = 0.0
-            if rng.random() < 0.22:
-                discount_rate = rng.choice([0.05, 0.10, 0.15, 0.20])
+            if ordered_at.month in {11, 12}:
+                discount_prob = 0.34
+            elif ordered_at.month in {1, 2}:
+                discount_prob = 0.27
+            else:
+                discount_prob = 0.20
+            if occasion == "holiday_party":
+                discount_prob += 0.04
+            if rng.random() < min(discount_prob, 0.68):
+                if ordered_at.month in {11, 12, 1}:
+                    discount_rate = rng.choice([0.10, 0.15, 0.20, 0.25])
+                else:
+                    discount_rate = rng.choice([0.05, 0.10, 0.15, 0.20])
 
             discount_amount = (unit_price * Decimal(qty) * Decimal(str(discount_rate))).quantize(Decimal("0.01"))
             line_total = (unit_price * Decimal(qty) - discount_amount).quantize(Decimal("0.01"))

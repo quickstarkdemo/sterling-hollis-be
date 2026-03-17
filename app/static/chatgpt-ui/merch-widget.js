@@ -45,6 +45,7 @@ const state = {
     brand: "",
     priceBand: "",
     occasion: "",
+    lookbackPreset: "90",
     lookbackDays: "90",
     compareMode: "peer_and_prior_period",
     peerMode: "state_and_profile",
@@ -72,6 +73,16 @@ const state = {
     diagnosticsExpanded: {},
   },
 };
+
+const LOOKBACK_PRESET_OPTIONS = [
+  { label: "Last 2 Weeks", value: "14" },
+  { label: "Last 4 Weeks", value: "28" },
+  { label: "Last 8 Weeks", value: "56" },
+  { label: "Last Quarter (13 Weeks)", value: "90" },
+  { label: "Last 6 Months", value: "180" },
+  { label: "Last 12 Months", value: "365" },
+  { label: "Custom Days", value: "custom" },
+];
 
 function isObject(value) {
   return value && typeof value === "object" && !Array.isArray(value);
@@ -336,6 +347,16 @@ function markFilterChange() {
   state.runtime.filtersDirty = true;
 }
 
+function normalizeLookbackDays(value) {
+  return String(parsePositiveInt(value, 90, 7, 730));
+}
+
+function presetFromLookbackDays(value) {
+  const normalized = normalizeLookbackDays(value);
+  const match = LOOKBACK_PRESET_OPTIONS.find((option) => option.value === normalized);
+  return match ? match.value : "custom";
+}
+
 function hydrateUiFromFilters(filters) {
   if (!isObject(filters)) {
     return;
@@ -346,7 +367,8 @@ function hydrateUiFromFilters(filters) {
   state.ui.brand = typeof filters.brand === "string" ? filters.brand : "";
   state.ui.priceBand = typeof filters.price_band === "string" ? filters.price_band : "";
   state.ui.occasion = typeof filters.occasion === "string" ? filters.occasion : "";
-  state.ui.lookbackDays = String(filters.lookback_days || 90);
+  state.ui.lookbackDays = normalizeLookbackDays(filters.lookback_days);
+  state.ui.lookbackPreset = presetFromLookbackDays(filters.lookback_days);
   state.ui.compareMode = typeof filters.compare_mode === "string" ? filters.compare_mode : "peer_and_prior_period";
   state.ui.peerMode = typeof filters.peer_mode === "string" ? filters.peer_mode : "state_and_profile";
   state.ui.compareStoreId = typeof filters.compare_store_id === "string" ? filters.compare_store_id : "";
@@ -365,6 +387,7 @@ function applyUiWidgetState(raw) {
     "brand",
     "priceBand",
     "occasion",
+    "lookbackPreset",
     "lookbackDays",
     "compareMode",
     "peerMode",
@@ -375,6 +398,13 @@ function applyUiWidgetState(raw) {
   for (const key of textFields) {
     if (typeof raw[key] === "string" && raw[key] !== state.ui[key]) {
       state.ui[key] = raw[key];
+      changed = true;
+    }
+  }
+  if (typeof raw.lookbackDays === "string" && typeof raw.lookbackPreset !== "string") {
+    const derivedPreset = presetFromLookbackDays(raw.lookbackDays);
+    if (derivedPreset !== state.ui.lookbackPreset) {
+      state.ui.lookbackPreset = derivedPreset;
       changed = true;
     }
   }
@@ -405,6 +435,7 @@ function persistWidgetState() {
       brand: state.ui.brand,
       priceBand: state.ui.priceBand,
       occasion: state.ui.occasion,
+      lookbackPreset: state.ui.lookbackPreset,
       lookbackDays: state.ui.lookbackDays,
       compareMode: state.ui.compareMode,
       peerMode: state.ui.peerMode,
@@ -552,7 +583,7 @@ function buildModelContextPayload() {
     brand: state.ui.brand.trim() || null,
     price_band: state.ui.priceBand || null,
     occasion: state.ui.occasion.trim() || null,
-    lookback_days: Number(state.ui.lookbackDays || 90),
+    lookback_days: Number(normalizeLookbackDays(state.ui.lookbackDays)),
     compare_mode: state.ui.compareMode,
     peer_mode: state.ui.peerMode,
     compare_store_id: state.ui.compareStoreId || null,
@@ -718,7 +749,7 @@ function currentFilters() {
     brand: state.ui.brand.trim() || null,
     price_band: state.ui.priceBand || null,
     occasion: state.ui.occasion.trim() || null,
-    lookback_days: parsePositiveInt(state.ui.lookbackDays, 90, 7, 730),
+    lookback_days: Number(normalizeLookbackDays(state.ui.lookbackDays)),
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
     peer_mode: state.ui.peerMode || "state_and_profile",
     compare_store_id: state.ui.compareStoreId.trim() || null,
@@ -1021,6 +1052,19 @@ function buildSelect(currentValue, options, onChange) {
   return node;
 }
 
+function lookbackWindowLabel(daysValue) {
+  const days = parsePositiveInt(daysValue, 90, 7, 730);
+  const mapping = {
+    14: "2w",
+    28: "4w",
+    56: "8w",
+    90: "13w",
+    180: "26w",
+    365: "52w",
+  };
+  return mapping[days] || `${days}d`;
+}
+
 function resultHeader(result) {
   if (!result) {
     return null;
@@ -1032,7 +1076,7 @@ function resultHeader(result) {
     kpi("Baseline", baselineLabel(result)),
     kpi("Compare", humanizeToken(result.compare_mode || state.ui.compareMode)),
     kpi("Peers", String(peerCount || 0)),
-    kpi("Window", `${result.lookback_days || parsePositiveInt(state.ui.lookbackDays, 90, 7, 730)}d`),
+    kpi("Window", lookbackWindowLabel(result.lookback_days || state.ui.lookbackDays)),
   );
 }
 
@@ -2425,6 +2469,15 @@ function render() {
   const compareStoreSelect = buildSelect(state.ui.compareStoreId, compareStoreOptions, (value) => {
     state.ui.compareStoreId = value;
   });
+  const lookbackPresetSelect = buildSelect(state.ui.lookbackPreset, LOOKBACK_PRESET_OPTIONS, (value) => {
+    state.ui.lookbackPreset = value;
+    if (value !== "custom") {
+      state.ui.lookbackDays = value;
+    }
+  });
+  if (state.ui.lookbackPreset === "custom") {
+    lookbackPresetSelect.title = `Current custom window: ${normalizeLookbackDays(state.ui.lookbackDays)} days`;
+  }
 
   const tabDefinitions = [
     { id: "actions", tool: "fashion_merch_action_recommendations", label: "Prioritize" },
@@ -2539,18 +2592,26 @@ function render() {
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Lookback Days" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "7",
-          max: "730",
-          value: state.ui.lookbackDays,
-          onInput: (event) => {
-            markFilterChange();
-            state.ui.lookbackDays = event.target.value;
-            persistWidgetState();
-          },
+        el("label", { className: "fw-label", text: "Time Window" }),
+        lookbackPresetSelect,
+        state.ui.lookbackPreset === "custom"
+          ? el("input", {
+              className: "fw-input",
+              type: "number",
+              min: "7",
+              max: "730",
+              value: state.ui.lookbackDays,
+              placeholder: "Custom days",
+              onInput: (event) => {
+                markFilterChange();
+                state.ui.lookbackDays = event.target.value;
+                persistWidgetState();
+              },
+            })
+          : null,
+        el("p", {
+          className: "fw-empty fw-merch-lookback-hint",
+          text: "Merch cadence defaults: 13 weeks for in-season decisions, 26-52 weeks for trend and YoY reads.",
         }),
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare Mode" }), compareModeSelect),

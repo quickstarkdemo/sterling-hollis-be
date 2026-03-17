@@ -388,6 +388,10 @@ body {
   color: #21567f;
 }
 
+.fw-merch-lookback-hint {
+  margin: -2px 0 0;
+}
+
 .fw-selected-name {
   margin: 0;
   font-size: 20px;
