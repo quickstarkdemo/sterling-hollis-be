@@ -297,6 +297,17 @@ function formatPct(value, digits = 1) {
   return `${sign}${numeric.toFixed(digits)}%`;
 }
 
+function formatPlainPct(value, digits = 1) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  return `${numeric.toFixed(digits)}%`;
+}
+
 function setNotice(message, tone = "info") {
   state.ui.notice = message || "";
   state.ui.noticeTone = tone === "error" ? "error" : "info";
@@ -937,7 +948,91 @@ function renderRadar(result) {
   );
 }
 
+function allocationTone(beforePct, afterPct) {
+  const delta = Number(afterPct || 0) - Number(beforePct || 0);
+  if (delta > 0.25) {
+    return "positive";
+  }
+  if (delta < -0.25) {
+    return "negative";
+  }
+  return "neutral";
+}
+
+function allocationTrackRow(label, value, tone) {
+  return el(
+    "div",
+    { className: "fw-whatif-alloc-track-row" },
+    el("span", { className: "fw-whatif-alloc-track-label", text: label }),
+    el(
+      "div",
+      { className: "fw-whatif-alloc-track" },
+      el("span", {
+        className: `fw-whatif-alloc-fill ${tone}`,
+        style: `width:${clampNumber(value, 0, 0, 100).toFixed(2)}%;`,
+      }),
+    ),
+    el("span", { className: "fw-whatif-alloc-track-value", text: formatPlainPct(value, 1) }),
+  );
+}
+
+function renderAllocationList(title, rows, subtitle) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return el(
+      "section",
+      { className: "fw-panel" },
+      el("h3", { className: "fw-panel-title", text: title }),
+      subtitle ? el("p", { className: "fw-empty", text: subtitle }) : null,
+      el("p", { className: "fw-empty", text: "No allocation rows available for this scenario." }),
+    );
+  }
+  return el(
+    "section",
+    { className: "fw-panel" },
+    el("h3", { className: "fw-panel-title", text: title }),
+    subtitle ? el("p", { className: "fw-empty", text: subtitle }) : null,
+    el(
+      "div",
+      { className: "fw-list" },
+      ...rows.slice(0, 10).map((row) => {
+        const spaceTone = allocationTone(row.baseline_space_share_pct, row.projected_space_share_pct);
+        const revenueTone = allocationTone(row.baseline_revenue_share_pct, row.projected_revenue_share_pct);
+        return el(
+          "article",
+          { className: "fw-result fw-whatif-alloc-row" },
+          el(
+            "div",
+            { className: "fw-whatif-alloc-head" },
+            el("h4", { className: "fw-panel-title", text: humanizeToken(row.category) }),
+            el(
+              "div",
+              { className: "fw-chip-row" },
+              Number(row.applied_discount_pct || 0) > 0
+                ? el("span", { className: "fw-chip", text: `Discount ${compactNumber(row.applied_discount_pct, 1)}%` })
+                : el("span", { className: "fw-chip subtle", text: "No discount change" }),
+              el("span", {
+                className: `fw-chip fw-merch-status-chip ${revenueTone}`,
+                text: `Revenue ${formatCurrency(row.baseline_revenue)} -> ${formatCurrency(row.projected_revenue)}`,
+              }),
+            ),
+          ),
+          el(
+            "div",
+            { className: "fw-whatif-alloc-metrics" },
+            allocationTrackRow("Space Before", row.baseline_space_share_pct, "neutral"),
+            allocationTrackRow("Space After", row.projected_space_share_pct, spaceTone),
+            allocationTrackRow("Revenue Mix Before", row.baseline_revenue_share_pct, "neutral"),
+            allocationTrackRow("Revenue Mix After", row.projected_revenue_share_pct, revenueTone),
+          ),
+        );
+      }),
+    ),
+  );
+}
+
 function renderSimulator(result) {
+  const networkAllocations = Array.isArray(result?.category_allocations) ? result.category_allocations : [];
+  const storeAllocations = Array.isArray(result?.store_allocations) ? result.store_allocations : [];
   return el(
     "div",
     { className: "fw-list" },
@@ -959,27 +1054,21 @@ function renderSimulator(result) {
           text: `Confidence band: ${formatCurrency(result?.confidence_interval_low)} to ${formatCurrency(result?.confidence_interval_high)}`,
         },
       ),
+      el(
+        "p",
+        {
+          className: "fw-empty",
+          text: "Allocation visuals show floor-space proxy and revenue mix before vs after the scenario.",
+        },
+      ),
     ),
-    el(
-      "section",
-      { className: "fw-panel" },
-      el("h3", { className: "fw-panel-title", text: "Model Components" }),
-      ...(Array.isArray(result?.components) && result.components.length
-        ? result.components.map((component) =>
-            el(
-              "article",
-              { className: "fw-result" },
-              el("h4", { className: "fw-panel-title", text: component.name }),
-              el("p", { className: "fw-empty", text: component.rationale || "" }),
-              el(
-                "div",
-                { className: "fw-chip-row" },
-                el("span", { className: "fw-chip", text: `Revenue ${formatCurrency(component.revenue_delta)}` }),
-                el("span", { className: "fw-chip subtle", text: `Margin ${formatPct(Number(component.margin_rate_delta || 0) * 100, 2)}` }),
-              ),
-            ),
-          )
-        : [el("p", { className: "fw-empty", text: "No simulation components available." })]),
+    renderAllocationList("Network Allocation Before vs After", networkAllocations),
+    ...storeAllocations.map((store) =>
+      renderAllocationList(
+        `${store.store_name} Allocation Before vs After`,
+        Array.isArray(store.categories) ? store.categories : [],
+        `${store.city}, ${store.state}`,
+      ),
     ),
   );
 }
@@ -1390,62 +1479,74 @@ function render() {
     tabScopedControls.push(
       el(
         "div",
-        { className: "fw-field fw-span-full" },
+        { className: "fw-field fw-span-full fw-exec-whatif-controls" },
         el("h3", { className: "fw-panel-title", text: "What-if Inputs" }),
         el("p", { className: "fw-empty", text: "Category reallocation and pricing/space levers only apply to this simulator tab." }),
+        el(
+          "div",
+          { className: "fw-exec-whatif-grid" },
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Brand Scope" }),
+            buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
+            el("p", {
+              className: "fw-empty",
+              text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            el(
+              "div",
+              { className: "fw-field" },
+              el("label", { className: "fw-label", text: "Reallocate From Category" }),
+              buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
+                state.ui.fromCategory = value;
+              }),
+            ),
+            el(
+              "div",
+              { className: "fw-field" },
+              el("label", { className: "fw-label", text: "Reallocate To Category" }),
+              buildSelect(state.ui.toCategory, categoryOptions, (value) => {
+                state.ui.toCategory = value;
+              }),
+            ),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            buildPercentLeverField({
+              label: "Discount on Reallocate-To (%)",
+              value: state.ui.discountPct,
+              min: 0,
+              max: 60,
+              step: 1,
+              onNumberInput: (value) => {
+                state.ui.discountPct = value;
+              },
+              onSliderInput: (value) => {
+                state.ui.discountPct = value;
+              },
+            }),
+            buildPercentLeverField({
+              label: "Floor Space Shift to Reallocate-To (%)",
+              value: state.ui.floorSpaceShiftPct,
+              min: -40,
+              max: 40,
+              step: 1,
+              onNumberInput: (value) => {
+                state.ui.floorSpaceShiftPct = value;
+              },
+              onSliderInput: (value) => {
+                state.ui.floorSpaceShiftPct = value;
+              },
+            }),
+          ),
+        ),
       ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Brand Scope" }),
-        buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
-        el("p", {
-          className: "fw-empty",
-          text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Reallocate From Category" }),
-        buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
-          state.ui.fromCategory = value;
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Reallocate To Category" }),
-        buildSelect(state.ui.toCategory, categoryOptions, (value) => {
-          state.ui.toCategory = value;
-        }),
-      ),
-      buildPercentLeverField({
-        label: "Discount (%)",
-        value: state.ui.discountPct,
-        min: 0,
-        max: 60,
-        step: 1,
-        onNumberInput: (value) => {
-          state.ui.discountPct = value;
-        },
-        onSliderInput: (value) => {
-          state.ui.discountPct = value;
-        },
-      }),
-      buildPercentLeverField({
-        label: "Space Shift (%)",
-        value: state.ui.floorSpaceShiftPct,
-        min: -40,
-        max: 40,
-        step: 1,
-        onNumberInput: (value) => {
-          state.ui.floorSpaceShiftPct = value;
-        },
-        onSliderInput: (value) => {
-          state.ui.floorSpaceShiftPct = value;
-        },
-      }),
     );
   }
   if (activeTabTool === "fashion_exec_campaign_autopilot_prepare") {

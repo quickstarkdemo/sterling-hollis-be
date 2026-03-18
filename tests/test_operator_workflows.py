@@ -1139,13 +1139,14 @@ def test_exec_overview_radar_and_simulator_tools(monkeypatch):
         assert radar.rows
         assert {row.event for row in radar.rows}.issubset({"wedding", "workwear"})
         assert simulation.expected_revenue > 0
-        assert simulation.components
+        assert simulation.category_allocations
         assert scoped_overview.store_count == 1
         assert "1 selected store" in scoped_overview.summary
         assert scoped_radar.rows
         assert all(row.store_id == "1001" for row in scoped_radar.rows)
         assert "1 selected store" in scoped_radar.summary
         assert "1 selected store" in scoped_simulation.summary
+        assert scoped_simulation.store_allocations
         assert all(row.store_id == "1001" for row in branded_radar.rows)
         assert branded_simulation.expected_revenue > 0
 

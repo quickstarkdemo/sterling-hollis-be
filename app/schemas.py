@@ -668,11 +668,23 @@ class ExecutiveEventReadinessRadarResponse(BaseModel):
     rows: list[ExecutiveReadinessRow] = Field(default_factory=list)
 
 
-class ExecutiveWhatIfComponent(BaseModel):
-    name: str
-    revenue_delta: float
-    margin_rate_delta: float
-    rationale: str
+class ExecutiveWhatIfCategoryAllocation(BaseModel):
+    category: str
+    baseline_revenue: float
+    projected_revenue: float
+    baseline_revenue_share_pct: float
+    projected_revenue_share_pct: float
+    baseline_space_share_pct: float
+    projected_space_share_pct: float
+    applied_discount_pct: float = 0.0
+
+
+class ExecutiveWhatIfStoreAllocation(BaseModel):
+    store_id: str
+    store_name: str
+    city: str
+    state: str
+    categories: list[ExecutiveWhatIfCategoryAllocation] = Field(default_factory=list)
 
 
 class ExecutiveWhatIfSimulatorResponse(BaseModel):
@@ -687,7 +699,8 @@ class ExecutiveWhatIfSimulatorResponse(BaseModel):
     margin_rate_delta: float
     confidence_interval_low: float
     confidence_interval_high: float
-    components: list[ExecutiveWhatIfComponent] = Field(default_factory=list)
+    category_allocations: list[ExecutiveWhatIfCategoryAllocation] = Field(default_factory=list)
+    store_allocations: list[ExecutiveWhatIfStoreAllocation] = Field(default_factory=list)
 
 
 class ExecutiveCampaignCandidate(BaseModel):

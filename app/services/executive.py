@@ -20,8 +20,9 @@ from app.schemas import (
     ExecutiveRiskLevel,
     ExecutiveStoreInsight,
     ExecutiveTrendPoint,
-    ExecutiveWhatIfComponent,
+    ExecutiveWhatIfCategoryAllocation,
     ExecutiveWhatIfSimulatorResponse,
+    ExecutiveWhatIfStoreAllocation,
     Objective,
     ResolvedStore,
 )
@@ -185,11 +186,17 @@ def _company_weekly_trend(
 ) -> list[ExecutiveTrendPoint]:
     if not store_ids:
         return []
+    trend_until = until.date()
+    current_week_start = trend_until - timedelta(days=trend_until.weekday())
+    if current_week_start > since.date():
+        trend_until = current_week_start
+    if trend_until <= since.date():
+        trend_until = until.date()
     rows = session.execute(
         select(StoreDailyMetric.metric_date, StoreDailyMetric.revenue, StoreDailyMetric.units_sold, StoreDailyMetric.margin_rate).where(
             StoreDailyMetric.store_id.in_(store_ids),
             StoreDailyMetric.metric_date >= since.date(),
-            StoreDailyMetric.metric_date < until.date(),
+            StoreDailyMetric.metric_date < trend_until,
         )
     ).all()
 
@@ -489,6 +496,206 @@ def _category_inventory(
     return {row.category: float(row.inventory_units or 0.0) for row in rows}
 
 
+def _store_category_sales(
+    session: Session,
+    *,
+    store_ids: list[str],
+    since: datetime,
+    until: datetime,
+    brands: list[str] | None = None,
+) -> dict[str, dict[str, dict[str, float]]]:
+    if not store_ids:
+        return {}
+    query = (
+        select(
+            Order.store_id.label("store_id"),
+            Product.category.label("category"),
+            func.sum(OrderItem.line_total).label("revenue"),
+            func.sum(OrderItem.quantity).label("units"),
+            func.sum(OrderItem.line_total * Product.margin_pct).label("margin_value"),
+        )
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(Order.store_id.in_(store_ids), Order.ordered_at >= since, Order.ordered_at < until)
+        .group_by(Order.store_id, Product.category)
+    )
+    if brands:
+        query = query.where(func.lower(Product.brand).in_(brands))
+    rows = session.execute(query).all()
+    payload: dict[str, dict[str, dict[str, float]]] = {}
+    for row in rows:
+        revenue = float(row.revenue or 0.0)
+        margin_value = float(row.margin_value or 0.0)
+        payload.setdefault(row.store_id, {})[row.category] = {
+            "revenue": revenue,
+            "units": float(row.units or 0.0),
+            "margin_value": margin_value,
+            "margin_rate": (margin_value / revenue) if revenue > 0 else 0.0,
+        }
+    return payload
+
+
+def _store_category_inventory(
+    session: Session,
+    *,
+    store_ids: list[str],
+    brands: list[str] | None = None,
+) -> dict[str, dict[str, float]]:
+    if not store_ids:
+        return {}
+    query = (
+        select(
+            Product.store_id.label("store_id"),
+            Product.category.label("category"),
+            func.sum(Product.inventory_qty).label("inventory_units"),
+        )
+        .where(Product.store_id.in_(store_ids))
+        .group_by(Product.store_id, Product.category)
+    )
+    if brands:
+        query = query.where(func.lower(Product.brand).in_(brands))
+    rows = session.execute(query).all()
+    payload: dict[str, dict[str, float]] = {}
+    for row in rows:
+        payload.setdefault(row.store_id, {})[row.category] = float(row.inventory_units or 0.0)
+    return payload
+
+
+def _project_category_allocations(
+    *,
+    sales: dict[str, dict[str, float]],
+    inventory: dict[str, float],
+    discount_pct: float,
+    floor_space_shift_pct: float,
+    from_category: str | None,
+    to_category: str | None,
+) -> tuple[list[ExecutiveWhatIfCategoryAllocation], float, float]:
+    categories = sorted(set(sales.keys()) | set(inventory.keys()))
+    category_rows: dict[str, dict[str, float]] = {}
+    discount_by_category: dict[str, float] = {}
+
+    for category in categories:
+        sales_row = sales.get(category, {})
+        revenue = float(sales_row.get("revenue", 0.0))
+        margin_value = float(sales_row.get("margin_value", 0.0))
+        category_rows[category] = {
+            "baseline_revenue": revenue,
+            "baseline_margin_value": margin_value,
+            "baseline_margin_rate": float(sales_row.get("margin_rate", 0.0)),
+            "baseline_space_units": float(inventory.get(category, 0.0)),
+            "projected_revenue": revenue,
+            "projected_margin_value": margin_value,
+            "projected_space_units": float(inventory.get(category, 0.0)),
+        }
+        discount_by_category[category] = 0.0
+
+    bounded_discount = max(0.0, min(float(discount_pct), 60.0))
+    bounded_shift = max(-40.0, min(float(floor_space_shift_pct), 40.0))
+    discount_target = None
+    if to_category and to_category in category_rows:
+        discount_target = to_category
+    elif from_category and from_category in category_rows:
+        discount_target = from_category
+
+    if bounded_discount > 0 and discount_target:
+        discount_fraction = bounded_discount / 100.0
+        base_revenue = category_rows[discount_target]["projected_revenue"]
+        base_margin_rate = category_rows[discount_target]["baseline_margin_rate"]
+        elasticity = 1.6
+        volume_lift = elasticity * discount_fraction
+        discounted_revenue = base_revenue * (1.0 - discount_fraction) * (1.0 + volume_lift)
+        adjusted_margin_rate = max(0.0, base_margin_rate - discount_fraction * 0.9)
+        category_rows[discount_target]["projected_revenue"] = discounted_revenue
+        category_rows[discount_target]["projected_margin_value"] = discounted_revenue * adjusted_margin_rate
+        discount_by_category[discount_target] = bounded_discount
+
+    if (
+        bounded_shift != 0
+        and from_category
+        and to_category
+        and from_category != to_category
+        and from_category in category_rows
+        and to_category in category_rows
+    ):
+        source_category = from_category
+        destination_category = to_category
+        if bounded_shift < 0:
+            source_category = to_category
+            destination_category = from_category
+
+        shift_fraction = abs(bounded_shift) / 100.0
+        source_revenue = category_rows[source_category]["baseline_revenue"]
+        source_margin_rate = category_rows[source_category]["baseline_margin_rate"]
+        destination_margin_rate = category_rows[destination_category]["baseline_margin_rate"]
+        base_realloc_revenue = min(source_revenue * shift_fraction, category_rows[source_category]["projected_revenue"])
+
+        category_rows[source_category]["projected_revenue"] -= base_realloc_revenue
+        category_rows[destination_category]["projected_revenue"] += base_realloc_revenue
+        category_rows[source_category]["projected_margin_value"] -= base_realloc_revenue * source_margin_rate
+        category_rows[destination_category]["projected_margin_value"] += base_realloc_revenue * destination_margin_rate
+
+        source_space_units = category_rows[source_category]["baseline_space_units"]
+        space_units_shift = source_space_units * shift_fraction
+        category_rows[source_category]["projected_space_units"] = max(0.0, source_space_units - space_units_shift)
+        category_rows[destination_category]["projected_space_units"] += space_units_shift
+
+        source_inventory = max(category_rows[source_category]["baseline_space_units"], 1.0)
+        destination_inventory = max(category_rows[destination_category]["baseline_space_units"], 1.0)
+        source_productivity = source_revenue / source_inventory if source_inventory > 0 else 0.0
+        destination_productivity = (
+            category_rows[destination_category]["baseline_revenue"] / destination_inventory if destination_inventory > 0 else 0.0
+        )
+        productivity_delta = (
+            (destination_productivity - source_productivity) / max(source_productivity, 1e-6) if source_productivity > 0 else 0.0
+        )
+        net_revenue_delta = base_realloc_revenue * productivity_delta * 0.35
+        effective_margin_rate = (destination_margin_rate - source_margin_rate) * 0.6 + source_margin_rate
+        category_rows[destination_category]["projected_revenue"] += net_revenue_delta
+        category_rows[destination_category]["projected_margin_value"] += net_revenue_delta * effective_margin_rate
+
+    for row in category_rows.values():
+        if row["projected_revenue"] < 0:
+            row["projected_revenue"] = 0.0
+            row["projected_margin_value"] = 0.0
+
+    baseline_total_revenue = sum(row["baseline_revenue"] for row in category_rows.values())
+    projected_total_revenue = sum(row["projected_revenue"] for row in category_rows.values())
+    baseline_total_space = sum(row["baseline_space_units"] for row in category_rows.values())
+    projected_total_space = sum(row["projected_space_units"] for row in category_rows.values())
+    projected_total_margin_value = sum(row["projected_margin_value"] for row in category_rows.values())
+
+    allocations: list[ExecutiveWhatIfCategoryAllocation] = []
+    for category, row in sorted(
+        category_rows.items(),
+        key=lambda item: item[1]["projected_revenue"],
+        reverse=True,
+    ):
+        baseline_revenue = row["baseline_revenue"]
+        projected_revenue = max(0.0, row["projected_revenue"])
+        allocations.append(
+            ExecutiveWhatIfCategoryAllocation(
+                category=category,
+                baseline_revenue=round(baseline_revenue, 4),
+                projected_revenue=round(projected_revenue, 4),
+                baseline_revenue_share_pct=round(
+                    ((baseline_revenue / baseline_total_revenue) * 100.0) if baseline_total_revenue > 0 else 0.0, 4
+                ),
+                projected_revenue_share_pct=round(
+                    ((projected_revenue / projected_total_revenue) * 100.0) if projected_total_revenue > 0 else 0.0, 4
+                ),
+                baseline_space_share_pct=round(
+                    ((row["baseline_space_units"] / baseline_total_space) * 100.0) if baseline_total_space > 0 else 0.0, 4
+                ),
+                projected_space_share_pct=round(
+                    ((max(0.0, row["projected_space_units"]) / projected_total_space) * 100.0) if projected_total_space > 0 else 0.0, 4
+                ),
+                applied_discount_pct=round(discount_by_category.get(category, 0.0), 4),
+            )
+        )
+
+    return allocations, round(projected_total_revenue, 4), round(projected_total_margin_value, 4)
+
+
 def what_if_simulator(
     session: Session,
     *,
@@ -504,13 +711,12 @@ def what_if_simulator(
 ) -> ExecutiveWhatIfSimulatorResponse:
     explicit_store_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
     bounded_lookback = _bounded_lookback(lookback_days)
-    bounded_discount = max(0.0, min(float(discount_pct), 60.0))
-    bounded_shift = max(-40.0, min(float(floor_space_shift_pct), 40.0))
     normalized_brands = _normalized_brands(brands)
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=bounded_lookback)
     store_ids, resolved = _resolved_scope(session, store_query=store_query, store_id=store_id, store_ids=store_ids)
+    stores = _store_map(session, store_ids)
 
     sales = _category_sales(session, store_ids=store_ids, since=since, until=now, brands=normalized_brands)
     inventory = _category_inventory(session, store_ids=store_ids, brands=normalized_brands)
@@ -518,68 +724,59 @@ def what_if_simulator(
     baseline_margin_value = sum(row["margin_value"] for row in sales.values())
     baseline_margin_rate = (baseline_margin_value / baseline_revenue) if baseline_revenue > 0 else 0.0
 
-    discount_component_revenue = 0.0
-    discount_component_margin_value = 0.0
-    if bounded_discount > 0:
-        discount_fraction = bounded_discount / 100.0
-        target_category = from_category if from_category in sales else None
-        base_revenue = sales[target_category]["revenue"] if target_category else baseline_revenue
-        base_margin_rate = sales[target_category]["margin_rate"] if target_category else baseline_margin_rate
-        elasticity = 1.6
-        volume_lift = elasticity * discount_fraction
-        discounted_revenue = base_revenue * (1.0 - discount_fraction) * (1.0 + volume_lift)
-        discount_component_revenue = discounted_revenue - base_revenue
-        adjusted_margin_rate = max(0.0, base_margin_rate - discount_fraction * 0.9)
-        discount_component_margin_value = (discounted_revenue * adjusted_margin_rate) - (base_revenue * base_margin_rate)
-
-    space_component_revenue = 0.0
-    space_component_margin_value = 0.0
-    if (
-        bounded_shift != 0
-        and from_category
-        and to_category
-        and from_category != to_category
-        and from_category in sales
-        and to_category in sales
-    ):
-        direction = 1.0
-        src_category = from_category
-        dst_category = to_category
-        if bounded_shift < 0:
-            direction = -1.0
-            src_category = to_category
-            dst_category = from_category
-
-        shift_fraction = abs(bounded_shift) / 100.0
-        src_revenue = sales[src_category]["revenue"]
-        src_margin_rate = sales[src_category]["margin_rate"]
-        dst_margin_rate = sales[dst_category]["margin_rate"]
-        src_inventory = max(inventory.get(src_category, 0.0), 1.0)
-        dst_inventory = max(inventory.get(dst_category, 0.0), 1.0)
-        src_productivity = src_revenue / src_inventory
-        dst_productivity = sales[dst_category]["revenue"] / dst_inventory
-
-        realloc_revenue_base = src_revenue * shift_fraction
-        productivity_delta = (dst_productivity - src_productivity) / max(src_productivity, 1e-6)
-        # Apply only a portion of measured productivity spread to keep v1 conservative.
-        space_component_revenue = direction * realloc_revenue_base * productivity_delta * 0.35
-        effective_margin_rate = (dst_margin_rate - src_margin_rate) * 0.6 + src_margin_rate
-        space_component_margin_value = space_component_revenue * effective_margin_rate
-
-    expected_revenue = baseline_revenue + discount_component_revenue + space_component_revenue
-    expected_margin_value = baseline_margin_value + discount_component_margin_value + space_component_margin_value
+    category_allocations, expected_revenue, expected_margin_value = _project_category_allocations(
+        sales=sales,
+        inventory=inventory,
+        discount_pct=discount_pct,
+        floor_space_shift_pct=floor_space_shift_pct,
+        from_category=from_category,
+        to_category=to_category,
+    )
     expected_margin_rate = (expected_margin_value / expected_revenue) if expected_revenue > 0 else 0.0
 
     revenue_delta = expected_revenue - baseline_revenue
     margin_rate_delta = expected_margin_rate - baseline_margin_rate
+    bounded_discount = max(0.0, min(float(discount_pct), 60.0))
+    bounded_shift = max(-40.0, min(float(floor_space_shift_pct), 40.0))
     uncertainty = min(0.22, 0.06 + (bounded_discount * 0.003) + (abs(bounded_shift) * 0.0025))
     confidence_low = expected_revenue * (1.0 - uncertainty)
     confidence_high = expected_revenue * (1.0 + uncertainty)
 
+    store_allocations: list[ExecutiveWhatIfStoreAllocation] = []
+    if len(store_ids) == 1:
+        store_category_sales = _store_category_sales(
+            session,
+            store_ids=store_ids,
+            since=since,
+            until=now,
+            brands=normalized_brands,
+        )
+        store_category_inventory = _store_category_inventory(session, store_ids=store_ids, brands=normalized_brands)
+        sid = store_ids[0]
+        store = stores.get(sid)
+        if store is not None:
+            scoped_allocations, _, _ = _project_category_allocations(
+                sales=store_category_sales.get(sid, {}),
+                inventory=store_category_inventory.get(sid, {}),
+                discount_pct=discount_pct,
+                floor_space_shift_pct=floor_space_shift_pct,
+                from_category=from_category,
+                to_category=to_category,
+            )
+            store_allocations.append(
+                ExecutiveWhatIfStoreAllocation(
+                    store_id=sid,
+                    store_name=store.name,
+                    city=store.city,
+                    state=store.state,
+                    categories=scoped_allocations,
+                )
+            )
+
     scope_label = _scope_label(resolved=resolved, explicit_store_ids=explicit_store_ids)
     summary = (
         f"What-if simulation for {scope_label} over the last {bounded_lookback} days "
-        f"using discount and category-exposure proxy assumptions."
+        f"using discount and floor-space allocation assumptions."
     )
     return ExecutiveWhatIfSimulatorResponse(
         summary=summary,
@@ -593,20 +790,8 @@ def what_if_simulator(
         margin_rate_delta=round(margin_rate_delta, 4),
         confidence_interval_low=round(confidence_low, 4),
         confidence_interval_high=round(confidence_high, 4),
-        components=[
-            ExecutiveWhatIfComponent(
-                name="discount",
-                revenue_delta=round(discount_component_revenue, 4),
-                margin_rate_delta=round(discount_component_margin_value / baseline_revenue, 4) if baseline_revenue else 0.0,
-                rationale="Elasticity-based demand lift offset by price reduction.",
-            ),
-            ExecutiveWhatIfComponent(
-                name="floor_space_proxy",
-                revenue_delta=round(space_component_revenue, 4),
-                margin_rate_delta=round(space_component_margin_value / baseline_revenue, 4) if baseline_revenue else 0.0,
-                rationale="Category exposure shift estimated from revenue-per-inventory productivity spread.",
-            ),
-        ],
+        category_allocations=category_allocations,
+        store_allocations=store_allocations,
     )
 
 
