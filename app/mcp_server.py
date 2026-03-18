@@ -29,6 +29,8 @@ from app.schemas import (
     CustomerRecommendationResponse,
     CustomerResolutionResponse,
     CustomerSearchResponse,
+    CustomerValueSummaryRequest,
+    CustomerValueSummaryResponse,
     ExecutiveCampaignAutopilotDraftResponse,
     ExecutiveCampaignAutopilotSendResponse,
     ExecutiveEventReadinessRadarResponse,
@@ -56,6 +58,7 @@ from app.schemas import (
     MerchandisingRecommendationResponse,
     Objective,
     PeerMode,
+    PurchaseScope,
     PriceBand,
     RetrievalMode,
     RunReportResponse,
@@ -92,6 +95,7 @@ from app.services.loader import (
     reset_synthetic_tables,
 )
 from app.services.lookup import find_customers, resolve_customer, resolve_store
+from app.services.customer_value import customer_value_summary
 from app.services.executive import (
     campaign_autopilot_prepare,
     campaign_autopilot_send,
@@ -831,6 +835,34 @@ def fashion_find_customers(query: str, limit: int = 10) -> CustomerSearchRespons
     """Search customers by name, email, full phone, or phone last4 for associate workflows."""
     with SessionLocal() as db:
         return find_customers(db, query=query, limit=limit)
+
+
+@mcp.tool(
+    name="fashion_customer_value_summary",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_customer_value_summary(
+    customer_id: str,
+    lookback_days: int = 180,
+    forecast_weeks: int = 8,
+    purchase_scope: PurchaseScope = PurchaseScope.all_stores,
+) -> CustomerValueSummaryResponse:
+    """Return customer value metrics, history, and baseline spend projection."""
+    params = CustomerValueSummaryRequest(
+        customer_id=customer_id,
+        lookback_days=lookback_days,
+        forecast_weeks=forecast_weeks,
+        purchase_scope=purchase_scope,
+    )
+    with SessionLocal() as db:
+        return customer_value_summary(
+            db,
+            customer_id=params.customer_id,
+            lookback_days=params.lookback_days,
+            forecast_weeks=params.forecast_weeks,
+            purchase_scope=params.purchase_scope,
+        )
 
 
 def _customer_search_workspace_payload(

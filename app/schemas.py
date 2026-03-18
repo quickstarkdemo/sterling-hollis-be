@@ -285,6 +285,57 @@ class CustomerLookupResponse(BaseModel):
     candidates: list[CustomerSearchResult] = Field(default_factory=list)
 
 
+class PurchaseScope(str, Enum):
+    all_stores = "all_stores"
+
+
+class CustomerValueMetrics(BaseModel):
+    value_score: float
+    value_tier: str
+    lifetime_spend: float
+    lookback_spend: float
+    lifetime_orders: int
+    lookback_orders: int
+    aov: float
+    recency_days: float | None = None
+
+
+class CustomerValuePoint(BaseModel):
+    period_start: str
+    value_score: float
+
+
+class CustomerPurchasePoint(BaseModel):
+    period_start: str
+    spend: float
+    orders: int
+
+
+class CustomerForecastPoint(BaseModel):
+    period_start: str
+    projected_spend: float
+    low_spend: float
+    high_spend: float
+
+
+class CustomerValueSummaryRequest(BaseModel):
+    customer_id: str
+    lookback_days: int = Field(default=180, ge=30, le=730)
+    forecast_weeks: int = Field(default=8, ge=1, le=26)
+    purchase_scope: PurchaseScope = PurchaseScope.all_stores
+
+
+class CustomerValueSummaryResponse(BaseModel):
+    customer: ResolvedCustomer
+    lookback_days: int
+    forecast_weeks: int
+    purchase_scope: PurchaseScope
+    metrics: CustomerValueMetrics
+    value_series: list[CustomerValuePoint] = Field(default_factory=list)
+    purchase_series: list[CustomerPurchasePoint] = Field(default_factory=list)
+    forecast_series: list[CustomerForecastPoint] = Field(default_factory=list)
+
+
 class StoreAssociateRecommendationResponse(BaseModel):
     store: ResolvedStore
     customer: ResolvedCustomer

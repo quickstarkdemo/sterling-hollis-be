@@ -5,13 +5,22 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import Customer, CustomerCommunication, Order, OrderItem, Product, Store, SyntheticRun
-from app.schemas import CompareMode, CustomerRecommendationRequest, Objective, PeerMode, PriceBand, RetrievalMode, StyleConstraints
+from app.schemas import (
+    CompareMode,
+    CustomerRecommendationRequest,
+    Objective,
+    PeerMode,
+    PriceBand,
+    RetrievalMode,
+    StyleConstraints,
+)
 from app.services.communications import (
     customer_message_history,
     get_customer_email_draft,
@@ -26,6 +35,7 @@ from app.services.communications import (
 )
 from app.services.index_jobs import process_next_index_job
 from app.services.lookup import find_customers, resolve_customer, resolve_store
+from app.services.customer_value import customer_value_summary
 from app.services.merchandising import merchandising_action_recommendations, merchandising_diagnostics, merchandising_trend_summary
 from app.services.demo_customer import DEMO_CUSTOMER_ID
 
@@ -391,6 +401,111 @@ def test_customer_lookup_supports_name_email_and_phone(monkeypatch):
         assert store.id == "1001"
 
 
+def test_customer_value_summary_handles_empty_history(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+        now = datetime(2026, 3, 14, tzinfo=timezone.utc)
+        session.add(
+            Customer(
+                id="cust_000003",
+                seed_run_id="run_test",
+                home_store_id="1001",
+                first_name="No",
+                last_name="Orders",
+                email="no.orders@example-fashion.test",
+                phone_e164="+12145557777",
+                city="Dallas",
+                state="TX",
+                joined_at=now - timedelta(days=30),
+                loyalty_tier="bronze",
+                sex="male",
+                price_sensitivity=Decimal("0.5000"),
+                occasion_affinity={},
+                style_vector={},
+                size_preferences={},
+                channel_preference="in_store",
+                pii_token="token-3",
+            )
+        )
+        session.commit()
+
+        summary = customer_value_summary(session, customer_id="cust_000003", lookback_days=180, forecast_weeks=8)
+
+        assert summary.metrics.value_score == 0
+        assert summary.metrics.value_tier == "low"
+        assert summary.metrics.lifetime_spend == 0
+        assert summary.metrics.lookback_spend == 0
+        assert summary.metrics.lifetime_orders == 0
+        assert summary.metrics.lookback_orders == 0
+        assert summary.metrics.recency_days is None
+        assert summary.purchase_series
+        assert all(point.spend == 0 and point.orders == 0 for point in summary.purchase_series)
+        assert len(summary.forecast_series) == 8
+        assert all(point.projected_spend == 0 for point in summary.forecast_series)
+
+
+def test_customer_value_summary_excludes_returned_orders_and_uses_all_store_scope(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+        now = datetime(2026, 3, 14, tzinfo=timezone.utc)
+        session.add_all(
+            [
+                Order(
+                    id="order_cross_store",
+                    seed_run_id="run_test",
+                    customer_id="cust_000001",
+                    store_id="1002",
+                    ordered_at=now - timedelta(days=10),
+                    status="completed",
+                    occasion="workwear",
+                    channel="in_store",
+                    subtotal=Decimal("500.00"),
+                    discount_amount=Decimal("0.00"),
+                    tax_amount=Decimal("40.00"),
+                    total_amount=Decimal("540.00"),
+                    returned=False,
+                ),
+                Order(
+                    id="order_returned_should_skip",
+                    seed_run_id="run_test",
+                    customer_id="cust_000001",
+                    store_id="1001",
+                    ordered_at=now - timedelta(days=9),
+                    status="completed",
+                    occasion="workwear",
+                    channel="in_store",
+                    subtotal=Decimal("9000.00"),
+                    discount_amount=Decimal("0.00"),
+                    tax_amount=Decimal("0.00"),
+                    total_amount=Decimal("9000.00"),
+                    returned=True,
+                ),
+            ]
+        )
+        session.commit()
+
+        summary = customer_value_summary(session, customer_id="cust_000001", lookback_days=180, forecast_weeks=8)
+
+        assert summary.purchase_scope.value == "all_stores"
+        assert round(summary.metrics.lookback_spend, 2) == 2785.00
+        assert summary.metrics.lookback_orders == 3
+        assert round(summary.metrics.lifetime_spend, 2) == 2785.00
+        assert summary.metrics.lifetime_orders == 3
+
+
+def test_customer_value_summary_forecast_falls_back_with_sparse_history(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+
+        summary = customer_value_summary(session, customer_id="cust_000002", lookback_days=90, forecast_weeks=4)
+
+        assert len(summary.forecast_series) == 4
+        projected_values = {point.projected_spend for point in summary.forecast_series}
+        assert len(projected_values) == 1
+        assert all(point.low_spend == point.projected_spend for point in summary.forecast_series)
+        assert all(point.high_spend == point.projected_spend for point in summary.forecast_series)
+
+
 def test_recommendations_respect_customer_sex_and_preferences(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
@@ -724,6 +839,7 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert "<style>" in html
         assert "Customer Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
+        assert "chart.umd.min.js" in html
 
 
 def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
@@ -868,6 +984,33 @@ def test_open_customer_workspace_keeps_candidates_when_query_is_ambiguous(monkey
         assert len(payload["results"]) == 2
 
 
+def test_customer_value_summary_tool_returns_expected_payload_and_bounds(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_customer_value_summary(
+            customer_id="cust_000001",
+            lookback_days=180,
+            forecast_weeks=8,
+        )
+
+        assert response.customer.id == "cust_000001"
+        assert response.purchase_scope.value == "all_stores"
+        assert response.lookback_days == 180
+        assert response.forecast_weeks == 8
+        assert response.metrics.value_tier in {"low", "medium", "high"}
+        assert response.purchase_series
+        assert response.value_series
+        assert len(response.forecast_series) == 8
+
+        with pytest.raises(ValidationError):
+            mcp_server.fashion_customer_value_summary(
+                customer_id="cust_000001",
+                lookback_days=20,
+                forecast_weeks=8,
+            )
+
+
 def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
@@ -888,6 +1031,7 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_update_customer_email_draft" in tool_names
         assert "fashion_get_customer_email_draft" in tool_names
         assert "fashion_send_customer_email_draft" in tool_names
+        assert "fashion_customer_value_summary" in tool_names
 
         removed_tools = {
             "fashion_associate_workspace_bootstrap",

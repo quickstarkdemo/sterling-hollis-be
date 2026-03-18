@@ -4,6 +4,8 @@ const MODEL_CONTEXT_SUBJECT_MAX_CHARS = 200;
 const MODEL_CONTEXT_BODY_MAX_CHARS = 2000;
 const MODEL_CONTEXT_UPDATE_DEBOUNCE_MS = 600;
 const DRAFT_POLL_INTERVAL_MS = 3500;
+const CUSTOMER_VALUE_LOOKBACK_OPTIONS = ["90", "180", "365"];
+const CUSTOMER_VALUE_FORECAST_OPTIONS = ["4", "8", "12"];
 
 const state = {
   payload: {
@@ -50,6 +52,17 @@ const state = {
     seedAttemptedCustomerId: null,
     seedAttemptedDraftCustomerId: null,
   },
+  analytics: {
+    customerId: null,
+    response: null,
+    error: "",
+    isLoading: false,
+    lookbackDays: "180",
+    forecastWeeks: "8",
+    loadedKey: null,
+    requestedKey: null,
+    chartCleanupFns: [],
+  },
   runtime: {
     toolOutputApplied: false,
     userInteracted: false,
@@ -71,6 +84,34 @@ function clone(value) {
     return value;
   }
   return JSON.parse(JSON.stringify(value));
+}
+
+function parsePositiveInt(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  const rounded = Math.round(parsed);
+  return Math.max(min, Math.min(max, rounded));
+}
+
+function registerAnalyticsChartCleanup(cleanup) {
+  if (typeof cleanup !== "function") {
+    return;
+  }
+  state.analytics.chartCleanupFns.push(cleanup);
+}
+
+function teardownAnalyticsCharts() {
+  const cleanups = Array.isArray(state.analytics.chartCleanupFns) ? [...state.analytics.chartCleanupFns] : [];
+  state.analytics.chartCleanupFns = [];
+  cleanups.forEach((cleanup) => {
+    try {
+      cleanup();
+    } catch {
+      // Best-effort cleanup.
+    }
+  });
 }
 
 function normalizeProductIds(raw) {
@@ -267,6 +308,22 @@ function applyUiWidgetState(raw) {
       changed = true;
     }
   }
+  if (typeof raw.customerValueLookbackDays === "string") {
+    const nextLookback = String(parsePositiveInt(raw.customerValueLookbackDays, 180, 30, 730));
+    if (nextLookback !== state.analytics.lookbackDays) {
+      state.analytics.lookbackDays = nextLookback;
+      state.analytics.loadedKey = null;
+      changed = true;
+    }
+  }
+  if (typeof raw.customerValueForecastWeeks === "string") {
+    const nextForecast = String(parsePositiveInt(raw.customerValueForecastWeeks, 8, 1, 26));
+    if (nextForecast !== state.analytics.forecastWeeks) {
+      state.analytics.forecastWeeks = nextForecast;
+      state.analytics.loadedKey = null;
+      changed = true;
+    }
+  }
   return changed;
 }
 
@@ -305,6 +362,12 @@ function loadWidgetState() {
   if (Array.isArray(widgetState.selectedProductIds)) {
     state.recommendation.selectedProductIds = normalizeProductIds(widgetState.selectedProductIds);
   }
+  if (typeof widgetState.customerValueLookbackDays === "string") {
+    state.analytics.lookbackDays = String(parsePositiveInt(widgetState.customerValueLookbackDays, 180, 30, 730));
+  }
+  if (typeof widgetState.customerValueForecastWeeks === "string") {
+    state.analytics.forecastWeeks = String(parsePositiveInt(widgetState.customerValueForecastWeeks, 8, 1, 26));
+  }
 }
 
 function persistWidgetState() {
@@ -324,6 +387,8 @@ function persistWidgetState() {
       emailDraftId: state.ui.emailDraftId,
       styleConstraints: state.ui.styleConstraints,
       selectedProductIds: state.recommendation.selectedProductIds,
+      customerValueLookbackDays: state.analytics.lookbackDays,
+      customerValueForecastWeeks: state.analytics.forecastWeeks,
     });
   } catch {
     // Best-effort only.
@@ -334,6 +399,8 @@ function persistWidgetState() {
 function buildModelContextPayload() {
   const results = Array.isArray(state.payload.results) ? state.payload.results : [];
   const selected = selectedCustomer(results);
+  const analyticsResponse =
+    state.analytics.response && state.analytics.customerId === selected?.id ? state.analytics.response : null;
   const draftSubject = truncateForModelContext(state.ui.emailSubject, MODEL_CONTEXT_SUBJECT_MAX_CHARS);
   const draftBody = truncateForModelContext(state.ui.emailBody, MODEL_CONTEXT_BODY_MAX_CHARS);
   const emailTo = (state.ui.emailTo || selected?.email || "").trim();
@@ -353,6 +420,10 @@ function buildModelContextPayload() {
     email_draft_body_truncated: draftBody.truncated,
     email_draft_body_length: draftBody.length,
     email_draft_body_hash: stableTextHash(state.ui.emailBody),
+    customer_value_lookback_days: parsePositiveInt(state.analytics.lookbackDays, 180, 30, 730),
+    customer_value_forecast_weeks: parsePositiveInt(state.analytics.forecastWeeks, 8, 1, 26),
+    customer_value_score: analyticsResponse?.metrics?.value_score ?? null,
+    customer_value_tier: analyticsResponse?.metrics?.value_tier ?? null,
   };
 }
 
@@ -472,6 +543,56 @@ function money(value) {
   return `$${numberValue.toFixed(2)}`;
 }
 
+function compactNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return String(value);
+  }
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: Math.abs(numeric) >= 1000 ? 0 : 2,
+  }).format(numeric);
+}
+
+function formatCurrencyCompact(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(numeric);
+}
+
+function formatDateLabel(value, withYear = false) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "-";
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: withYear ? "numeric" : undefined,
+  }).format(parsed);
+}
+
+function kpi(label, value) {
+  return el(
+    "div",
+    { className: "fw-kpi" },
+    el("span", { className: "fw-kpi-label", text: label }),
+    el("strong", { className: "fw-kpi-value", text: value }),
+  );
+}
+
 function humanizeToken(value) {
   if (value === null || value === undefined) {
     return "";
@@ -546,6 +667,16 @@ function parseBudgetMax(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function clearAnalyticsState() {
+  teardownAnalyticsCharts();
+  state.analytics.customerId = null;
+  state.analytics.response = null;
+  state.analytics.error = "";
+  state.analytics.isLoading = false;
+  state.analytics.loadedKey = null;
+  state.analytics.requestedKey = null;
+}
+
 function clearRecommendationState() {
   state.recommendation.customerId = null;
   state.recommendation.response = null;
@@ -577,6 +708,7 @@ function selectCustomerId(customerId, options = {}) {
       state.ui.styleConstraints = null;
     }
     clearRecommendationState();
+    clearAnalyticsState();
   }
   if (collapseResults) {
     state.ui.resultsExpanded = false;
@@ -589,6 +721,7 @@ function resolveRowSelection(results) {
     state.ui.selectedCustomerId = null;
     state.ui.resultsExpanded = false;
     clearRecommendationState();
+    clearAnalyticsState();
     return;
   }
   if (state.ui.selectedCustomerId && results.some((customer) => customer.id === state.ui.selectedCustomerId)) {
@@ -662,6 +795,7 @@ async function runSearch() {
     state.ui.selectedCustomerId = null;
     state.ui.resultsExpanded = false;
     state.ui.emailTo = "";
+    clearAnalyticsState();
   }
 
   persistWidgetState();
@@ -797,6 +931,213 @@ function parseJsonContentPayload(raw) {
   } catch {
     return null;
   }
+}
+
+function customerValueLookbackDays() {
+  return parsePositiveInt(state.analytics.lookbackDays, 180, 30, 730);
+}
+
+function customerValueForecastWeeks() {
+  return parsePositiveInt(state.analytics.forecastWeeks, 8, 1, 26);
+}
+
+function customerValueRequestKey(customerId, lookbackDays, forecastWeeks) {
+  return `${customerId}|${lookbackDays}|${forecastWeeks}`;
+}
+
+function normalizeCustomerValueSummaryResponse(raw) {
+  if (isObject(raw?.structuredContent)) {
+    return normalizeCustomerValueSummaryResponse(raw.structuredContent);
+  }
+  if (!isObject(raw)) {
+    return null;
+  }
+  if (!isObject(raw.customer) || !isObject(raw.metrics)) {
+    const parsed = parseJsonContentPayload(raw);
+    if (parsed) {
+      return normalizeCustomerValueSummaryResponse(parsed);
+    }
+    return null;
+  }
+
+  const normalizeDatePoint = (point) => {
+    if (!isObject(point)) {
+      return null;
+    }
+    const periodStart = typeof point.period_start === "string" ? point.period_start : "";
+    if (!periodStart) {
+      return null;
+    }
+    return periodStart;
+  };
+
+  const valueSeries = Array.isArray(raw.value_series)
+    ? raw.value_series
+        .map((point) => {
+          const periodStart = normalizeDatePoint(point);
+          if (!periodStart) {
+            return null;
+          }
+          const score = Number(point.value_score);
+          return {
+            period_start: periodStart,
+            value_score: Number.isFinite(score) ? score : null,
+          };
+        })
+        .filter((point) => point && point.value_score !== null)
+    : [];
+
+  const purchaseSeries = Array.isArray(raw.purchase_series)
+    ? raw.purchase_series
+        .map((point) => {
+          const periodStart = normalizeDatePoint(point);
+          if (!periodStart) {
+            return null;
+          }
+          const spend = Number(point.spend);
+          const orders = Number(point.orders);
+          return {
+            period_start: periodStart,
+            spend: Number.isFinite(spend) ? spend : 0,
+            orders: Number.isFinite(orders) ? Math.max(0, Math.round(orders)) : 0,
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  const forecastSeries = Array.isArray(raw.forecast_series)
+    ? raw.forecast_series
+        .map((point) => {
+          const periodStart = normalizeDatePoint(point);
+          if (!periodStart) {
+            return null;
+          }
+          const projected = Number(point.projected_spend);
+          const low = Number(point.low_spend);
+          const high = Number(point.high_spend);
+          return {
+            period_start: periodStart,
+            projected_spend: Number.isFinite(projected) ? projected : 0,
+            low_spend: Number.isFinite(low) ? low : 0,
+            high_spend: Number.isFinite(high) ? high : 0,
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  const metrics = {
+    value_score: Number.isFinite(Number(raw.metrics.value_score)) ? Number(raw.metrics.value_score) : 0,
+    value_tier: typeof raw.metrics.value_tier === "string" ? raw.metrics.value_tier : "low",
+    lifetime_spend: Number.isFinite(Number(raw.metrics.lifetime_spend)) ? Number(raw.metrics.lifetime_spend) : 0,
+    lookback_spend: Number.isFinite(Number(raw.metrics.lookback_spend)) ? Number(raw.metrics.lookback_spend) : 0,
+    lifetime_orders: Number.isFinite(Number(raw.metrics.lifetime_orders)) ? Math.max(0, Math.round(Number(raw.metrics.lifetime_orders))) : 0,
+    lookback_orders: Number.isFinite(Number(raw.metrics.lookback_orders)) ? Math.max(0, Math.round(Number(raw.metrics.lookback_orders))) : 0,
+    aov: Number.isFinite(Number(raw.metrics.aov)) ? Number(raw.metrics.aov) : 0,
+    recency_days:
+      raw.metrics.recency_days === null || raw.metrics.recency_days === undefined
+        ? null
+        : Number.isFinite(Number(raw.metrics.recency_days))
+          ? Number(raw.metrics.recency_days)
+          : null,
+  };
+
+  return {
+    customer: clone(raw.customer),
+    lookback_days: parsePositiveInt(raw.lookback_days, 180, 30, 730),
+    forecast_weeks: parsePositiveInt(raw.forecast_weeks, 8, 1, 26),
+    purchase_scope: typeof raw.purchase_scope === "string" ? raw.purchase_scope : "all_stores",
+    metrics,
+    value_series: valueSeries,
+    purchase_series: purchaseSeries,
+    forecast_series: forecastSeries,
+  };
+}
+
+async function loadCustomerValueSummary(selected, options = {}) {
+  if (!selected || !selected.id) {
+    return;
+  }
+  const lookbackDays = customerValueLookbackDays();
+  const forecastWeeks = customerValueForecastWeeks();
+  const requestKey = customerValueRequestKey(selected.id, lookbackDays, forecastWeeks);
+  if (state.analytics.isLoading && state.analytics.requestedKey === requestKey) {
+    return;
+  }
+  const quiet = options.quiet === true;
+  state.analytics.isLoading = true;
+  state.analytics.error = "";
+  state.analytics.requestedKey = requestKey;
+  if (!quiet) {
+    setNotice("Loading customer value analytics...");
+  }
+  render();
+
+  const result = await callTool("fashion_customer_value_summary", {
+    customer_id: selected.id,
+    lookback_days: lookbackDays,
+    forecast_weeks: forecastWeeks,
+    purchase_scope: "all_stores",
+  });
+
+  if (state.analytics.requestedKey !== requestKey || state.ui.selectedCustomerId !== selected.id) {
+    return;
+  }
+  state.analytics.isLoading = false;
+  if (result.__toolError) {
+    state.analytics.error = result.__toolError;
+    state.analytics.response = null;
+    state.analytics.loadedKey = null;
+    if (!quiet) {
+      setNotice(result.__toolError, "error");
+    }
+    render();
+    return;
+  }
+
+  const response = normalizeCustomerValueSummaryResponse(result);
+  if (!response) {
+    state.analytics.error = "Customer value tool returned an unexpected payload.";
+    state.analytics.response = null;
+    state.analytics.loadedKey = null;
+    if (!quiet) {
+      setNotice(state.analytics.error, "error");
+    }
+    render();
+    return;
+  }
+
+  state.analytics.customerId = selected.id;
+  state.analytics.response = response;
+  state.analytics.error = "";
+  state.analytics.loadedKey = requestKey;
+  if (!quiet) {
+    setNotice(`Loaded customer value analytics for ${selected.full_name || selected.id}.`);
+  }
+  render();
+}
+
+function queueSeedCustomerValue(selected) {
+  if (!selected || !selected.id) {
+    return;
+  }
+  const lookbackDays = customerValueLookbackDays();
+  const forecastWeeks = customerValueForecastWeeks();
+  const requestKey = customerValueRequestKey(selected.id, lookbackDays, forecastWeeks);
+  if (state.analytics.loadedKey === requestKey || state.analytics.requestedKey === requestKey || state.analytics.isLoading) {
+    return;
+  }
+  state.analytics.requestedKey = requestKey;
+  window.setTimeout(() => {
+    const activeSelected = selectedCustomer(Array.isArray(state.payload.results) ? state.payload.results : []);
+    if (!activeSelected || activeSelected.id !== selected.id) {
+      return;
+    }
+    const activeKey = customerValueRequestKey(activeSelected.id, customerValueLookbackDays(), customerValueForecastWeeks());
+    if (activeKey !== requestKey) {
+      return;
+    }
+    void loadCustomerValueSummary(activeSelected, { quiet: true });
+  }, 0);
 }
 
 function normalizeRecommendationResponse(raw) {
@@ -1581,7 +1922,360 @@ function recommendationCards(response) {
   });
 }
 
+function renderCustomerValuePanel(selected) {
+  if (!selected) {
+    return null;
+  }
+  const response = state.analytics.customerId === selected.id ? state.analytics.response : null;
+  const metrics = response?.metrics || null;
+  const valueSeries = Array.isArray(response?.value_series) ? response.value_series : [];
+  const purchaseSeries = Array.isArray(response?.purchase_series) ? response.purchase_series : [];
+  const forecastSeries = Array.isArray(response?.forecast_series) ? response.forecast_series : [];
+  const hasChartJs = typeof window?.Chart === "function";
+  const panel = el(
+    "section",
+    { className: "fw-panel fw-customer-value-panel" },
+    el(
+      "div",
+      { className: "fw-section-head" },
+      el(
+        "div",
+        {},
+        el("h2", { className: "fw-panel-title", text: "Customer Value" }),
+        el("p", { className: "fw-empty", text: "All-store purchase history with weekly value trend and baseline projection." }),
+      ),
+      el(
+        "div",
+        { className: "fw-customer-value-controls" },
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Lookback" }),
+          el(
+            "select",
+            {
+              className: "fw-input fw-select",
+              value: state.analytics.lookbackDays,
+              onChange: (event) => {
+                markUserInteraction();
+                state.analytics.lookbackDays = String(parsePositiveInt(event.target.value, 180, 30, 730));
+                state.analytics.loadedKey = null;
+                state.analytics.requestedKey = null;
+                persistWidgetState();
+                render();
+              },
+            },
+            ...CUSTOMER_VALUE_LOOKBACK_OPTIONS.map((option) =>
+              el("option", { value: option, selected: state.analytics.lookbackDays === option ? "true" : null, text: `${option} days` }),
+            ),
+          ),
+        ),
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Forecast" }),
+          el(
+            "select",
+            {
+              className: "fw-input fw-select",
+              value: state.analytics.forecastWeeks,
+              onChange: (event) => {
+                markUserInteraction();
+                state.analytics.forecastWeeks = String(parsePositiveInt(event.target.value, 8, 1, 26));
+                state.analytics.loadedKey = null;
+                state.analytics.requestedKey = null;
+                persistWidgetState();
+                render();
+              },
+            },
+            ...CUSTOMER_VALUE_FORECAST_OPTIONS.map((option) =>
+              el("option", { value: option, selected: state.analytics.forecastWeeks === option ? "true" : null, text: `${option} weeks` }),
+            ),
+          ),
+        ),
+        el(
+          "button",
+          {
+            className: "fw-button secondary",
+            type: "button",
+            disabled: state.analytics.isLoading ? "true" : null,
+            onClick: () => {
+              markUserInteraction();
+              state.analytics.loadedKey = null;
+              state.analytics.requestedKey = null;
+              void loadCustomerValueSummary(selected);
+            },
+          },
+          state.analytics.isLoading ? "Refreshing..." : "Refresh Value",
+        ),
+      ),
+    ),
+  );
+
+  if (state.analytics.error) {
+    panel.appendChild(el("p", { className: "fw-empty", text: state.analytics.error }));
+  }
+
+  if (!response) {
+    panel.appendChild(
+      el(
+        "p",
+        {
+          className: "fw-empty",
+          text: state.analytics.isLoading
+            ? "Loading customer value analytics..."
+            : "Value analytics will load when a customer is selected.",
+        },
+      ),
+    );
+    return panel;
+  }
+
+  const tierText = String(metrics?.value_tier || "low").replace(/_/g, " ");
+  panel.appendChild(
+    el(
+      "div",
+      { className: "fw-kpi-strip fw-customer-value-kpis" },
+      kpi("Value Score", compactNumber(metrics?.value_score)),
+      kpi("Value Tier", tierText),
+      kpi("Lookback Spend", formatCurrencyCompact(metrics?.lookback_spend)),
+      kpi("Lookback Orders", compactNumber(metrics?.lookback_orders)),
+      kpi("Lifetime Spend", formatCurrencyCompact(metrics?.lifetime_spend)),
+      kpi("AOV", formatCurrencyCompact(metrics?.aov)),
+      kpi("Recency (days)", metrics?.recency_days === null || metrics?.recency_days === undefined ? "-" : compactNumber(metrics.recency_days)),
+    ),
+  );
+
+  if (!hasChartJs) {
+    panel.appendChild(el("p", { className: "fw-empty", text: "Chart.js unavailable in this host. KPI summary remains available." }));
+    return panel;
+  }
+
+  const chartsWrap = el(
+    "div",
+    { className: "fw-customer-value-charts" },
+    el(
+      "section",
+      { className: "fw-panel fw-customer-chart-panel" },
+      el("h3", { className: "fw-panel-title", text: "Value Score Trend" }),
+      el(
+        "div",
+        { className: "fw-merch-chart-wrap" },
+        el("canvas", { className: "fw-merch-chart-canvas fw-customer-chart-canvas", "data-role": "customer-value-score-chart" }),
+      ),
+    ),
+    el(
+      "section",
+      { className: "fw-panel fw-customer-chart-panel" },
+      el("h3", { className: "fw-panel-title", text: "Past Purchases" }),
+      el(
+        "div",
+        { className: "fw-merch-chart-wrap" },
+        el("canvas", { className: "fw-merch-chart-canvas fw-customer-chart-canvas", "data-role": "customer-purchase-history-chart" }),
+      ),
+    ),
+    el(
+      "section",
+      { className: "fw-panel fw-customer-chart-panel" },
+      el("h3", { className: "fw-panel-title", text: "Baseline Spend Projection" }),
+      el(
+        "div",
+        { className: "fw-merch-chart-wrap" },
+        el("canvas", { className: "fw-merch-chart-canvas fw-customer-chart-canvas", "data-role": "customer-forecast-chart" }),
+      ),
+    ),
+  );
+  panel.appendChild(chartsWrap);
+
+  const ChartCtor = window.Chart;
+  const baseChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+    },
+  };
+
+  const valueCanvas = panel.querySelector("[data-role='customer-value-score-chart']");
+  if (valueCanvas) {
+    const labels = valueSeries.map((point) => formatDateLabel(point.period_start, false));
+    const data = valueSeries.map((point) => point.value_score);
+    const chart = new ChartCtor(valueCanvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            data,
+            borderColor: "#1f5d8f",
+            backgroundColor: "rgba(31,93,143,0.12)",
+            fill: true,
+            pointRadius: 2.2,
+            pointHoverRadius: 3.8,
+            borderWidth: 2.2,
+            tension: 0.3,
+          },
+        ],
+      },
+      options: {
+        ...baseChartOptions,
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+            grid: { color: "#e4edf6" },
+            ticks: { color: "#617386" },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: "#617386", maxTicksLimit: 4, autoSkip: true },
+          },
+        },
+      },
+    });
+    registerAnalyticsChartCleanup(() => chart.destroy());
+  }
+
+  const purchaseCanvas = panel.querySelector("[data-role='customer-purchase-history-chart']");
+  if (purchaseCanvas) {
+    const labels = purchaseSeries.map((point) => formatDateLabel(point.period_start, false));
+    const spendValues = purchaseSeries.map((point) => point.spend);
+    const orderValues = purchaseSeries.map((point) => point.orders);
+    const chart = new ChartCtor(purchaseCanvas.getContext("2d"), {
+      data: {
+        labels,
+        datasets: [
+          {
+            type: "bar",
+            label: "Orders",
+            data: orderValues,
+            yAxisID: "y1",
+            backgroundColor: "rgba(125,142,159,0.6)",
+            borderRadius: 4,
+            borderSkipped: false,
+          },
+          {
+            type: "line",
+            label: "Spend",
+            data: spendValues,
+            yAxisID: "y",
+            borderColor: "#1f5d8f",
+            backgroundColor: "rgba(31,93,143,0.08)",
+            fill: false,
+            pointRadius: 2.1,
+            pointHoverRadius: 3.5,
+            borderWidth: 2.0,
+            tension: 0.24,
+          },
+        ],
+      },
+      options: {
+        ...baseChartOptions,
+        scales: {
+          y: {
+            grid: { color: "#e4edf6" },
+            ticks: { color: "#617386", callback: (value) => formatCurrencyCompact(value) },
+          },
+          y1: {
+            position: "right",
+            grid: { drawOnChartArea: false },
+            ticks: { color: "#617386" },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: "#617386", maxTicksLimit: 4, autoSkip: true },
+          },
+        },
+      },
+    });
+    registerAnalyticsChartCleanup(() => chart.destroy());
+  }
+
+  const forecastCanvas = panel.querySelector("[data-role='customer-forecast-chart']");
+  if (forecastCanvas) {
+    const historyPoints = purchaseSeries.slice(-12);
+    const labels = [
+      ...historyPoints.map((point) => formatDateLabel(point.period_start, false)),
+      ...forecastSeries.map((point) => formatDateLabel(point.period_start, false)),
+    ];
+    const historyData = [...historyPoints.map((point) => point.spend), ...forecastSeries.map(() => null)];
+    const projectedData = [...historyPoints.map(() => null), ...forecastSeries.map((point) => point.projected_spend)];
+    const lowData = [...historyPoints.map(() => null), ...forecastSeries.map((point) => point.low_spend)];
+    const highData = [...historyPoints.map(() => null), ...forecastSeries.map((point) => point.high_spend)];
+    const chart = new ChartCtor(forecastCanvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Historical Spend",
+            data: historyData,
+            borderColor: "#7d8e9f",
+            borderWidth: 1.8,
+            pointRadius: 2,
+            pointHoverRadius: 3.2,
+            tension: 0.24,
+            spanGaps: true,
+          },
+          {
+            label: "Projected Spend",
+            data: projectedData,
+            borderColor: "#1f5d8f",
+            backgroundColor: "rgba(31,93,143,0.1)",
+            borderWidth: 2.2,
+            pointRadius: 2.2,
+            pointHoverRadius: 3.4,
+            tension: 0.24,
+            spanGaps: true,
+          },
+          {
+            label: "Low Band",
+            data: lowData,
+            borderColor: "#aab9c8",
+            borderDash: [5, 4],
+            borderWidth: 1.2,
+            pointRadius: 0,
+            tension: 0.2,
+            spanGaps: true,
+          },
+          {
+            label: "High Band",
+            data: highData,
+            borderColor: "#aab9c8",
+            borderDash: [5, 4],
+            borderWidth: 1.2,
+            pointRadius: 0,
+            tension: 0.2,
+            spanGaps: true,
+          },
+        ],
+      },
+      options: {
+        ...baseChartOptions,
+        plugins: {
+          legend: { display: true, labels: { boxWidth: 10, color: "#576b7f" } },
+        },
+        scales: {
+          y: {
+            grid: { color: "#e4edf6" },
+            ticks: { color: "#617386", callback: (value) => formatCurrencyCompact(value) },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: "#617386", maxTicksLimit: 5, autoSkip: true },
+          },
+        },
+      },
+    });
+    registerAnalyticsChartCleanup(() => chart.destroy());
+  }
+
+  return panel;
+}
+
 function render() {
+  teardownAnalyticsCharts();
   const container = clear(root);
   const results = Array.isArray(state.payload.results) ? state.payload.results : [];
   resolveRowSelection(results);
@@ -1810,6 +2504,7 @@ function render() {
         el("h2", { className: "fw-panel-title", text: "Selected Customer" }),
         el("p", { className: "fw-empty", text: "Pick a result to inspect details here." }),
       );
+  const customerValuePanel = renderCustomerValuePanel(selected);
 
   const recommendationPanel = selected
     ? (() => {
@@ -2039,10 +2734,12 @@ function render() {
         resultList,
       ),
       detailPanel,
+      customerValuePanel,
       recommendationPanel,
     ),
   );
   if (selected) {
+    queueSeedCustomerValue(selected);
     queueSeedRecommendations(selected);
     queueHydrateInitialEmailDraft(selected);
     queueSeedEmailDraft(selected);
@@ -2111,6 +2808,7 @@ window.addEventListener(
   "beforeunload",
   () => {
     stopDraftPolling();
+    teardownAnalyticsCharts();
   },
   { passive: true },
 );

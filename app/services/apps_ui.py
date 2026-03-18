@@ -79,7 +79,7 @@ def render_widget_html(
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
     vendor_script = (
         f'<script src="{html.escape(asset_base)}/vendor/chart.umd.min.js"></script>'
-        if kind in {"merch_workspace", "exec_workspace"}
+        if kind in {"customer_search_workspace", "merch_workspace", "exec_workspace"}
         else ""
     )
     build_version = settings.app_build_version or "dev"

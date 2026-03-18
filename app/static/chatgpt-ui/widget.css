@@ -814,6 +814,43 @@ body {
   height: 170px;
 }
 
+.fw-customer-value-panel {
+  gap: 10px;
+}
+
+.fw-customer-value-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.fw-customer-value-controls .fw-field {
+  min-width: 124px;
+}
+
+.fw-customer-value-controls .fw-input {
+  min-width: 0;
+}
+
+.fw-customer-value-kpis .fw-kpi-value {
+  font-size: 15px;
+}
+
+.fw-customer-value-charts {
+  display: grid;
+  gap: 10px;
+}
+
+.fw-customer-chart-panel {
+  gap: 8px;
+  background: #fcfdff;
+}
+
+.fw-customer-chart-canvas {
+  height: 170px;
+}
+
 .fw-merch-trend-tooltip {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -1341,6 +1378,19 @@ body {
   }
 
   .fw-merch-diag-chart-wrap .fw-merch-chart-canvas {
+    height: 150px;
+  }
+
+  .fw-customer-value-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .fw-customer-value-controls .fw-field {
+    min-width: 0;
+  }
+
+  .fw-customer-chart-canvas {
     height: 150px;
   }
 
