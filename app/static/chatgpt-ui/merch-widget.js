@@ -16,6 +16,7 @@ const DEFAULT_PAYLOAD = {
     compare_mode: "peer_and_prior_period",
     peer_mode: "state_and_profile",
     compare_store_id: null,
+    compare_store_ids: [],
     top_k: 9,
   },
   initial_result: null,
@@ -50,6 +51,7 @@ const state = {
     compareMode: "peer_and_prior_period",
     peerMode: "state_and_profile",
     compareStoreId: "",
+    compareStoreIds: [],
     topK: "9",
     csvText: "",
     notice: "",
@@ -215,6 +217,19 @@ function normalizeCompareStoreOptions(raw) {
   return options.length ? options : defaults;
 }
 
+function normalizeSelectionList(raw) {
+  const source = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",") : [];
+  const values = [];
+  source.forEach((item) => {
+    const token = String(item || "").trim();
+    if (!token || values.includes(token)) {
+      return;
+    }
+    values.push(token);
+  });
+  return values;
+}
+
 function parseJsonContentPayload(raw) {
   if (!raw || !Array.isArray(raw.content)) {
     return null;
@@ -253,6 +268,16 @@ function normalizeWorkspacePayload(raw) {
   }
 
   const rawFilters = isObject(raw.filters) ? raw.filters : {};
+  const explicitCompareStoreIds = normalizeSelectionList(rawFilters.compare_store_ids);
+  const legacyCompareStoreId =
+    typeof rawFilters.compare_store_id === "string" && rawFilters.compare_store_id.trim()
+      ? rawFilters.compare_store_id.trim()
+      : null;
+  const normalizedCompareStoreIds = explicitCompareStoreIds.length
+    ? explicitCompareStoreIds
+    : legacyCompareStoreId
+      ? normalizeSelectionList(legacyCompareStoreId)
+      : [];
   const initialResult =
     isObject(raw.initial_result) ? clone(raw.initial_result) : isObject(raw.initialResult) ? clone(raw.initialResult) : null;
   const lastResult =
@@ -273,7 +298,8 @@ function normalizeWorkspacePayload(raw) {
           : 90,
       compare_mode: typeof rawFilters.compare_mode === "string" ? rawFilters.compare_mode : "peer_and_prior_period",
       peer_mode: typeof rawFilters.peer_mode === "string" ? rawFilters.peer_mode : "state_and_profile",
-      compare_store_id: typeof rawFilters.compare_store_id === "string" ? rawFilters.compare_store_id : null,
+      compare_store_id: normalizedCompareStoreIds[0] || null,
+      compare_store_ids: normalizedCompareStoreIds,
       top_k:
         Number.isFinite(Number(rawFilters.top_k)) && Number(rawFilters.top_k) > 0
           ? Number(rawFilters.top_k)
@@ -371,7 +397,12 @@ function hydrateUiFromFilters(filters) {
   state.ui.lookbackPreset = presetFromLookbackDays(filters.lookback_days);
   state.ui.compareMode = typeof filters.compare_mode === "string" ? filters.compare_mode : "peer_and_prior_period";
   state.ui.peerMode = typeof filters.peer_mode === "string" ? filters.peer_mode : "state_and_profile";
-  state.ui.compareStoreId = typeof filters.compare_store_id === "string" ? filters.compare_store_id : "";
+  const compareStoreIds = normalizeSelectionList(filters.compare_store_ids);
+  if (!compareStoreIds.length && typeof filters.compare_store_id === "string") {
+    compareStoreIds.push(...normalizeSelectionList(filters.compare_store_id));
+  }
+  state.ui.compareStoreIds = compareStoreIds;
+  state.ui.compareStoreId = compareStoreIds[0] || "";
   state.ui.topK = String(filters.top_k || 9);
 }
 
@@ -391,7 +422,6 @@ function applyUiWidgetState(raw) {
     "lookbackDays",
     "compareMode",
     "peerMode",
-    "compareStoreId",
     "topK",
     "csvText",
   ];
@@ -405,6 +435,22 @@ function applyUiWidgetState(raw) {
     const derivedPreset = presetFromLookbackDays(raw.lookbackDays);
     if (derivedPreset !== state.ui.lookbackPreset) {
       state.ui.lookbackPreset = derivedPreset;
+      changed = true;
+    }
+  }
+  const compareStoreIdsInput =
+    Array.isArray(raw.compareStoreIds) || typeof raw.compareStoreIds === "string"
+      ? raw.compareStoreIds
+      : typeof raw.compareStoreId === "string"
+        ? raw.compareStoreId
+        : null;
+  if (compareStoreIdsInput !== null) {
+    const normalized = normalizeSelectionList(compareStoreIdsInput);
+    const normalizedSerialized = normalized.join("|");
+    const existingSerialized = normalizeSelectionList(state.ui.compareStoreIds).join("|");
+    if (normalizedSerialized !== existingSerialized) {
+      state.ui.compareStoreIds = normalized;
+      state.ui.compareStoreId = normalized[0] || "";
       changed = true;
     }
   }
@@ -440,6 +486,7 @@ function persistWidgetState() {
       compareMode: state.ui.compareMode,
       peerMode: state.ui.peerMode,
       compareStoreId: state.ui.compareStoreId,
+      compareStoreIds: clone(state.ui.compareStoreIds),
       topK: state.ui.topK,
       csvText: state.ui.csvText,
       lastTool: state.payload.last_tool,
@@ -572,6 +619,7 @@ function stableTextHash(raw) {
 
 function buildModelContextPayload() {
   const active = activeResult();
+  const compareStoreIds = normalizeSelectionList(state.ui.compareStoreIds);
   return {
     workspace: "merch_workspace",
     store_id: state.payload.store?.id || null,
@@ -586,7 +634,8 @@ function buildModelContextPayload() {
     lookback_days: Number(normalizeLookbackDays(state.ui.lookbackDays)),
     compare_mode: state.ui.compareMode,
     peer_mode: state.ui.peerMode,
-    compare_store_id: state.ui.compareStoreId || null,
+    compare_store_id: compareStoreIds[0] || null,
+    compare_store_ids: compareStoreIds,
     top_k: Number(state.ui.topK || 9),
     row_count: rowCountForResult(active),
     csv_hash: stableTextHash(state.ui.csvText),
@@ -742,6 +791,7 @@ function parsePositiveInt(value, fallback, min, max) {
 }
 
 function currentFilters() {
+  const compareStoreIds = normalizeSelectionList(state.ui.compareStoreIds);
   return {
     question: state.ui.question.trim() || null,
     objective: state.ui.objective || "margin",
@@ -752,7 +802,8 @@ function currentFilters() {
     lookback_days: Number(normalizeLookbackDays(state.ui.lookbackDays)),
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
     peer_mode: state.ui.peerMode || "state_and_profile",
-    compare_store_id: state.ui.compareStoreId.trim() || null,
+    compare_store_id: compareStoreIds.length ? compareStoreIds.join(",") : null,
+    compare_store_ids: compareStoreIds,
     top_k: parsePositiveInt(state.ui.topK, 9, 1, 50),
   };
 }
@@ -945,12 +996,19 @@ function serializeBrandSelections(values) {
 
 function brandSelectionSummary(values) {
   if (!Array.isArray(values) || !values.length) {
-    return "Any brands";
+    return "All brands";
   }
   if (values.length === 1) {
     return values[0];
   }
   return `${values.length} brands selected`;
+}
+
+function selectionCountText(count, singular, plural, emptyText) {
+  if (!count) {
+    return emptyText;
+  }
+  return `${count} ${count === 1 ? singular : plural} selected.`;
 }
 
 function buildBrandMultiSelect(selectedCsv, options) {
@@ -1017,6 +1075,108 @@ function buildBrandMultiSelect(selectedCsv, options) {
           const nextValue = serializeBrandSelections(selectedValues);
           state.ui.brand = nextValue;
           summary.textContent = brandSelectionSummary(selectedValues);
+          details.open = false;
+          markFilterChange();
+          persistWidgetState();
+          render();
+        },
+      },
+      "Apply",
+    ),
+  );
+
+  details.appendChild(summary);
+  details.appendChild(el("div", { className: "fw-multi-select-panel" }, list, actions));
+  return details;
+}
+
+function compareStoreSelectionSummary(values, labelsByValue, autoLabel) {
+  if (!Array.isArray(values) || !values.length) {
+    return autoLabel || "Auto peer set";
+  }
+  if (values.length === 1) {
+    return labelsByValue.get(values[0]) || "1 store selected";
+  }
+  return `${values.length} stores selected`;
+}
+
+function buildCompareStoreMultiSelect(selectedValuesRaw, options, autoLabel) {
+  const currentValues = normalizeSelectionList(selectedValuesRaw);
+  const selected = new Set(currentValues);
+  const normalizedOptions = (Array.isArray(options) ? options : [])
+    .map((option) => {
+      if (!isObject(option)) {
+        return null;
+      }
+      const value = String(option.value || "").trim();
+      const label = String(option.label || value).trim();
+      if (!value || !label) {
+        return null;
+      }
+      return { value, label };
+    })
+    .filter(Boolean);
+  const byValue = new Map(normalizedOptions.map((option) => [option.value, option]));
+  const labelsByValue = new Map(normalizedOptions.map((option) => [option.value, option.label]));
+  const details = el("details", { className: "fw-multi-select" });
+  const summary = el("summary", {
+    className: "fw-input fw-multi-select-summary",
+    text: compareStoreSelectionSummary(currentValues, labelsByValue, autoLabel),
+  });
+  const list = el("div", { className: "fw-multi-select-list" });
+
+  if (!normalizedOptions.length) {
+    list.appendChild(el("p", { className: "fw-empty", text: "No peer stores available for explicit compare." }));
+  } else {
+    normalizedOptions.forEach((option) => {
+      const checkbox = el("input", { type: "checkbox", checked: selected.has(option.value) ? "true" : null });
+      const label = el(
+        "label",
+        { className: "fw-multi-select-option" },
+        checkbox,
+        el("span", { text: option.label }),
+      );
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          selected.add(option.value);
+        } else {
+          selected.delete(option.value);
+        }
+      });
+      list.appendChild(label);
+    });
+  }
+
+  const actions = el(
+    "div",
+    { className: "fw-multi-select-actions" },
+    el(
+      "button",
+      {
+        className: "fw-text-button",
+        type: "button",
+        onClick: () => {
+          list.querySelectorAll("input[type='checkbox']").forEach((node) => {
+            node.checked = false;
+          });
+          selected.clear();
+        },
+      },
+      "Clear",
+    ),
+    el(
+      "button",
+      {
+        className: "fw-button secondary",
+        type: "button",
+        onClick: () => {
+          const selectedValues = Array.from(selected)
+            .map((value) => byValue.get(value))
+            .filter(Boolean)
+            .map((option) => option.value);
+          state.ui.compareStoreIds = selectedValues;
+          state.ui.compareStoreId = selectedValues[0] || "";
+          summary.textContent = compareStoreSelectionSummary(selectedValues, labelsByValue, autoLabel);
           details.open = false;
           markFilterChange();
           persistWidgetState();
@@ -2364,7 +2524,7 @@ function render() {
 
   const header = el(
     "header",
-    { className: "fw-hero" },
+    { className: "fw-hero fw-workspace-header" },
     el(
       "div",
       { className: "fw-title-row" },
@@ -2408,6 +2568,7 @@ function render() {
 
   const brandOptions = Array.isArray(state.payload.uiHints.brandOptions) ? state.payload.uiHints.brandOptions : [];
   const brandMultiSelect = buildBrandMultiSelect(state.ui.brand, brandOptions);
+  const selectedBrandCount = parseBrandSelections(state.ui.brand).length;
 
   const objectiveSelect = buildSelect(
     state.ui.objective,
@@ -2466,9 +2627,12 @@ function render() {
   const compareStoreOptions = compareStoreBaseOptions.map((option) =>
     option.value === "" ? { ...option, label: autoPeerSetLabel(result) } : option,
   );
-  const compareStoreSelect = buildSelect(state.ui.compareStoreId, compareStoreOptions, (value) => {
-    state.ui.compareStoreId = value;
-  });
+  const compareStoreMultiSelect = buildCompareStoreMultiSelect(
+    state.ui.compareStoreIds,
+    compareStoreOptions.filter((option) => option.value),
+    autoPeerSetLabel(result),
+  );
+  const selectedCompareStoreCount = normalizeSelectionList(state.ui.compareStoreIds).length;
   const lookbackPresetSelect = buildSelect(state.ui.lookbackPreset, LOOKBACK_PRESET_OPTIONS, (value) => {
     state.ui.lookbackPreset = value;
     if (value !== "custom") {
@@ -2535,7 +2699,7 @@ function render() {
 
   const controlsPanel = el(
     "section",
-    { className: "fw-panel" },
+    { className: "fw-panel fw-controls-panel" },
     el("h2", { className: "fw-panel-title", text: store ? `Store: ${store.name}` : "Merch Workspace" }),
     notice,
     store
@@ -2571,6 +2735,10 @@ function render() {
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Brand" }),
         brandMultiSelect,
+        el("p", {
+          className: "fw-empty fw-inline-meta",
+          text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
+        }),
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Price Band" }), priceBandSelect),
       el(
@@ -2616,7 +2784,21 @@ function render() {
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare Mode" }), compareModeSelect),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Peer Mode" }), peerModeSelect),
-      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare To Store" }), compareStoreSelect),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Compare Stores" }),
+        compareStoreMultiSelect,
+        el("p", {
+          className: "fw-empty fw-inline-meta",
+          text: selectionCountText(
+            selectedCompareStoreCount,
+            "store",
+            "stores",
+            "No explicit store selected: auto peer set based on compare and peer modes.",
+          ),
+        }),
+      ),
       el(
         "div",
         { className: "fw-field" },

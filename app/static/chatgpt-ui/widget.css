@@ -29,23 +29,23 @@ body {
 }
 
 .fashion-widget-shell {
-  padding: 16px;
+  padding: 14px;
 }
 
 .fw-root {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .fw-hero,
 .fw-panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
 }
 
 .fw-hero {
-  padding: 16px;
+  padding: 14px;
 }
 
 .fw-kicker {
@@ -57,8 +57,8 @@ body {
 }
 
 .fw-title {
-  margin: 8px 0 6px;
-  font-size: 28px;
+  margin: 6px 0 4px;
+  font-size: 24px;
   line-height: 1.1;
 }
 
@@ -82,19 +82,29 @@ body {
 .fw-subtitle {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .fw-panel {
-  padding: 14px;
+  padding: 12px;
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .fw-panel-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.fw-workspace-header {
+  display: grid;
+  gap: 4px;
+}
+
+.fw-controls-panel {
+  gap: 10px;
 }
 
 .fw-section-head {
@@ -106,31 +116,42 @@ body {
 
 .fw-toolbar {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.fw-tabs {
-  display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.fw-tab {
+.fw-tabs {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 4px;
   border: 1px solid #c8d6e3;
-  border-radius: 10px;
-  background: #e9eff4;
+  border-radius: 12px;
+  background: #f4f8fc;
+}
+
+.fw-tab {
+  border: none;
+  border-radius: 9px;
+  background: transparent;
   color: #2c4c66;
-  padding: 9px 12px;
+  padding: 8px 12px;
+  min-height: 34px;
   font: inherit;
+  font-size: 13px;
   font-weight: 700;
+  line-height: 1.1;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.fw-tab:hover:not(.active):not(:disabled) {
+  background: #e4edf6;
 }
 
 .fw-tab.active {
   background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
   color: #fff;
-  border-color: transparent;
 }
 
 .fw-tab:disabled {
@@ -198,32 +219,12 @@ body {
 }
 
 .fw-merch-tabs {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid #c8d6e3;
-  border-radius: 14px;
-  background: #f4f8fc;
+  max-width: 100%;
 }
 
 .fw-merch-tab {
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: #2c4c66;
-  min-width: 120px;
+  min-width: 108px;
   text-align: center;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-
-.fw-merch-tab:hover:not(.active):not(:disabled) {
-  background: #e4edf6;
-}
-
-.fw-merch-tab.active {
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-  color: #fff;
 }
 
 .fw-toolbar-merch {
@@ -238,7 +239,7 @@ body {
 
 .fw-grid {
   display: grid;
-  gap: 10px;
+  gap: 9px;
 }
 
 .fw-grid.merch-filters {
@@ -251,7 +252,7 @@ body {
 
 .fw-field {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .fw-field.actions {
@@ -269,9 +270,10 @@ body {
   flex: 1 1 320px;
   min-width: 220px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 9px;
+  padding: 9px 11px;
   font: inherit;
+  font-size: 13px;
 }
 
 .fw-range {
@@ -340,9 +342,10 @@ body {
 .fw-textarea {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 9px;
+  padding: 9px 11px;
   font: inherit;
+  font-size: 13px;
   resize: vertical;
   min-height: 140px;
 }
@@ -359,11 +362,13 @@ body {
 
 .fw-button {
   border: none;
-  border-radius: 10px;
+  border-radius: 9px;
   background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
   color: #fff;
-  padding: 10px 14px;
+  padding: 9px 12px;
+  min-height: 34px;
   font: inherit;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -385,12 +390,12 @@ body {
 }
 
 .fw-notice {
-  border-radius: 10px;
+  border-radius: 9px;
   border: 1px solid #c8def4;
   background: var(--notice);
-  padding: 9px 10px;
+  padding: 8px 10px;
   color: #1d4f75;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 
 .fw-notice.error {

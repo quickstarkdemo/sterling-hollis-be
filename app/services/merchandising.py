@@ -230,12 +230,23 @@ def _comparison_peers(
     peer_mode: PeerMode,
     compare_store_id: str | None = None,
 ) -> tuple[list[str], str | None, str | None]:
-    normalized_compare = (compare_store_id or "").strip()
-    if normalized_compare and normalized_compare != store_id:
-        explicit_peer = session.get(Store, normalized_compare)
-        if not explicit_peer:
-            raise ValueError(f"Compare store {normalized_compare} was not found.")
-        return [explicit_peer.id], explicit_peer.id, explicit_peer.name
+    explicit_peer_ids: list[str] = []
+    for chunk in str(compare_store_id or "").replace(";", ",").replace("|", ",").split(","):
+        candidate = chunk.strip()
+        if not candidate or candidate == store_id or candidate in explicit_peer_ids:
+            continue
+        explicit_peer_ids.append(candidate)
+    if explicit_peer_ids:
+        explicit_peers = session.scalars(select(Store).where(Store.id.in_(explicit_peer_ids))).all()
+        peer_by_id = {peer.id: peer for peer in explicit_peers}
+        missing_peer_ids = [peer_id for peer_id in explicit_peer_ids if peer_id not in peer_by_id]
+        if missing_peer_ids:
+            if len(missing_peer_ids) == 1:
+                raise ValueError(f"Compare store {missing_peer_ids[0]} was not found.")
+            raise ValueError(f"Compare stores {', '.join(missing_peer_ids)} were not found.")
+        peer_names = [peer_by_id[peer_id].name for peer_id in explicit_peer_ids]
+        compare_label = peer_names[0] if len(peer_names) == 1 else f"{peer_names[0]} +{len(peer_names) - 1}"
+        return explicit_peer_ids, explicit_peer_ids[0], compare_label
 
     peers = peer_store_ids(session, store_id, peer_mode=peer_mode)
     return peers, None, None

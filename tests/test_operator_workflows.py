@@ -800,6 +800,58 @@ def test_merch_compare_store_overrides_peer_set(monkeypatch):
         assert trends.peer_store_ids == ["1002"]
 
 
+def test_merch_compare_store_supports_multiple_explicit_peers(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+        session.add(
+            Store(
+                id="1003",
+                seed_run_id="run_test",
+                name="Houston Heights",
+                city="Houston",
+                state="TX",
+                postal_code="77008",
+                address_line1="3 Heights Blvd",
+                address_line2=None,
+                phone="555-333-3333",
+                latitude=Decimal("29.790000"),
+                longitude=Decimal("-95.400000"),
+                profile_type="texas_core",
+                services=["Styling"],
+                raw_source={},
+            )
+        )
+        session.commit()
+
+        actions = merchandising_action_recommendations(
+            session,
+            store_query="Dallas",
+            objective=Objective.margin,
+            compare_mode=CompareMode.peer_and_prior_period,
+            compare_store_id="1002, 1003",
+            top_k=6,
+        )
+        diagnostics = merchandising_diagnostics(
+            session,
+            store_query="Dallas",
+            compare_mode=CompareMode.peer_and_prior_period,
+            compare_store_id="1002,1003",
+        )
+        trends = merchandising_trend_summary(
+            session,
+            store_query="Dallas",
+            compare_mode=CompareMode.peer_and_prior_period,
+            compare_store_id="1002,1003",
+        )
+
+        assert actions.compare_store_id == "1002"
+        assert diagnostics.compare_store_id == "1002"
+        assert trends.compare_store_id == "1002"
+        assert actions.peer_store_ids == ["1002", "1003"]
+        assert diagnostics.peer_store_ids == ["1002", "1003"]
+        assert trends.peer_store_ids == ["1002", "1003"]
+
+
 def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)

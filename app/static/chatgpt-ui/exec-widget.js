@@ -1380,7 +1380,7 @@ function render() {
 
   const header = el(
     "header",
-    { className: "fw-hero" },
+    { className: "fw-hero fw-workspace-header" },
     el(
       "div",
       { className: "fw-title-row" },
@@ -1406,6 +1406,31 @@ function render() {
     { label: "What-if Simulator", tool: "fashion_exec_what_if_simulator" },
     { label: "Campaign Autopilot", tool: "fashion_exec_campaign_autopilot_prepare" },
   ];
+  const activeTabIndex = Math.max(
+    0,
+    tabs.findIndex((tab) => tab.tool === activeTabTool),
+  );
+  const handleTabKeyDown = (event, index) => {
+    if (state.ui.isLoading) {
+      return;
+    }
+    let nextIndex = null;
+    if (event.key === "ArrowRight") {
+      nextIndex = (index + 1) % tabs.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (index - 1 + tabs.length) % tabs.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = tabs.length - 1;
+    }
+    if (nextIndex === null) {
+      return;
+    }
+    event.preventDefault();
+    void refreshExec(tabs[nextIndex].tool);
+  };
+  const activeTabId = tabs[activeTabIndex] ? `fw-exec-tab-${activeTabIndex}` : "fw-exec-tab-0";
 
   const categoryOptions = [
     { label: "Any", value: "" },
@@ -1581,7 +1606,7 @@ function render() {
 
   const controlsPanel = el(
     "section",
-    { className: "fw-panel fw-exec-controls-panel" },
+    { className: "fw-panel fw-controls-panel fw-exec-controls-panel" },
     notice,
     el(
       "div",
@@ -1632,21 +1657,35 @@ function render() {
       { className: "fw-merch-nav fw-exec-nav" },
       el(
         "div",
-        { className: "fw-tabs fw-merch-tabs" },
-        ...tabs.map((tab) =>
-          el(
+        {
+          className: "fw-tabs fw-merch-tabs",
+          role: "tablist",
+          "aria-label": "Executive views",
+          "aria-orientation": "horizontal",
+        },
+        ...tabs.map((tab, index) => {
+          const isActive = index === activeTabIndex;
+          return el(
             "button",
             {
-              className: `fw-tab fw-merch-tab ${tab.tool === activeTabTool ? "active" : ""}`,
+              id: `fw-exec-tab-${index}`,
+              className: `fw-tab fw-merch-tab ${isActive ? "active" : ""}`,
               type: "button",
+              role: "tab",
+              "aria-selected": isActive ? "true" : "false",
+              "aria-controls": "fw-exec-view-panel",
+              tabindex: isActive ? "0" : "-1",
               disabled: state.ui.isLoading ? "true" : null,
+              onKeydown: (event) => {
+                handleTabKeyDown(event, index);
+              },
               onClick: () => {
                 void refreshExec(tab.tool);
               },
             },
             state.ui.isLoading && tab.tool === activeTabTool ? "Loading..." : tab.label,
-          ),
-        ),
+          );
+        }),
       ),
       el(
         "button",
@@ -1667,7 +1706,7 @@ function render() {
 
   const contextPanel = el(
     "section",
-    { className: "fw-panel" },
+    { className: "fw-panel", id: "fw-exec-view-panel", role: "tabpanel", "aria-labelledby": activeTabId },
     el("h2", { className: "fw-panel-title", text: toolLabel(tool) }),
     el("p", { className: "fw-empty fw-exec-problem", text: tabProblemStatement(tool) }),
     el("p", { className: "fw-empty", text: activeResult()?.summary || state.payload.uiHints.emptyState }),

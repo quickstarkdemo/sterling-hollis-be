@@ -2315,7 +2315,7 @@ function render() {
 
   const header = el(
     "header",
-    { className: "fw-hero" },
+    { className: "fw-hero fw-workspace-header" },
     el(
       "div",
       { className: "fw-title-row" },
@@ -2727,7 +2727,7 @@ function render() {
       header,
       el(
         "section",
-        { className: "fw-panel" },
+        { className: "fw-panel fw-controls-panel" },
         el("h2", { className: "fw-panel-title", text: "Customer Search" }),
         notice,
         toolbar,
