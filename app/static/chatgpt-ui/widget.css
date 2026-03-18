@@ -229,6 +229,28 @@ body {
   margin-top: -2px;
 }
 
+.fw-lever-field .fw-input {
+  min-width: 0;
+}
+
+.fw-lever-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.fw-lever-buttons {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.fw-mini-button {
+  min-width: 40px;
+  padding: 8px 10px;
+  line-height: 1;
+}
+
 .fw-multi-select {
   position: relative;
 }
@@ -1255,6 +1277,14 @@ body {
   .fw-send-row {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .fw-lever-control {
+    grid-template-columns: 1fr;
+  }
+
+  .fw-lever-buttons {
+    justify-content: flex-start;
   }
 
   .fw-merch-trend-kpis {

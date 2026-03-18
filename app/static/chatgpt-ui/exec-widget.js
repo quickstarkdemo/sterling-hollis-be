@@ -1189,40 +1189,68 @@ function buildPercentLeverField({
   min,
   max,
   step,
-  onNumberInput,
-  onSliderInput,
+  onChange,
 }) {
-  const sliderValue = String(clampNumber(value, 0, min, max));
+  const normalizedValue = clampNumber(value, 0, min, max);
+  const inputNode = el("input", {
+    className: "fw-input",
+    type: "number",
+    min: String(min),
+    max: String(max),
+    step: String(step),
+    value: String(normalizedValue),
+    onInput: (event) => {
+      const next = clampNumber(event.target.value, normalizedValue, min, max);
+      markUserInteraction();
+      onChange(String(next));
+      inputNode.value = String(next);
+      queueModelContextUpdate();
+    },
+  });
+  const stepDelta = Number(step || 1);
+  const applyDelta = (delta) => {
+    const current = clampNumber(inputNode.value, normalizedValue, min, max);
+    const next = clampNumber(current + delta, current, min, max);
+    markUserInteraction();
+    onChange(String(next));
+    inputNode.value = String(next);
+    queueModelContextUpdate();
+  };
   return el(
     "div",
-    { className: "fw-field" },
+    { className: "fw-field fw-lever-field" },
     el("label", { className: "fw-label", text: label }),
-    el("input", {
-      className: "fw-input",
-      type: "number",
-      min: String(min),
-      max: String(max),
-      step: String(step),
-      value: value,
-      onInput: (event) => {
-        markUserInteraction();
-        onNumberInput(event.target.value);
-        queueModelContextUpdate();
-      },
-    }),
-    el("input", {
-      className: "fw-range",
-      type: "range",
-      min: String(min),
-      max: String(max),
-      step: String(step),
-      value: sliderValue,
-      onInput: (event) => {
-        markUserInteraction();
-        onSliderInput(event.target.value);
-        queueModelContextUpdate();
-      },
-    }),
+    el(
+      "div",
+      { className: "fw-lever-control" },
+      inputNode,
+      el(
+        "div",
+        { className: "fw-lever-buttons" },
+        el(
+          "button",
+          {
+            className: "fw-button secondary fw-mini-button",
+            type: "button",
+            onClick: () => {
+              applyDelta(-stepDelta);
+            },
+          },
+          "-",
+        ),
+        el(
+          "button",
+          {
+            className: "fw-button secondary fw-mini-button",
+            type: "button",
+            onClick: () => {
+              applyDelta(stepDelta);
+            },
+          },
+          "+",
+        ),
+      ),
+    ),
   );
 }
 
@@ -1524,10 +1552,7 @@ function render() {
               min: 0,
               max: 60,
               step: 1,
-              onNumberInput: (value) => {
-                state.ui.discountPct = value;
-              },
-              onSliderInput: (value) => {
+              onChange: (value) => {
                 state.ui.discountPct = value;
               },
             }),
@@ -1537,10 +1562,7 @@ function render() {
               min: -40,
               max: 40,
               step: 1,
-              onNumberInput: (value) => {
-                state.ui.floorSpaceShiftPct = value;
-              },
-              onSliderInput: (value) => {
+              onChange: (value) => {
                 state.ui.floorSpaceShiftPct = value;
               },
             }),
