@@ -564,6 +564,19 @@ function tabProblemStatement(toolName) {
   return "Problem: Are we on company plan, and which stores are driving or dragging performance?";
 }
 
+function tabControlHint(toolName) {
+  if (toolName === "fashion_exec_event_readiness_radar") {
+    return "Controls: scope + lookback + events + brands determine readiness signals.";
+  }
+  if (toolName === "fashion_exec_what_if_simulator") {
+    return "Controls: choose a category move and apply discount/space levers to the Reallocate-To category.";
+  }
+  if (toolName === "fashion_exec_campaign_autopilot_prepare" || toolName === "fashion_exec_campaign_autopilot_send") {
+    return "Controls: scope/events/brands filter candidates; email and shortlist size define the draft package.";
+  }
+  return "Controls: scope + lookback apply globally; objective controls the overview lens.";
+}
+
 async function refreshExec(toolName) {
   markUserInteraction();
   state.ui.isLoading = true;
@@ -1192,65 +1205,25 @@ function buildPercentLeverField({
   onChange,
 }) {
   const normalizedValue = clampNumber(value, 0, min, max);
-  const inputNode = el("input", {
-    className: "fw-input",
-    type: "number",
-    min: String(min),
-    max: String(max),
-    step: String(step),
-    value: String(normalizedValue),
-    onInput: (event) => {
-      const next = clampNumber(event.target.value, normalizedValue, min, max);
-      markUserInteraction();
-      onChange(String(next));
-      inputNode.value = String(next);
-      queueModelContextUpdate();
-    },
-  });
-  const stepDelta = Number(step || 1);
-  const applyDelta = (delta) => {
-    const current = clampNumber(inputNode.value, normalizedValue, min, max);
-    const next = clampNumber(current + delta, current, min, max);
-    markUserInteraction();
-    onChange(String(next));
-    inputNode.value = String(next);
-    queueModelContextUpdate();
-  };
   return el(
     "div",
-    { className: "fw-field fw-lever-field" },
+    { className: "fw-field" },
     el("label", { className: "fw-label", text: label }),
-    el(
-      "div",
-      { className: "fw-lever-control" },
-      inputNode,
-      el(
-        "div",
-        { className: "fw-lever-buttons" },
-        el(
-          "button",
-          {
-            className: "fw-button secondary fw-mini-button",
-            type: "button",
-            onClick: () => {
-              applyDelta(-stepDelta);
-            },
-          },
-          "-",
-        ),
-        el(
-          "button",
-          {
-            className: "fw-button secondary fw-mini-button",
-            type: "button",
-            onClick: () => {
-              applyDelta(stepDelta);
-            },
-          },
-          "+",
-        ),
-      ),
-    ),
+    el("input", {
+      className: "fw-input",
+      type: "number",
+      min: String(min),
+      max: String(max),
+      step: String(step),
+      value: String(normalizedValue),
+      onInput: (event) => {
+        const next = clampNumber(event.target.value, normalizedValue, min, max);
+        markUserInteraction();
+        onChange(String(next));
+        event.target.value = String(next);
+        queueModelContextUpdate();
+      },
+    }),
   );
 }
 
@@ -1487,7 +1460,7 @@ function render() {
         el("label", { className: "fw-label", text: "Events" }),
         buildEventsMultiSelect(state.ui.selectedEvents, eventOptions),
         el("p", {
-          className: "fw-empty",
+          className: "fw-empty fw-inline-meta",
           text: selectionCountText(selectedEventCount, "event", "events", "No event selected: defaults to all configured events."),
         }),
       ),
@@ -1497,7 +1470,7 @@ function render() {
         el("label", { className: "fw-label", text: "Brand Scope" }),
         buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
         el("p", {
-          className: "fw-empty",
+          className: "fw-empty fw-inline-meta",
           text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
         }),
       ),
@@ -1508,8 +1481,6 @@ function render() {
       el(
         "div",
         { className: "fw-field fw-span-full fw-exec-whatif-controls" },
-        el("h3", { className: "fw-panel-title", text: "What-if Inputs" }),
-        el("p", { className: "fw-empty", text: "Category reallocation and pricing/space levers only apply to this simulator tab." }),
         el(
           "div",
           { className: "fw-exec-whatif-grid" },
@@ -1519,7 +1490,7 @@ function render() {
             el("label", { className: "fw-label", text: "Brand Scope" }),
             buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
             el("p", {
-              className: "fw-empty",
+              className: "fw-empty fw-inline-meta",
               text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
             }),
           ),
@@ -1610,51 +1581,55 @@ function render() {
 
   const controlsPanel = el(
     "section",
-    { className: "fw-panel" },
+    { className: "fw-panel fw-exec-controls-panel" },
     notice,
     el(
       "div",
-      { className: "fw-grid merch-filters" },
+      { className: "fw-exec-global-row" },
       el(
         "div",
-        { className: "fw-field fw-span-full" },
-        el("label", { className: "fw-label", text: "Store Scope (multi-select)" }),
+        { className: "fw-field fw-exec-store-field" },
+        el("label", { className: "fw-label", text: "Store Scope" }),
         buildStoreMultiSelect(state.ui.storeIds, storeOptions),
         el("p", {
-          className: "fw-empty",
+          className: "fw-empty fw-inline-meta",
           text: selectionCountText(selectedStoreCount, "store", "stores", "No stores selected: defaults to company-wide network."),
         }),
       ),
       el(
         "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Lookback Window" }),
-        lookbackPresetSelect,
+        { className: "fw-exec-global-side" },
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Lookback Window" }),
+          lookbackPresetSelect,
+        ),
+        state.ui.lookbackPreset === "custom"
+          ? el(
+              "div",
+              { className: "fw-field" },
+              el("label", { className: "fw-label", text: "Custom Days" }),
+              el("input", {
+                className: "fw-input",
+                type: "number",
+                min: "7",
+                max: "730",
+                value: normalizedLookbackDays,
+                onInput: (event) => {
+                  markUserInteraction();
+                  state.ui.lookbackDays = event.target.value;
+                  state.ui.lookbackPreset = "custom";
+                  queueModelContextUpdate();
+                },
+              }),
+            )
+          : null,
       ),
-      state.ui.lookbackPreset === "custom"
-        ? el(
-            "div",
-            { className: "fw-field" },
-            el("label", { className: "fw-label", text: "Custom Days" }),
-            el("input", {
-              className: "fw-input",
-              type: "number",
-              min: "7",
-              max: "730",
-              value: normalizedLookbackDays,
-              onInput: (event) => {
-                markUserInteraction();
-                state.ui.lookbackDays = event.target.value;
-                state.ui.lookbackPreset = "custom";
-                queueModelContextUpdate();
-              },
-            }),
-          )
-        : null,
     ),
     el(
       "div",
-      { className: "fw-merch-nav" },
+      { className: "fw-merch-nav fw-exec-nav" },
       el(
         "div",
         { className: "fw-tabs fw-merch-tabs" },
@@ -1686,7 +1661,8 @@ function render() {
         state.ui.isLoading ? "Refreshing..." : "Refresh",
       ),
     ),
-    tabScopedControls.length ? el("div", { className: "fw-grid merch-filters" }, ...tabScopedControls) : null,
+    el("p", { className: "fw-empty fw-exec-control-hint", text: tabControlHint(activeTabTool) }),
+    tabScopedControls.length ? el("div", { className: "fw-grid merch-filters fw-exec-tab-grid" }, ...tabScopedControls) : null,
   );
 
   const contextPanel = el(

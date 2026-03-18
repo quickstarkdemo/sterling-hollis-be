@@ -146,6 +146,57 @@ body {
   flex-wrap: wrap;
 }
 
+.fw-exec-nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.fw-exec-nav .fw-merch-tabs {
+  width: 100%;
+  min-width: 0;
+}
+
+.fw-exec-nav .fw-merch-tab {
+  min-width: 92px;
+}
+
+.fw-exec-controls-panel {
+  gap: 9px;
+}
+
+.fw-exec-global-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.fw-exec-global-side {
+  display: grid;
+  gap: 8px;
+}
+
+.fw-exec-store-field .fw-multi-select-summary {
+  min-height: 42px;
+}
+
+.fw-inline-meta {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.fw-exec-control-hint {
+  margin: -1px 0 0;
+  color: #25587f;
+}
+
+.fw-exec-tab-grid {
+  margin-top: -1px;
+}
+
 .fw-merch-tabs {
   display: inline-flex;
   flex-wrap: nowrap;
@@ -227,28 +278,6 @@ body {
   width: 100%;
   accent-color: var(--accent);
   margin-top: -2px;
-}
-
-.fw-lever-field .fw-input {
-  min-width: 0;
-}
-
-.fw-lever-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.fw-lever-buttons {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.fw-mini-button {
-  min-width: 40px;
-  padding: 8px 10px;
-  line-height: 1;
 }
 
 .fw-multi-select {
@@ -1000,7 +1029,7 @@ body {
 }
 
 .fw-exec-whatif-controls {
-  gap: 10px;
+  gap: 8px;
 }
 
 .fw-exec-whatif-grid {
@@ -1279,12 +1308,16 @@ body {
     align-items: stretch;
   }
 
-  .fw-lever-control {
+  .fw-exec-global-row {
     grid-template-columns: 1fr;
   }
 
-  .fw-lever-buttons {
-    justify-content: flex-start;
+  .fw-exec-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .fw-exec-control-hint {
+    margin-top: 0;
   }
 
   .fw-merch-trend-kpis {
