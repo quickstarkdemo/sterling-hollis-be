@@ -1004,13 +1004,6 @@ function brandSelectionSummary(values) {
   return `${values.length} brands selected`;
 }
 
-function selectionCountText(count, singular, plural, emptyText) {
-  if (!count) {
-    return emptyText;
-  }
-  return `${count} ${count === 1 ? singular : plural} selected.`;
-}
-
 function buildBrandMultiSelect(selectedCsv, options) {
   const currentValues = parseBrandSelections(selectedCsv);
   const selected = new Set(currentValues.map((value) => value.toLowerCase()));
@@ -2568,7 +2561,6 @@ function render() {
 
   const brandOptions = Array.isArray(state.payload.uiHints.brandOptions) ? state.payload.uiHints.brandOptions : [];
   const brandMultiSelect = buildBrandMultiSelect(state.ui.brand, brandOptions);
-  const selectedBrandCount = parseBrandSelections(state.ui.brand).length;
 
   const objectiveSelect = buildSelect(
     state.ui.objective,
@@ -2632,7 +2624,6 @@ function render() {
     compareStoreOptions.filter((option) => option.value),
     autoPeerSetLabel(result),
   );
-  const selectedCompareStoreCount = normalizeSelectionList(state.ui.compareStoreIds).length;
   const lookbackPresetSelect = buildSelect(state.ui.lookbackPreset, LOOKBACK_PRESET_OPTIONS, (value) => {
     state.ui.lookbackPreset = value;
     if (value !== "custom") {
@@ -2707,7 +2698,7 @@ function render() {
       : el("p", { className: "fw-empty", text: "No store resolved yet. Open from a store query in chat." }),
     el(
       "div",
-      { className: "fw-grid merch-filters" },
+      { className: "fw-grid merch-filters fw-merch-clean-filters" },
       el(
         "div",
         { className: "fw-field fw-span-full" },
@@ -2735,10 +2726,6 @@ function render() {
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Brand" }),
         brandMultiSelect,
-        el("p", {
-          className: "fw-empty fw-inline-meta",
-          text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
-        }),
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Price Band" }), priceBandSelect),
       el(
@@ -2777,10 +2764,6 @@ function render() {
               },
             })
           : null,
-        el("p", {
-          className: "fw-empty fw-merch-lookback-hint",
-          text: "Merch cadence defaults: 13 weeks for in-season decisions, 26-52 weeks for trend and YoY reads.",
-        }),
       ),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare Mode" }), compareModeSelect),
       el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Peer Mode" }), peerModeSelect),
@@ -2789,15 +2772,6 @@ function render() {
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Compare Stores" }),
         compareStoreMultiSelect,
-        el("p", {
-          className: "fw-empty fw-inline-meta",
-          text: selectionCountText(
-            selectedCompareStoreCount,
-            "store",
-            "stores",
-            "No explicit store selected: auto peer set based on compare and peer modes.",
-          ),
-        }),
       ),
       el(
         "div",

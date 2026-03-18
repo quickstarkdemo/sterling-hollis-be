@@ -227,6 +227,16 @@ body {
   text-align: center;
 }
 
+.fw-customer-tabs-panel {
+  gap: 6px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.fw-customer-tab-hint {
+  margin: 0;
+}
+
 .fw-toolbar-merch {
   margin-left: auto;
 }
@@ -237,6 +247,15 @@ body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.fw-customer-control-row {
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.fw-customer-control-row .fw-field.actions {
+  align-content: start;
+}
+
 .fw-grid {
   display: grid;
   gap: 9px;
@@ -244,6 +263,13 @@ body {
 
 .fw-grid.merch-filters {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.fw-merch-clean-filters .fw-select,
+.fw-merch-clean-filters .fw-multi-select-summary {
+  min-height: 36px;
+  padding-top: 7px;
+  padding-bottom: 7px;
 }
 
 .fw-span-full {
@@ -457,6 +483,18 @@ body {
 .fw-selected-name {
   margin: 0;
   font-size: 20px;
+}
+
+.fw-selected-customer-panel {
+  gap: 8px;
+}
+
+.fw-selected-customer-panel .fw-selected-name {
+  font-size: 18px;
+}
+
+.fw-selected-customer-panel .fw-chip-row {
+  gap: 6px;
 }
 
 .fw-chip-row {
@@ -824,22 +862,78 @@ body {
 }
 
 .fw-customer-value-controls {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
   align-items: end;
+  justify-items: end;
 }
 
-.fw-customer-value-controls .fw-field {
+.fw-customer-value-control-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(124px, 1fr));
+}
+
+.fw-customer-value-control-grid .fw-field {
   min-width: 124px;
 }
 
-.fw-customer-value-controls .fw-input {
+.fw-customer-value-control-grid .fw-input {
   min-width: 0;
 }
 
-.fw-customer-value-kpis .fw-kpi-value {
-  font-size: 15px;
+.fw-customer-value-control-actions {
+  display: flex;
+  align-items: end;
+}
+
+.fw-customer-value-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fw-metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid #d4e2ee;
+  background: #f7fbff;
+  color: #28445d;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.fw-metric-pill-label {
+  color: #607488;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fw-metric-pill-value {
+  color: #1d3347;
+  font-size: 12px;
+}
+
+.fw-metric-pill.is-high {
+  border-color: #bfe3d2;
+  background: #eef9f3;
+  color: #176745;
+}
+
+.fw-metric-pill.is-medium {
+  border-color: #e3d9bf;
+  background: #fcf7eb;
+  color: #8a6a20;
+}
+
+.fw-metric-pill.is-low {
+  border-color: #e2ced0;
+  background: #fdf3f4;
+  color: #8f3b44;
 }
 
 .fw-customer-value-charts {
@@ -1387,12 +1481,19 @@ body {
   }
 
   .fw-customer-value-controls {
-    flex-direction: column;
-    align-items: stretch;
+    justify-items: stretch;
   }
 
-  .fw-customer-value-controls .fw-field {
+  .fw-customer-value-control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fw-customer-value-control-grid .fw-field {
     min-width: 0;
+  }
+
+  .fw-customer-value-control-actions {
+    justify-content: flex-start;
   }
 
   .fw-customer-chart-canvas {

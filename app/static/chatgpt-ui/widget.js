@@ -27,6 +27,7 @@ const state = {
   ui: {
     query: "",
     selectedCustomerId: null,
+    customerTab: "recommendations",
     resultsExpanded: false,
     occasion: "",
     budgetMax: "",
@@ -270,6 +271,13 @@ function applyUiWidgetState(raw) {
     state.ui.selectedCustomerId = raw.selectedCustomerId;
     changed = true;
   }
+  if (typeof raw.customerTab === "string") {
+    const nextTab = raw.customerTab === "value" ? "value" : "recommendations";
+    if (nextTab !== state.ui.customerTab) {
+      state.ui.customerTab = nextTab;
+      changed = true;
+    }
+  }
   if (typeof raw.occasion === "string" && raw.occasion !== state.ui.occasion) {
     state.ui.occasion = raw.occasion;
     changed = true;
@@ -338,6 +346,9 @@ function loadWidgetState() {
   if (typeof widgetState.selectedCustomerId === "string") {
     state.ui.selectedCustomerId = widgetState.selectedCustomerId;
   }
+  if (typeof widgetState.customerTab === "string") {
+    state.ui.customerTab = widgetState.customerTab === "value" ? "value" : "recommendations";
+  }
   if (typeof widgetState.occasion === "string") {
     state.ui.occasion = widgetState.occasion;
   }
@@ -379,6 +390,7 @@ function persistWidgetState() {
     window.openai.setWidgetState({
       query: state.ui.query,
       selectedCustomerId: state.ui.selectedCustomerId,
+      customerTab: state.ui.customerTab,
       occasion: state.ui.occasion,
       budgetMax: state.ui.budgetMax,
       emailTo: state.ui.emailTo,
@@ -406,6 +418,7 @@ function buildModelContextPayload() {
   const emailTo = (state.ui.emailTo || selected?.email || "").trim();
   return {
     workspace: "customer_search",
+    customer_workspace_tab: state.ui.customerTab === "value" ? "value" : "recommendations",
     selected_customer_id: selected?.id || null,
     selected_customer_name: selected?.full_name || null,
     occasion: state.ui.occasion.trim() || null,
@@ -1928,13 +1941,19 @@ function renderCustomerValuePanel(selected) {
   }
   const response = state.analytics.customerId === selected.id ? state.analytics.response : null;
   const metrics = response?.metrics || null;
+  const effectiveLookbackDays = Number(response?.lookback_days || customerValueLookbackDays());
   const valueSeries = Array.isArray(response?.value_series) ? response.value_series : [];
   const purchaseSeries = Array.isArray(response?.purchase_series) ? response.purchase_series : [];
   const forecastSeries = Array.isArray(response?.forecast_series) ? response.forecast_series : [];
   const hasChartJs = typeof window?.Chart === "function";
   const panel = el(
     "section",
-    { className: "fw-panel fw-customer-value-panel" },
+    {
+      className: "fw-panel fw-customer-value-panel",
+      id: "fw-customer-view-panel",
+      role: "tabpanel",
+      "aria-labelledby": "fw-customer-tab-value",
+    },
     el(
       "div",
       { className: "fw-section-head" },
@@ -1942,71 +1961,90 @@ function renderCustomerValuePanel(selected) {
         "div",
         {},
         el("h2", { className: "fw-panel-title", text: "Customer Value" }),
-        el("p", { className: "fw-empty", text: "All-store purchase history with weekly value trend and baseline projection." }),
+        el("p", {
+          className: "fw-empty",
+          text: "All-store purchase history with weekly value trend and baseline projection.",
+        }),
       ),
       el(
         "div",
         { className: "fw-customer-value-controls" },
         el(
           "div",
-          { className: "fw-field" },
-          el("label", { className: "fw-label", text: "Lookback" }),
+          { className: "fw-customer-value-control-grid" },
           el(
-            "select",
-            {
-              className: "fw-input fw-select",
-              value: state.analytics.lookbackDays,
-              onChange: (event) => {
-                markUserInteraction();
-                state.analytics.lookbackDays = String(parsePositiveInt(event.target.value, 180, 30, 730));
-                state.analytics.loadedKey = null;
-                state.analytics.requestedKey = null;
-                persistWidgetState();
-                render();
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Lookback" }),
+            el(
+              "select",
+              {
+                className: "fw-input fw-select",
+                value: state.analytics.lookbackDays,
+                onChange: (event) => {
+                  markUserInteraction();
+                  state.analytics.lookbackDays = String(parsePositiveInt(event.target.value, 180, 30, 730));
+                  state.analytics.loadedKey = null;
+                  state.analytics.requestedKey = null;
+                  persistWidgetState();
+                  render();
+                },
               },
-            },
-            ...CUSTOMER_VALUE_LOOKBACK_OPTIONS.map((option) =>
-              el("option", { value: option, selected: state.analytics.lookbackDays === option ? "true" : null, text: `${option} days` }),
+              ...CUSTOMER_VALUE_LOOKBACK_OPTIONS.map((option) =>
+                el("option", {
+                  value: option,
+                  selected: state.analytics.lookbackDays === option ? "true" : null,
+                  text: `${option} days`,
+                }),
+              ),
+            ),
+          ),
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Forecast" }),
+            el(
+              "select",
+              {
+                className: "fw-input fw-select",
+                value: state.analytics.forecastWeeks,
+                onChange: (event) => {
+                  markUserInteraction();
+                  state.analytics.forecastWeeks = String(parsePositiveInt(event.target.value, 8, 1, 26));
+                  state.analytics.loadedKey = null;
+                  state.analytics.requestedKey = null;
+                  persistWidgetState();
+                  render();
+                },
+              },
+              ...CUSTOMER_VALUE_FORECAST_OPTIONS.map((option) =>
+                el("option", {
+                  value: option,
+                  selected: state.analytics.forecastWeeks === option ? "true" : null,
+                  text: `${option} weeks`,
+                }),
+              ),
             ),
           ),
         ),
         el(
           "div",
-          { className: "fw-field" },
-          el("label", { className: "fw-label", text: "Forecast" }),
+          { className: "fw-customer-value-control-actions" },
           el(
-            "select",
+            "button",
             {
-              className: "fw-input fw-select",
-              value: state.analytics.forecastWeeks,
-              onChange: (event) => {
+              className: "fw-button secondary",
+              type: "button",
+              disabled: state.analytics.isLoading ? "true" : null,
+              onClick: () => {
                 markUserInteraction();
-                state.analytics.forecastWeeks = String(parsePositiveInt(event.target.value, 8, 1, 26));
                 state.analytics.loadedKey = null;
                 state.analytics.requestedKey = null;
-                persistWidgetState();
-                render();
+                void loadCustomerValueSummary(selected);
               },
             },
-            ...CUSTOMER_VALUE_FORECAST_OPTIONS.map((option) =>
-              el("option", { value: option, selected: state.analytics.forecastWeeks === option ? "true" : null, text: `${option} weeks` }),
-            ),
+            state.analytics.isLoading ? "Refreshing..." : "Refresh",
           ),
-        ),
-        el(
-          "button",
-          {
-            className: "fw-button secondary",
-            type: "button",
-            disabled: state.analytics.isLoading ? "true" : null,
-            onClick: () => {
-              markUserInteraction();
-              state.analytics.loadedKey = null;
-              state.analytics.requestedKey = null;
-              void loadCustomerValueSummary(selected);
-            },
-          },
-          state.analytics.isLoading ? "Refreshing..." : "Refresh Value",
         ),
       ),
     ),
@@ -2032,22 +2070,39 @@ function renderCustomerValuePanel(selected) {
   }
 
   const tierText = String(metrics?.value_tier || "low").replace(/_/g, " ");
+  const tierTone = tierText === "high" ? "is-high" : tierText === "medium" ? "is-medium" : "is-low";
+  const metricPill = (label, value, toneClass = "") =>
+    el(
+      "span",
+      { className: `fw-metric-pill ${toneClass}`.trim() },
+      el("span", { className: "fw-metric-pill-label", text: label }),
+      el("strong", { className: "fw-metric-pill-value", text: value }),
+    );
   panel.appendChild(
     el(
       "div",
-      { className: "fw-kpi-strip fw-customer-value-kpis" },
-      kpi("Value Score", compactNumber(metrics?.value_score)),
-      kpi("Value Tier", tierText),
-      kpi("Lookback Spend", formatCurrencyCompact(metrics?.lookback_spend)),
-      kpi("Lookback Orders", compactNumber(metrics?.lookback_orders)),
-      kpi("Lifetime Spend", formatCurrencyCompact(metrics?.lifetime_spend)),
-      kpi("AOV", formatCurrencyCompact(metrics?.aov)),
-      kpi("Recency (days)", metrics?.recency_days === null || metrics?.recency_days === undefined ? "-" : compactNumber(metrics.recency_days)),
+      { className: "fw-customer-value-metrics" },
+      metricPill("Value Score", compactNumber(metrics?.value_score)),
+      metricPill("Value Tier", tierText, tierTone),
+      metricPill(`Spend (${effectiveLookbackDays}d)`, formatCurrencyCompact(metrics?.lookback_spend)),
+      metricPill(`Orders (${effectiveLookbackDays}d)`, compactNumber(metrics?.lookback_orders)),
+      metricPill("Lifetime Spend", formatCurrencyCompact(metrics?.lifetime_spend)),
+      metricPill("AOV", formatCurrencyCompact(metrics?.aov)),
+      metricPill(
+        "Recency",
+        metrics?.recency_days === null || metrics?.recency_days === undefined ? "-" : `${compactNumber(metrics.recency_days)}d`,
+      ),
     ),
+  );
+  panel.appendChild(
+    el("p", {
+      className: "fw-empty fw-inline-meta",
+      text: `Lookback metrics are calculated across the selected ${effectiveLookbackDays}-day window.`,
+    }),
   );
 
   if (!hasChartJs) {
-    panel.appendChild(el("p", { className: "fw-empty", text: "Chart.js unavailable in this host. KPI summary remains available." }));
+    panel.appendChild(el("p", { className: "fw-empty", text: "Chart.js unavailable in this host. Value metrics remain available." }));
     return panel;
   }
 
@@ -2354,7 +2409,7 @@ function render() {
   const recommendationControls = selected
     ? el(
         "div",
-        { className: "fw-control-row" },
+        { className: "fw-control-row fw-customer-control-row" },
         el(
           "div",
           { className: "fw-field" },
@@ -2453,7 +2508,7 @@ function render() {
   const detailPanel = selected
     ? el(
         "section",
-        { className: "fw-panel" },
+        { className: "fw-panel fw-selected-customer-panel" },
         el("h2", { className: "fw-panel-title", text: "Selected Customer" }),
         el("p", { className: "fw-selected-name", text: selected.full_name || selected.id }),
         el("p", { className: "fw-selected-meta", text: customerLabel(selected) }),
@@ -2476,7 +2531,7 @@ function render() {
           ? el(
               "p",
               {
-                className: "fw-empty",
+                className: "fw-empty fw-inline-meta",
                 text: `Occasion preferences: ${selected.preferred_occasions
                   .slice(0, 3)
                   .map((item) => humanizeToken(item))
@@ -2488,7 +2543,7 @@ function render() {
           ? el(
               "p",
               {
-                className: "fw-empty",
+                className: "fw-empty fw-inline-meta",
                 text: `Size preferences: ${Object.entries(selected.size_preferences)
                   .slice(0, 4)
                   .map(([key, value]) => `${humanizeToken(key)} ${value}`)
@@ -2500,13 +2555,95 @@ function render() {
       )
     : el(
         "section",
-        { className: "fw-panel" },
+        { className: "fw-panel fw-selected-customer-panel" },
         el("h2", { className: "fw-panel-title", text: "Selected Customer" }),
         el("p", { className: "fw-empty", text: "Pick a result to inspect details here." }),
       );
-  const customerValuePanel = renderCustomerValuePanel(selected);
+  const customerTab = state.ui.customerTab === "value" ? "value" : "recommendations";
+  const customerTabs = [
+    { id: "recommendations", label: "Recommendations" },
+    { id: "value", label: "Value" },
+  ];
+  const activeCustomerTabIndex = Math.max(0, customerTabs.findIndex((tab) => tab.id === customerTab));
+  const handleCustomerTabKeyDown = (event, index) => {
+    let nextIndex = null;
+    if (event.key === "ArrowRight") {
+      nextIndex = (index + 1) % customerTabs.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (index - 1 + customerTabs.length) % customerTabs.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = customerTabs.length - 1;
+    }
+    if (nextIndex === null) {
+      return;
+    }
+    event.preventDefault();
+    const nextTabId = customerTabs[nextIndex].id;
+    if (nextTabId === state.ui.customerTab) {
+      return;
+    }
+    markUserInteraction();
+    state.ui.customerTab = nextTabId;
+    persistWidgetState();
+    render();
+  };
+  const customerTabPanel = selected
+    ? el(
+        "section",
+        { className: "fw-panel fw-customer-tabs-panel" },
+        el(
+          "div",
+          {
+            className: "fw-tabs fw-merch-tabs",
+            role: "tablist",
+            "aria-label": "Customer workspace views",
+            "aria-orientation": "horizontal",
+          },
+          ...customerTabs.map((tab, index) => {
+            const isActive = index === activeCustomerTabIndex;
+            return el(
+              "button",
+              {
+                id: `fw-customer-tab-${tab.id}`,
+                className: `fw-tab fw-merch-tab ${isActive ? "active" : ""}`,
+                type: "button",
+                role: "tab",
+                "aria-selected": isActive ? "true" : "false",
+                "aria-controls": "fw-customer-view-panel",
+                tabindex: isActive ? "0" : "-1",
+                onKeydown: (event) => {
+                  handleCustomerTabKeyDown(event, index);
+                },
+                onClick: () => {
+                  if (tab.id === state.ui.customerTab) {
+                    return;
+                  }
+                  markUserInteraction();
+                  state.ui.customerTab = tab.id;
+                  persistWidgetState();
+                  render();
+                },
+              },
+              tab.label,
+            );
+          }),
+        ),
+        el("p", {
+          className: "fw-empty fw-inline-meta fw-customer-tab-hint",
+          text:
+            customerTab === "value"
+              ? "Value is informational. Lookback controls determine spend and order totals."
+              : "Recommendations is the primary associate workflow. Use Value as supporting context.",
+        }),
+      )
+    : null;
+  const customerValuePanel = selected && customerTab === "value"
+    ? renderCustomerValuePanel(selected)
+    : null;
 
-  const recommendationPanel = selected
+  const recommendationPanel = selected && customerTab === "recommendations"
     ? (() => {
         const response =
           state.recommendation.customerId === selected.id ? state.recommendation.response : null;
@@ -2541,7 +2678,12 @@ function render() {
           state.recommendation.isSendingEmailDraft;
         return el(
           "section",
-          { className: "fw-panel" },
+          {
+            className: "fw-panel",
+            id: "fw-customer-view-panel",
+            role: "tabpanel",
+            "aria-labelledby": "fw-customer-tab-recommendations",
+          },
           el("h2", { className: "fw-panel-title", text: "Product Recommendations" }),
           response
             ? el(
@@ -2734,6 +2876,7 @@ function render() {
         resultList,
       ),
       detailPanel,
+      customerTabPanel,
       customerValuePanel,
       recommendationPanel,
     ),
