@@ -18,6 +18,7 @@ from app.schemas import (
     Objective,
     PeerMode,
     PriceBand,
+    ProductPerformanceDimension,
     RetrievalMode,
     StyleConstraints,
 )
@@ -852,6 +853,79 @@ def test_merch_compare_store_supports_multiple_explicit_peers(monkeypatch):
         assert trends.peer_store_ids == ["1002", "1003"]
 
 
+def test_product_margin_sales_opportunities_supports_enterprise_and_store_scope(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        now = datetime(2026, 3, 14, tzinfo=timezone.utc)
+        session.add(
+            Order(
+                id="order_prior_decline",
+                seed_run_id="run_test",
+                customer_id="cust_000001",
+                store_id="1001",
+                ordered_at=now - timedelta(days=95),
+                status="completed",
+                occasion="workwear",
+                channel="in_store",
+                subtotal=Decimal("820.00"),
+                discount_amount=Decimal("0.00"),
+                tax_amount=Decimal("65.00"),
+                total_amount=Decimal("885.00"),
+                returned=False,
+            )
+        )
+        session.add(
+            OrderItem(
+                id="item_prior_decline",
+                order_id="order_prior_decline",
+                product_id="prod_4",
+                quantity=1,
+                unit_price=Decimal("820.00"),
+                discount_amount=Decimal("0.00"),
+                line_total=Decimal("820.00"),
+            )
+        )
+        session.commit()
+
+        enterprise = mcp_server.fashion_product_margin_sales_opportunities(
+            dimension=ProductPerformanceDimension.product,
+            lookback_days=90,
+            min_margin_rate=0.50,
+            min_revenue_drop_pct=10.0,
+            top_k=10,
+        )
+        store_scoped = mcp_server.fashion_product_margin_sales_opportunities(
+            dimension=ProductPerformanceDimension.product,
+            store_query="Dallas",
+            lookback_days=90,
+            min_margin_rate=0.50,
+            min_revenue_drop_pct=10.0,
+            top_k=10,
+        )
+        brand_scoped = mcp_server.fashion_product_margin_sales_opportunities(
+            dimension=ProductPerformanceDimension.brand,
+            store_query="Dallas",
+            lookback_days=90,
+            min_margin_rate=0.50,
+            min_revenue_drop_pct=10.0,
+            top_k=10,
+        )
+
+        assert enterprise.rows
+        assert any(row.product_id == "prod_4" for row in enterprise.rows)
+        assert store_scoped.scope_label == "Dallas Downtown"
+        assert any(row.product_id == "prod_4" for row in store_scoped.rows)
+        assert brand_scoped.rows
+        assert any(row.brand == "Tom Ford" for row in brand_scoped.rows)
+        assert all(row.margin_rate >= 0.50 for row in enterprise.rows)
+        assert all((row.revenue_delta_pct or 0.0) <= -10.0 for row in enterprise.rows)
+
+        with pytest.raises(ValidationError):
+            mcp_server.fashion_product_margin_sales_opportunities(
+                lookback_days=7,
+            )
+
+
 def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
@@ -1078,6 +1152,7 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_exec_what_if_simulator" in tool_names
         assert "fashion_exec_campaign_autopilot_prepare" in tool_names
         assert "fashion_exec_campaign_autopilot_send" in tool_names
+        assert "fashion_product_margin_sales_opportunities" in tool_names
         assert "fashion_merch_export_csv" in tool_names
         assert "fashion_prepare_customer_email_draft" in tool_names
         assert "fashion_update_customer_email_draft" in tool_names

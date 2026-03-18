@@ -58,6 +58,9 @@ from app.schemas import (
     MerchandisingRecommendationResponse,
     Objective,
     PeerMode,
+    ProductPerformanceDimension,
+    ProductPerformanceSummaryRequest,
+    ProductPerformanceSummaryResponse,
     PurchaseScope,
     PriceBand,
     RetrievalMode,
@@ -109,6 +112,7 @@ from app.services.merchandising import (
     merchandising_diagnostics,
     merchandising_trend_summary,
 )
+from app.services.product_performance import product_margin_sales_opportunities
 from app.services.recommendations import customer_recommendations, merchandising_recommendations
 from app.services.store_source import fetch_store_snapshot, normalize_stores
 from app.services.synthetic_generator import GenerationVolumes, generate_synthetic_dataset, new_run_id
@@ -2028,6 +2032,52 @@ def fashion_merch_trend_summary(
             compare_mode=compare_mode,
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
+        )
+
+
+@mcp.tool(
+    name="fashion_product_margin_sales_opportunities",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_product_margin_sales_opportunities(
+    dimension: ProductPerformanceDimension = ProductPerformanceDimension.product,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    lookback_days: int = 90,
+    min_margin_rate: float = 0.50,
+    min_revenue_drop_pct: float = 10.0,
+    top_k: int = 15,
+    category: str | None = None,
+    brand: str | None = None,
+) -> ProductPerformanceSummaryResponse:
+    """Find high-margin products or brands with recent sales decline; defaults to enterprise scope when no store is provided."""
+    params = ProductPerformanceSummaryRequest(
+        dimension=dimension,
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        lookback_days=lookback_days,
+        min_margin_rate=min_margin_rate,
+        min_revenue_drop_pct=min_revenue_drop_pct,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+    )
+    with SessionLocal() as db:
+        return product_margin_sales_opportunities(
+            db,
+            dimension=params.dimension,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            lookback_days=params.lookback_days,
+            min_margin_rate=params.min_margin_rate,
+            min_revenue_drop_pct=params.min_revenue_drop_pct,
+            top_k=params.top_k,
+            category=params.category,
+            brand=params.brand,
         )
 
 

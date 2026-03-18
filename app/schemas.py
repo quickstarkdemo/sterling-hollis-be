@@ -754,6 +754,64 @@ class ExecutiveWhatIfSimulatorResponse(BaseModel):
     store_allocations: list[ExecutiveWhatIfStoreAllocation] = Field(default_factory=list)
 
 
+class ProductPerformanceDimension(str, Enum):
+    product = "product"
+    brand = "brand"
+
+
+class ProductPerformanceOpportunityRow(BaseModel):
+    dimension: ProductPerformanceDimension
+    key: str
+    product_id: str | None = None
+    title: str | None = None
+    brand: str
+    category: str | None = None
+    store_id: str | None = None
+    store_name: str | None = None
+    current_revenue: float
+    prior_revenue: float
+    revenue_delta: float
+    revenue_delta_pct: float | None = None
+    current_units: float
+    prior_units: float
+    unit_delta: float
+    unit_delta_pct: float | None = None
+    margin_rate: float
+    opportunity_score: float
+    rationale: str
+
+
+class ProductPerformanceSummaryRequest(BaseModel):
+    dimension: ProductPerformanceDimension = ProductPerformanceDimension.product
+    store_query: str | None = None
+    store_id: str | None = None
+    store_ids: list[str] = Field(default_factory=list)
+    lookback_days: int = Field(default=90, ge=14, le=730)
+    min_margin_rate: float = Field(default=0.50, ge=0.0, le=1.0)
+    min_revenue_drop_pct: float = Field(default=10.0, ge=0.0, le=100.0)
+    top_k: int = Field(default=15, ge=1, le=100)
+    category: str | None = None
+    brand: str | None = None
+
+
+class ProductPerformanceSummaryResponse(BaseModel):
+    summary: str
+    dimension: ProductPerformanceDimension
+    scope_label: str
+    scope_store_ids: list[str] = Field(default_factory=list)
+    lookback_days: int
+    current_window_start: str
+    current_window_end: str
+    prior_window_start: str
+    prior_window_end: str
+    min_margin_rate: float
+    min_revenue_drop_pct: float
+    category: str | None = None
+    brand: str | None = None
+    generated_at: datetime
+    rows: list[ProductPerformanceOpportunityRow] = Field(default_factory=list)
+
+
 class ExecutiveCampaignCandidate(BaseModel):
     store_id: str
     store_name: str

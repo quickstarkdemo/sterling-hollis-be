@@ -1093,9 +1093,16 @@ function compareStoreSelectionSummary(values, labelsByValue, autoLabel) {
   return `${values.length} stores selected`;
 }
 
-function buildCompareStoreMultiSelect(selectedValuesRaw, options, autoLabel) {
-  const currentValues = normalizeSelectionList(selectedValuesRaw);
-  const selected = new Set(currentValues);
+function selectionSignature(values) {
+  return normalizeSelectionList(values).slice().sort().join("|");
+}
+
+function buildCompareStoreMultiSelect(selectedValuesRaw, options, autoLabel, autoSelectedValuesRaw) {
+  const explicitValues = normalizeSelectionList(selectedValuesRaw);
+  const autoSelectedValues = normalizeSelectionList(autoSelectedValuesRaw);
+  const hasExplicitSelection = explicitValues.length > 0;
+  const initialValues = hasExplicitSelection ? explicitValues : autoSelectedValues;
+  const selected = new Set(initialValues);
   const normalizedOptions = (Array.isArray(options) ? options : [])
     .map((option) => {
       if (!isObject(option)) {
@@ -1114,7 +1121,7 @@ function buildCompareStoreMultiSelect(selectedValuesRaw, options, autoLabel) {
   const details = el("details", { className: "fw-multi-select" });
   const summary = el("summary", {
     className: "fw-input fw-multi-select-summary",
-    text: compareStoreSelectionSummary(currentValues, labelsByValue, autoLabel),
+    text: compareStoreSelectionSummary(hasExplicitSelection ? explicitValues : [], labelsByValue, autoLabel),
   });
   const list = el("div", { className: "fw-multi-select-list" });
 
@@ -1167,9 +1174,14 @@ function buildCompareStoreMultiSelect(selectedValuesRaw, options, autoLabel) {
             .map((value) => byValue.get(value))
             .filter(Boolean)
             .map((option) => option.value);
-          state.ui.compareStoreIds = selectedValues;
-          state.ui.compareStoreId = selectedValues[0] || "";
-          summary.textContent = compareStoreSelectionSummary(selectedValues, labelsByValue, autoLabel);
+          const canStayAuto =
+            !hasExplicitSelection &&
+            autoSelectedValues.length > 0 &&
+            selectionSignature(selectedValues) === selectionSignature(autoSelectedValues);
+          const nextExplicitValues = canStayAuto ? [] : selectedValues;
+          state.ui.compareStoreIds = nextExplicitValues;
+          state.ui.compareStoreId = nextExplicitValues[0] || "";
+          summary.textContent = compareStoreSelectionSummary(nextExplicitValues, labelsByValue, autoLabel);
           details.open = false;
           markFilterChange();
           persistWidgetState();
@@ -2619,10 +2631,12 @@ function render() {
   const compareStoreOptions = compareStoreBaseOptions.map((option) =>
     option.value === "" ? { ...option, label: autoPeerSetLabel(result) } : option,
   );
+  const autoPeerIds = Array.isArray(result?.peer_store_ids) ? normalizeSelectionList(result.peer_store_ids) : [];
   const compareStoreMultiSelect = buildCompareStoreMultiSelect(
     state.ui.compareStoreIds,
     compareStoreOptions.filter((option) => option.value),
     autoPeerSetLabel(result),
+    autoPeerIds,
   );
   const lookbackPresetSelect = buildSelect(state.ui.lookbackPreset, LOOKBACK_PRESET_OPTIONS, (value) => {
     state.ui.lookbackPreset = value;
