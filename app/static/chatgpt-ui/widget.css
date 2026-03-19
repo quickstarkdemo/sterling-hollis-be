@@ -214,8 +214,27 @@ body {
   color: #25587f;
 }
 
+.fw-exec-feature-row {
+  margin: -1px 0 0;
+}
+
 .fw-exec-tab-grid {
   margin-top: -1px;
+}
+
+.fw-exec-autopilot-controls {
+  gap: 0;
+}
+
+.fw-exec-autopilot-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(170px, 1fr) minmax(170px, 1fr) minmax(260px, 1.35fr) minmax(140px, 0.7fr);
+  align-items: end;
+}
+
+.fw-exec-autopilot-row .fw-field {
+  align-content: start;
 }
 
 .fw-merch-tabs {
@@ -1454,6 +1473,10 @@ body {
 
   .fw-exec-control-hint {
     margin-top: 0;
+  }
+
+  .fw-exec-autopilot-row {
+    grid-template-columns: 1fr 1fr;
   }
 
   .fw-merch-trend-kpis {

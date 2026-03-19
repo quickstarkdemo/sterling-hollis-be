@@ -1897,11 +1897,22 @@ function render() {
     { label: "Overview", tool: "fashion_exec_overview" },
     { label: "Readiness Radar", tool: "fashion_exec_event_readiness_radar" },
     { label: "What-if Simulator", tool: "fashion_exec_what_if_simulator" },
-    ...(features.execAutoOptimizeEnabled ? [{ label: "Auto-Optimize", tool: "fashion_exec_auto_optimize_strategy" }] : []),
+    {
+      label: "Auto-Optimize",
+      tool: "fashion_exec_auto_optimize_strategy",
+      featureFlag: "execAutoOptimizeEnabled",
+    },
     { label: "Campaign Autopilot", tool: "fashion_exec_campaign_autopilot_prepare" },
   ];
+  const isTabFeatureEnabled = (tab) => {
+    if (!tab.featureFlag) {
+      return true;
+    }
+    return features[tab.featureFlag] === true;
+  };
   const normalizedTool = canonicalTabTool(tool);
-  const activeTabTool = tabs.some((tab) => tab.tool === normalizedTool) ? normalizedTool : tabs[0].tool;
+  const requestedTab = tabs.find((tab) => tab.tool === normalizedTool);
+  const activeTabTool = requestedTab && isTabFeatureEnabled(requestedTab) ? requestedTab.tool : tabs[0].tool;
   const activeTabIndex = Math.max(
     0,
     tabs.findIndex((tab) => tab.tool === activeTabTool),
@@ -1921,6 +1932,13 @@ function render() {
       nextIndex = tabs.length - 1;
     }
     if (nextIndex === null) {
+      return;
+    }
+    const nextTab = tabs[nextIndex];
+    if (!isTabFeatureEnabled(nextTab)) {
+      event.preventDefault();
+      setNotice("Auto-Optimize is disabled. Enable EXEC_AUTO_OPTIMIZE_ENABLED to use this tab.", "error");
+      render();
       return;
     }
     event.preventDefault();
@@ -1973,7 +1991,7 @@ function render() {
       ),
     );
   }
-  if (activeTabTool === "fashion_exec_event_readiness_radar" || activeTabTool === "fashion_exec_campaign_autopilot_prepare") {
+  if (activeTabTool === "fashion_exec_event_readiness_radar") {
     tabScopedControls.push(
       el(
         "div",
@@ -2222,35 +2240,55 @@ function render() {
     tabScopedControls.push(
       el(
         "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Manager Email" }),
-        el("input", {
-          className: "fw-input",
-          type: "email",
-          value: state.ui.toEmail,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.toEmail = event.target.value;
-            queueModelContextUpdate();
-          },
-        }),
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Weekly Shortlist Size" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "1",
-          max: "20",
-          value: state.ui.autopilotTopK,
-          onInput: (event) => {
-            markUserInteraction();
-            state.ui.autopilotTopK = event.target.value;
-            queueModelContextUpdate();
-          },
-        }),
+        { className: "fw-field fw-span-full fw-exec-autopilot-controls" },
+        el(
+          "div",
+          { className: "fw-exec-autopilot-row" },
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Events" }),
+            buildEventsMultiSelect(state.ui.selectedEvents, eventOptions),
+          ),
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Brand Scope" }),
+            buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
+          ),
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Manager Email" }),
+            el("input", {
+              className: "fw-input",
+              type: "email",
+              value: state.ui.toEmail,
+              onInput: (event) => {
+                markUserInteraction();
+                state.ui.toEmail = event.target.value;
+                queueModelContextUpdate();
+              },
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Weekly Shortlist Size" }),
+            el("input", {
+              className: "fw-input",
+              type: "number",
+              min: "1",
+              max: "20",
+              value: state.ui.autopilotTopK,
+              onInput: (event) => {
+                markUserInteraction();
+                state.ui.autopilotTopK = event.target.value;
+                queueModelContextUpdate();
+              },
+            }),
+          ),
+        ),
       ),
     );
   }
@@ -2259,6 +2297,33 @@ function render() {
     "section",
     { className: "fw-panel fw-controls-panel fw-exec-controls-panel" },
     notice,
+    el(
+      "div",
+      { className: "fw-chip-row fw-exec-feature-row" },
+      el(
+        "span",
+        {
+          className: `fw-chip fw-merch-status-chip ${features.execAutoOptimizeEnabled ? "positive" : "neutral"}`,
+          text: `Auto-Optimize ${features.execAutoOptimizeEnabled ? "On" : "Off"}`,
+        },
+      ),
+      el(
+        "span",
+        {
+          className: `fw-chip fw-merch-status-chip ${features.strategyPacketEnabled ? "positive" : "neutral"}`,
+          text: `Strategy Packet ${features.strategyPacketEnabled ? "On" : "Off"}`,
+        },
+      ),
+      !features.execAutoOptimizeEnabled || !features.strategyPacketEnabled
+        ? el(
+            "span",
+            {
+              className: "fw-chip subtle",
+              text: "Enable EXEC_AUTO_OPTIMIZE_ENABLED and STRATEGY_PACKET_ENABLED to surface full flow.",
+            },
+          )
+        : null,
+    ),
     el(
       "div",
       { className: "fw-exec-global-row" },
@@ -2316,6 +2381,7 @@ function render() {
         },
         ...tabs.map((tab, index) => {
           const isActive = index === activeTabIndex;
+          const featureEnabled = isTabFeatureEnabled(tab);
           return el(
             "button",
             {
@@ -2326,15 +2392,20 @@ function render() {
               "aria-selected": isActive ? "true" : "false",
               "aria-controls": "fw-exec-view-panel",
               tabindex: isActive ? "0" : "-1",
-              disabled: state.ui.isLoading ? "true" : null,
+              disabled: state.ui.isLoading || !featureEnabled ? "true" : null,
               onKeydown: (event) => {
                 handleTabKeyDown(event, index);
               },
               onClick: () => {
+                if (!featureEnabled) {
+                  setNotice("Auto-Optimize is disabled. Enable EXEC_AUTO_OPTIMIZE_ENABLED to use this tab.", "error");
+                  render();
+                  return;
+                }
                 void refreshExec(tab.tool);
               },
             },
-            state.ui.isLoading && tab.tool === activeTabTool ? "Loading..." : tab.label,
+            state.ui.isLoading && tab.tool === activeTabTool ? "Loading..." : featureEnabled ? tab.label : `${tab.label} (Off)`,
           );
         }),
       ),
