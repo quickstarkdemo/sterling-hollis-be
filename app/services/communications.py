@@ -28,6 +28,7 @@ from app.schemas import (
 )
 from app.services.demo_assets import demo_image_url
 from app.services.email_service import SesEmailService
+from app.services.executive import apply_execution_tags_for_store
 from app.services.lookup import resolve_customer, resolve_store
 from app.services.recommendations import customer_recommendations
 from app.services.twilio_service import TwilioService
@@ -172,6 +173,7 @@ def _build_email_recommendation_snapshot(
     strategy = "selected_products_only"
     recommendation: CustomerRecommendationResponse | None = None
     resolved_product_ids = list(selected_product_ids or [])
+    settings = get_settings()
     if not resolved_product_ids:
         req = CustomerRecommendationRequest(
             store_id=store_id,
@@ -185,10 +187,18 @@ def _build_email_recommendation_snapshot(
         rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
             session, req, retrieval_mode=retrieval_mode
         )
+        strategy_packet_id = None
+        if settings.associate_priority_tags_enabled:
+            strategy_packet_id, rows = apply_execution_tags_for_store(
+                session,
+                store_id=store_id,
+                recommendations=rows,
+            )
         recommendation = CustomerRecommendationResponse(
             store_id=store_id,
             strategy=strategy,
             recommendations=rows,
+            strategy_packet_id=strategy_packet_id,
             applied_style_constraints=applied_constraints,
             constraint_source=applied_constraints.constraint_source if applied_constraints else None,
             constraint_stage=constraint_stage,
@@ -264,10 +274,18 @@ def prepare_customer_sms(
     rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
         session, req, retrieval_mode=retrieval_mode
     )
+    strategy_packet_id = None
+    if settings.associate_priority_tags_enabled:
+        strategy_packet_id, rows = apply_execution_tags_for_store(
+            session,
+            store_id=resolved_store.id,
+            recommendations=rows,
+        )
     recommendation = CustomerRecommendationResponse(
         store_id=resolved_store.id,
         strategy=strategy,
         recommendations=rows,
+        strategy_packet_id=strategy_packet_id,
         applied_style_constraints=applied_constraints,
         constraint_source=applied_constraints.constraint_source if applied_constraints else None,
         constraint_stage=constraint_stage,

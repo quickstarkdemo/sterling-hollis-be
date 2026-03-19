@@ -31,10 +31,17 @@ from app.schemas import (
     CustomerSearchResponse,
     CustomerValueSummaryRequest,
     CustomerValueSummaryResponse,
+    ExecutiveAutoOptimizeRequest,
+    ExecutiveAutoOptimizeResponse,
+    ExecutiveAutoOptimizeScenario,
     ExecutiveCampaignAutopilotDraftResponse,
     ExecutiveCampaignAutopilotSendResponse,
+    ExecutivePublishStrategyPacketRequest,
     ExecutiveEventReadinessRadarResponse,
     ExecutiveOverviewResponse,
+    ExecutiveStrategyPacketEmailDraftResponse,
+    ExecutiveStrategyPacketEmailSendResponse,
+    ExecutiveStrategyPacketResponse,
     ExecutiveWhatIfSimulatorResponse,
     ExecutiveWorkspaceFilters,
     IndexJobListResponse,
@@ -100,11 +107,17 @@ from app.services.loader import (
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.customer_value import customer_value_summary
 from app.services.executive import (
+    apply_execution_tags_for_store,
+    auto_optimize_strategy,
+    get_strategy_packet,
     campaign_autopilot_prepare,
     campaign_autopilot_send,
     event_readiness_radar,
     executive_overview,
     get_campaign_autopilot_draft,
+    prepare_strategy_packet_email,
+    publish_strategy_packet,
+    send_strategy_packet_email,
     what_if_simulator,
 )
 from app.services.merchandising import (
@@ -224,6 +237,32 @@ def _int_value(value) -> int:
         return int(round(float(value or 0)))
     except Exception:
         return 0
+
+
+def _ensure_feature_enabled(enabled: bool, feature_name: str) -> None:
+    if enabled:
+        return
+    raise ValueError(f"{feature_name} is disabled. Enable the matching feature flag to use this capability.")
+
+
+def _strategy_context_payload(packet: ExecutiveStrategyPacketResponse) -> dict:
+    scenario = packet.scenario
+    return {
+        "packet_id": packet.packet_id,
+        "title": packet.title,
+        "summary": packet.summary,
+        "objective": packet.objective.value,
+        "lookback_days": packet.lookback_days,
+        "scope_label": packet.scope_label,
+        "scope_store_ids": list(packet.scope_store_ids or []),
+        "brands": list(packet.brands or []),
+        "from_category": packet.from_category,
+        "to_category": packet.to_category,
+        "min_margin_rate": packet.min_margin_rate,
+        "max_discount_pct": packet.max_discount_pct,
+        "scenario": scenario.model_dump(mode="json"),
+        "updated_at": packet.updated_at.isoformat(),
+    }
 
 
 def _merch_category_options() -> list[dict[str, str]]:
@@ -435,10 +474,18 @@ def _associate_recommendation_impl(
         rows, strategy, applied_constraints, constraint_stage = customer_recommendations(
             db, req, retrieval_mode=effective_retrieval_mode
         )
+        strategy_packet_id = None
+        if settings.associate_priority_tags_enabled:
+            strategy_packet_id, rows = apply_execution_tags_for_store(
+                db,
+                store_id=resolved_store.id,
+                recommendations=rows,
+            )
         recommendation = CustomerRecommendationResponse(
             store_id=resolved_store.id,
             strategy=strategy,
             recommendations=rows,
+            strategy_packet_id=strategy_packet_id,
             applied_style_constraints=applied_constraints,
             constraint_source=applied_constraints.constraint_source if applied_constraints else None,
             constraint_stage=constraint_stage,
@@ -738,10 +785,18 @@ def fashion_customer_recommendations(
     )
     with SessionLocal() as db:
         rows, strategy, applied_constraints, constraint_stage = customer_recommendations(db, params)
+        strategy_packet_id = None
+        if settings.associate_priority_tags_enabled:
+            strategy_packet_id, rows = apply_execution_tags_for_store(
+                db,
+                store_id=params.store_id,
+                recommendations=rows,
+            )
         return CustomerRecommendationResponse(
             store_id=params.store_id,
             strategy=strategy,
             recommendations=rows,
+            strategy_packet_id=strategy_packet_id,
             applied_style_constraints=applied_constraints,
             constraint_source=applied_constraints.constraint_source if applied_constraints else None,
             constraint_stage=constraint_stage,
@@ -947,19 +1002,41 @@ def _merch_workspace_payload(
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
+    strategy_packet_id: str | None = None,
     initial_notice: str | None = None,
 ) -> dict:
     bounded_lookback = max(7, min(lookback_days, 730))
     bounded_top_k = max(1, min(top_k, 50))
+    effective_objective = objective
+    effective_lookback = bounded_lookback
+    effective_brand = brand
+    effective_category = category
+    effective_store_id = store_id
+    strategy_context = None
+    if settings.merch_strategy_context_enabled and strategy_packet_id:
+        with SessionLocal() as db:
+            packet = get_strategy_packet(db, strategy_packet_id)
+        strategy_context = _strategy_context_payload(packet)
+        if objective == Objective.margin:
+            effective_objective = packet.objective
+        if bounded_lookback == 90:
+            effective_lookback = packet.lookback_days
+        if not effective_brand and packet.brands:
+            effective_brand = ", ".join(packet.brands)
+        if not effective_category and (packet.to_category or packet.from_category):
+            effective_category = packet.to_category or packet.from_category
+        if not effective_store_id and packet.scope_store_ids:
+            effective_store_id = packet.scope_store_ids[0]
+
     initial_result = fashion_merch_action_recommendations(
         store_query=store_query,
-        store_id=store_id,
+        store_id=effective_store_id,
         question=question,
-        objective=objective,
-        lookback_days=bounded_lookback,
+        objective=effective_objective,
+        lookback_days=effective_lookback,
         top_k=bounded_top_k,
-        category=category,
-        brand=brand,
+        category=effective_category,
+        brand=effective_brand,
         price_band=price_band,
         occasion=occasion,
         compare_mode=compare_mode,
@@ -972,12 +1049,12 @@ def _merch_workspace_payload(
         "store": initial_result.store.model_dump(mode="json"),
         "filters": MerchWorkspaceFilters(
             question=question,
-            objective=objective,
-            category=category,
-            brand=brand,
+            objective=effective_objective,
+            category=effective_category,
+            brand=effective_brand,
             price_band=price_band,
             occasion=occasion,
-            lookback_days=bounded_lookback,
+            lookback_days=effective_lookback,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
@@ -987,12 +1064,16 @@ def _merch_workspace_payload(
         "last_result": None,
         "last_tool": "fashion_merch_action_recommendations",
         "initial_notice": initial_notice,
+        "strategy_context": strategy_context,
         "uiHints": {
             "questionPlaceholder": "Optional context (e.g., wedding occasion, protect margin, next 8 weeks)",
             "emptyState": "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
             "categoryOptions": _merch_category_options(),
             "brandOptions": brand_options,
             "compareStoreOptions": compare_store_options,
+            "features": {
+                "merchStrategyContextEnabled": settings.merch_strategy_context_enabled,
+            },
             "actionDefinitions": {
                 "feature": "Strongest demand momentum versus baseline with healthy margin/inventory for full-price placement.",
                 "promote": "Featured Campaign candidates: margin >= 42%, inventory >= 6 units, and softer demand that can respond to campaign support.",
@@ -1018,11 +1099,22 @@ def _exec_workspace_payload(
     to_category: str | None = "shoes",
     to_email: str | None = None,
     autopilot_top_k: int = 6,
+    optimize_discount_min_pct: float = 0.0,
+    optimize_discount_max_pct: float = 20.0,
+    optimize_discount_step_pct: float = 5.0,
+    optimize_shift_min_pct: float = 0.0,
+    optimize_shift_max_pct: float = 20.0,
+    optimize_shift_step_pct: float = 5.0,
+    optimize_top_k_scenarios: int = 3,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+    strategy_packet_id: str | None = None,
     initial_notice: str | None = None,
 ) -> dict:
     bounded_lookback = max(7, min(lookback_days, 730))
     bounded_top_k = max(1, min(top_k_stores, 50))
     bounded_autopilot_top_k = max(1, min(autopilot_top_k, 20))
+    bounded_optimize_top_k = max(1, min(optimize_top_k_scenarios, 10))
     event_options = _exec_event_options()
     default_events = [item["value"] for item in event_options]
 
@@ -1054,6 +1146,16 @@ def _exec_workspace_payload(
             to_category=to_category,
             to_email=effective_to_email,
             autopilot_top_k=bounded_autopilot_top_k,
+            optimize_discount_min_pct=max(0.0, min(float(optimize_discount_min_pct), 60.0)),
+            optimize_discount_max_pct=max(0.0, min(float(optimize_discount_max_pct), 60.0)),
+            optimize_discount_step_pct=max(1.0, min(float(optimize_discount_step_pct), 20.0)),
+            optimize_shift_min_pct=max(-40.0, min(float(optimize_shift_min_pct), 40.0)),
+            optimize_shift_max_pct=max(-40.0, min(float(optimize_shift_max_pct), 40.0)),
+            optimize_shift_step_pct=max(1.0, min(float(optimize_shift_step_pct), 20.0)),
+            optimize_top_k_scenarios=bounded_optimize_top_k,
+            min_margin_rate=max(0.0, min(float(min_margin_rate), 1.0)),
+            max_discount_pct=max(0.0, min(float(max_discount_pct), 60.0)),
+            strategy_packet_id=strategy_packet_id,
         ).model_dump(mode="json"),
         "initial_result": initial_result.model_dump(mode="json"),
         "last_result": None,
@@ -1065,6 +1167,10 @@ def _exec_workspace_payload(
             "categoryOptions": _merch_category_options(),
             "brandOptions": _exec_brand_options(),
             "storeOptions": _exec_store_options(),
+            "features": {
+                "execAutoOptimizeEnabled": settings.exec_auto_optimize_enabled,
+                "strategyPacketEnabled": settings.strategy_packet_enabled,
+            },
         },
     }
 
@@ -1447,6 +1553,7 @@ def fashion_render_merch_workspace(
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
+    strategy_packet_id: str | None = None,
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Render the merchandising workspace inside ChatGPT."""
@@ -1467,6 +1574,7 @@ def fashion_render_merch_workspace(
         compare_mode=compare_mode,
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
+        strategy_packet_id=strategy_packet_id,
         initial_notice=initial_notice,
     )
     structured_payload = {"kind": "merch_workspace", "payload": workspace_payload}
@@ -1505,6 +1613,7 @@ def fashion_open_merch_workspace(
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
+    strategy_packet_id: str | None = None,
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Resolve a store query and open a hydrated merchandising workspace in one call."""
@@ -1530,6 +1639,7 @@ def fashion_open_merch_workspace(
         compare_mode=compare_mode,
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
+        strategy_packet_id=strategy_packet_id,
         initial_notice=notice,
     )
 
@@ -1559,6 +1669,16 @@ def fashion_render_exec_workspace(
     to_category: str | None = "shoes",
     to_email: str | None = None,
     autopilot_top_k: int = 6,
+    optimize_discount_min_pct: float = 0.0,
+    optimize_discount_max_pct: float = 20.0,
+    optimize_discount_step_pct: float = 5.0,
+    optimize_shift_min_pct: float = 0.0,
+    optimize_shift_max_pct: float = 20.0,
+    optimize_shift_step_pct: float = 5.0,
+    optimize_top_k_scenarios: int = 3,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+    strategy_packet_id: str | None = None,
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Render the executive workspace inside ChatGPT."""
@@ -1577,6 +1697,16 @@ def fashion_render_exec_workspace(
         to_category=to_category,
         to_email=to_email,
         autopilot_top_k=autopilot_top_k,
+        optimize_discount_min_pct=optimize_discount_min_pct,
+        optimize_discount_max_pct=optimize_discount_max_pct,
+        optimize_discount_step_pct=optimize_discount_step_pct,
+        optimize_shift_min_pct=optimize_shift_min_pct,
+        optimize_shift_max_pct=optimize_shift_max_pct,
+        optimize_shift_step_pct=optimize_shift_step_pct,
+        optimize_top_k_scenarios=optimize_top_k_scenarios,
+        min_margin_rate=min_margin_rate,
+        max_discount_pct=max_discount_pct,
+        strategy_packet_id=strategy_packet_id,
         initial_notice=initial_notice,
     )
     structured_payload = {"kind": "exec_workspace", "payload": workspace_payload}
@@ -1606,6 +1736,15 @@ def fashion_open_exec_workspace(
     lookback_days: int = 90,
     objective: Objective = Objective.revenue,
     top_k_stores: int = 12,
+    optimize_discount_min_pct: float = 0.0,
+    optimize_discount_max_pct: float = 20.0,
+    optimize_discount_step_pct: float = 5.0,
+    optimize_shift_min_pct: float = 0.0,
+    optimize_shift_max_pct: float = 20.0,
+    optimize_shift_step_pct: float = 5.0,
+    optimize_top_k_scenarios: int = 3,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Open the executive workspace with company-wide defaults."""
@@ -1616,6 +1755,15 @@ def fashion_open_exec_workspace(
         lookback_days=lookback_days,
         objective=objective,
         top_k_stores=top_k_stores,
+        optimize_discount_min_pct=optimize_discount_min_pct,
+        optimize_discount_max_pct=optimize_discount_max_pct,
+        optimize_discount_step_pct=optimize_discount_step_pct,
+        optimize_shift_min_pct=optimize_shift_min_pct,
+        optimize_shift_max_pct=optimize_shift_max_pct,
+        optimize_shift_step_pct=optimize_shift_step_pct,
+        optimize_top_k_scenarios=optimize_top_k_scenarios,
+        min_margin_rate=min_margin_rate,
+        max_discount_pct=max_discount_pct,
         initial_notice=notice,
     )
 
@@ -2078,6 +2226,181 @@ def fashion_product_margin_sales_opportunities(
             top_k=params.top_k,
             category=params.category,
             brand=params.brand,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_auto_optimize_strategy",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_auto_optimize_strategy(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    brands: list[str] | None = None,
+    from_category: str | None = None,
+    to_category: str | None = None,
+    discount_min_pct: float = 0.0,
+    discount_max_pct: float = 20.0,
+    discount_step_pct: float = 5.0,
+    shift_min_pct: float = 0.0,
+    shift_max_pct: float = 20.0,
+    shift_step_pct: float = 5.0,
+    top_k_scenarios: int = 3,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+) -> ExecutiveAutoOptimizeResponse:
+    """Recommend top deterministic what-if scenarios under explicit guardrails; does not mutate data."""
+    _ensure_feature_enabled(settings.exec_auto_optimize_enabled, "Executive auto-optimize")
+    params = ExecutiveAutoOptimizeRequest(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        lookback_days=lookback_days,
+        objective=objective,
+        brands=brands or [],
+        from_category=from_category,
+        to_category=to_category,
+        discount_min_pct=discount_min_pct,
+        discount_max_pct=discount_max_pct,
+        discount_step_pct=discount_step_pct,
+        shift_min_pct=shift_min_pct,
+        shift_max_pct=shift_max_pct,
+        shift_step_pct=shift_step_pct,
+        top_k_scenarios=top_k_scenarios,
+        min_margin_rate=min_margin_rate,
+        max_discount_pct=max_discount_pct,
+    )
+    with SessionLocal() as db:
+        return auto_optimize_strategy(
+            db,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            lookback_days=params.lookback_days,
+            objective=params.objective,
+            brands=params.brands,
+            from_category=params.from_category,
+            to_category=params.to_category,
+            discount_min_pct=params.discount_min_pct,
+            discount_max_pct=params.discount_max_pct,
+            discount_step_pct=params.discount_step_pct,
+            shift_min_pct=params.shift_min_pct,
+            shift_max_pct=params.shift_max_pct,
+            shift_step_pct=params.shift_step_pct,
+            top_k_scenarios=params.top_k_scenarios,
+            min_margin_rate=params.min_margin_rate,
+            max_discount_pct=params.max_discount_pct,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_publish_strategy_packet",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_publish_strategy_packet(
+    scenario: ExecutiveAutoOptimizeScenario,
+    objective: Objective = Objective.revenue,
+    lookback_days: int = 90,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    brands: list[str] | None = None,
+    from_category: str | None = None,
+    to_category: str | None = None,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+    title: str | None = None,
+    summary: str | None = None,
+) -> ExecutiveStrategyPacketResponse:
+    """Publish a strategy packet from an approved optimization scenario for downstream merch/associate workflows."""
+    _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
+    params = ExecutivePublishStrategyPacketRequest(
+        scenario=scenario,
+        objective=objective,
+        lookback_days=lookback_days,
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        brands=brands or [],
+        from_category=from_category,
+        to_category=to_category,
+        min_margin_rate=min_margin_rate,
+        max_discount_pct=max_discount_pct,
+        title=title,
+        summary=summary,
+    )
+    with SessionLocal() as db:
+        return publish_strategy_packet(
+            db,
+            scenario=params.scenario,
+            objective=params.objective,
+            lookback_days=params.lookback_days,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            brands=params.brands,
+            from_category=params.from_category,
+            to_category=params.to_category,
+            min_margin_rate=params.min_margin_rate,
+            max_discount_pct=params.max_discount_pct,
+            title=params.title,
+            summary=params.summary,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_get_strategy_packet",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_get_strategy_packet(packet_id: str) -> ExecutiveStrategyPacketResponse:
+    """Fetch an existing strategy packet by id."""
+    _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
+    with SessionLocal() as db:
+        return get_strategy_packet(db, packet_id=packet_id)
+
+
+@mcp.tool(
+    name="fashion_exec_prepare_strategy_packet_email",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_prepare_strategy_packet_email(
+    packet_id: str,
+    to_email: str | None = None,
+) -> ExecutiveStrategyPacketEmailDraftResponse:
+    """Prepare an approval-gated strategy packet email draft for merchandising leadership."""
+    _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
+    destination = (to_email or "").strip().lower() or _DEFAULT_EXEC_TO_EMAIL
+    with SessionLocal() as db:
+        return prepare_strategy_packet_email(
+            db,
+            packet_id=packet_id,
+            to_email=destination,
+        )
+
+
+@mcp.tool(
+    name="fashion_exec_send_strategy_packet_email",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_send_strategy_packet_email(
+    packet_id: str,
+    approved: bool = False,
+) -> ExecutiveStrategyPacketEmailSendResponse:
+    """Send a prepared strategy packet email only with explicit approval."""
+    _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
+    with SessionLocal() as db:
+        return send_strategy_packet_email(
+            db,
+            packet_id=packet_id,
+            approved=approved,
         )
 
 

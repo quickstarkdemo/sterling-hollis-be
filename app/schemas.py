@@ -198,12 +198,14 @@ class ProductRecommendation(BaseModel):
     image_url: str | None = None
     score: float
     reasons: list[str]
+    execution_tags: list[str] = Field(default_factory=list)
 
 
 class CustomerRecommendationResponse(BaseModel):
     store_id: str
     strategy: str
     recommendations: list[ProductRecommendation]
+    strategy_packet_id: str | None = None
     applied_style_constraints: StyleConstraints | None = None
     constraint_source: str | None = None
     constraint_stage: str | None = None
@@ -629,6 +631,16 @@ class ExecutiveWorkspaceFilters(BaseModel):
     to_category: str | None = None
     to_email: str | None = None
     autopilot_top_k: int = Field(default=6, ge=1, le=20)
+    optimize_discount_min_pct: float = Field(default=0.0, ge=0.0, le=60.0)
+    optimize_discount_max_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+    optimize_discount_step_pct: float = Field(default=5.0, ge=1.0, le=20.0)
+    optimize_shift_min_pct: float = Field(default=0.0, ge=-40.0, le=40.0)
+    optimize_shift_max_pct: float = Field(default=20.0, ge=-40.0, le=40.0)
+    optimize_shift_step_pct: float = Field(default=5.0, ge=1.0, le=20.0)
+    optimize_top_k_scenarios: int = Field(default=3, ge=1, le=10)
+    min_margin_rate: float = Field(default=0.40, ge=0.0, le=1.0)
+    max_discount_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+    strategy_packet_id: str | None = None
 
 
 class ExecutiveRiskLevel(str, Enum):
@@ -752,6 +764,134 @@ class ExecutiveWhatIfSimulatorResponse(BaseModel):
     confidence_interval_high: float
     category_allocations: list[ExecutiveWhatIfCategoryAllocation] = Field(default_factory=list)
     store_allocations: list[ExecutiveWhatIfStoreAllocation] = Field(default_factory=list)
+
+
+class ExecutiveAutoOptimizeScenario(BaseModel):
+    scenario_id: str
+    discount_pct: float
+    floor_space_shift_pct: float
+    from_category: str | None = None
+    to_category: str | None = None
+    expected_revenue: float
+    expected_margin_rate: float
+    revenue_delta: float
+    margin_rate_delta: float
+    confidence_interval_low: float
+    confidence_interval_high: float
+    objective_score: float
+    guardrail_passed: bool
+    guardrail_reasons: list[str] = Field(default_factory=list)
+    rationale: str
+
+
+class ExecutiveAutoOptimizeRequest(BaseModel):
+    store_query: str | None = None
+    store_id: str | None = None
+    store_ids: list[str] = Field(default_factory=list)
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    objective: Objective = Objective.revenue
+    brands: list[str] = Field(default_factory=list)
+    from_category: str | None = None
+    to_category: str | None = None
+    discount_min_pct: float = Field(default=0.0, ge=0.0, le=60.0)
+    discount_max_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+    discount_step_pct: float = Field(default=5.0, ge=1.0, le=20.0)
+    shift_min_pct: float = Field(default=0.0, ge=-40.0, le=40.0)
+    shift_max_pct: float = Field(default=20.0, ge=-40.0, le=40.0)
+    shift_step_pct: float = Field(default=5.0, ge=1.0, le=20.0)
+    top_k_scenarios: int = Field(default=3, ge=1, le=10)
+    min_margin_rate: float = Field(default=0.40, ge=0.0, le=1.0)
+    max_discount_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "ExecutiveAutoOptimizeRequest":
+        if self.discount_min_pct > self.discount_max_pct:
+            raise ValueError("discount_min_pct cannot be greater than discount_max_pct")
+        if self.shift_min_pct > self.shift_max_pct:
+            raise ValueError("shift_min_pct cannot be greater than shift_max_pct")
+        return self
+
+
+class ExecutiveAutoOptimizeResponse(BaseModel):
+    summary: str
+    objective: Objective
+    lookback_days: int
+    generated_at: datetime
+    scope_label: str
+    scope_store_ids: list[str] = Field(default_factory=list)
+    baseline_revenue: float
+    baseline_margin_rate: float
+    scenarios: list[ExecutiveAutoOptimizeScenario] = Field(default_factory=list)
+
+
+class ExecutiveStrategyPacketStatus(str, Enum):
+    published = "published"
+
+
+class ExecutiveStrategyPacketEmailStatus(str, Enum):
+    draft = "draft"
+    sent = "sent"
+    failed = "failed"
+
+
+class ExecutivePublishStrategyPacketRequest(BaseModel):
+    scenario: ExecutiveAutoOptimizeScenario
+    objective: Objective = Objective.revenue
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    store_query: str | None = None
+    store_id: str | None = None
+    store_ids: list[str] = Field(default_factory=list)
+    brands: list[str] = Field(default_factory=list)
+    from_category: str | None = None
+    to_category: str | None = None
+    min_margin_rate: float = Field(default=0.40, ge=0.0, le=1.0)
+    max_discount_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+    title: str | None = None
+    summary: str | None = None
+
+
+class ExecutiveStrategyPacketResponse(BaseModel):
+    packet_id: str
+    status: ExecutiveStrategyPacketStatus
+    title: str
+    summary: str
+    objective: Objective
+    lookback_days: int
+    scope_label: str
+    scope_store_ids: list[str] = Field(default_factory=list)
+    brands: list[str] = Field(default_factory=list)
+    from_category: str | None = None
+    to_category: str | None = None
+    min_margin_rate: float
+    max_discount_pct: float
+    scenario: ExecutiveAutoOptimizeScenario
+    created_at: datetime
+    updated_at: datetime
+    email_status: ExecutiveStrategyPacketEmailStatus
+    to_email: str | None = None
+    email_subject: str | None = None
+    email_body_text: str | None = None
+    provider_message_id: str | None = None
+    email_error_message: str | None = None
+    sent_at: datetime | None = None
+
+
+class ExecutiveStrategyPacketEmailDraftResponse(BaseModel):
+    packet_id: str
+    email_status: ExecutiveStrategyPacketEmailStatus
+    to_email: str
+    subject: str
+    body_text: str
+    generated_at: datetime
+
+
+class ExecutiveStrategyPacketEmailSendResponse(BaseModel):
+    packet_id: str
+    email_status: ExecutiveStrategyPacketEmailStatus
+    to_email: str
+    provider_message_id: str | None = None
+    error_message: str | None = None
+    sent_at: datetime | None = None
 
 
 class ProductPerformanceDimension(str, Enum):

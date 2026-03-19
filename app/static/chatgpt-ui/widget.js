@@ -413,6 +413,8 @@ function buildModelContextPayload() {
   const selected = selectedCustomer(results);
   const analyticsResponse =
     state.analytics.response && state.analytics.customerId === selected?.id ? state.analytics.response : null;
+  const recommendationResponse =
+    state.recommendation.response && state.recommendation.customerId === selected?.id ? state.recommendation.response : null;
   const draftSubject = truncateForModelContext(state.ui.emailSubject, MODEL_CONTEXT_SUBJECT_MAX_CHARS);
   const draftBody = truncateForModelContext(state.ui.emailBody, MODEL_CONTEXT_BODY_MAX_CHARS);
   const emailTo = (state.ui.emailTo || selected?.email || "").trim();
@@ -437,6 +439,7 @@ function buildModelContextPayload() {
     customer_value_forecast_weeks: parsePositiveInt(state.analytics.forecastWeeks, 8, 1, 26),
     customer_value_score: analyticsResponse?.metrics?.value_score ?? null,
     customer_value_tier: analyticsResponse?.metrics?.value_tier ?? null,
+    strategy_packet_id: recommendationResponse?.recommendation?.strategy_packet_id || null,
   };
 }
 
@@ -1862,6 +1865,12 @@ function recommendationCards(response) {
   }
   return rows.map((item) => {
     const itemId = recommendationProductId(item) || "";
+    const executionTags = Array.isArray(item.execution_tags)
+      ? item.execution_tags
+          .map((tag) => String(tag || "").trim())
+          .filter(Boolean)
+          .slice(0, 3)
+      : [];
     const reasonText = Array.isArray(item.reasons)
       ? item.reasons
           .slice(0, 2)
@@ -1902,6 +1911,13 @@ function recommendationCards(response) {
           { className: "fw-rec-content" },
           el("h3", { className: "fw-rec-title", text: item.title || itemId }),
           el("p", { className: "fw-rec-brand", text: item.brand || "Unknown brand" }),
+          executionTags.length
+            ? el(
+                "div",
+                { className: "fw-chip-row" },
+                ...executionTags.map((tag) => el("span", { className: "fw-chip subtle", text: tag })),
+              )
+            : null,
           reasonText ? el("p", { className: "fw-rec-reason-inline", text: reasonText }) : null,
           item.link
             ? el(
@@ -2691,6 +2707,9 @@ function render() {
                 { className: "fw-chip-row" },
                 strategy ? el("span", { className: "fw-chip", text: strategy }) : null,
                 retrievalMode ? el("span", { className: "fw-chip subtle", text: retrievalMode }) : null,
+                response?.recommendation?.strategy_packet_id
+                  ? el("span", { className: "fw-chip subtle", text: `Strategy ${response.recommendation.strategy_packet_id}` })
+                  : null,
               )
             : null,
           displayConstraints

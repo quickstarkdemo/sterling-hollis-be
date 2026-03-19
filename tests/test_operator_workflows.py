@@ -11,13 +11,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Customer, CustomerCommunication, Order, OrderItem, Product, Store, SyntheticRun
+from app.models import Customer, CustomerCommunication, ExecutiveStrategyPacket, Order, OrderItem, Product, Store, SyntheticRun
 from app.schemas import (
     CompareMode,
     CustomerRecommendationRequest,
     Objective,
     PeerMode,
     PriceBand,
+    ProductRecommendation,
     ProductPerformanceDimension,
     RetrievalMode,
     StyleConstraints,
@@ -37,6 +38,7 @@ from app.services.communications import (
 from app.services.index_jobs import process_next_index_job
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.customer_value import customer_value_summary
+from app.services.executive import auto_optimize_strategy, apply_execution_tags_for_store
 from app.services.merchandising import merchandising_action_recommendations, merchandising_diagnostics, merchandising_trend_summary
 from app.services.demo_customer import DEMO_CUSTOMER_ID
 
@@ -372,6 +374,21 @@ def _seed_data(session):
         ]
     )
     session.commit()
+
+
+def _set_strategy_flags(
+    monkeypatch,
+    mcp_server,
+    *,
+    exec_auto=False,
+    packet=False,
+    merch_context=False,
+    associate_tags=False,
+):
+    monkeypatch.setattr(mcp_server.settings, "exec_auto_optimize_enabled", exec_auto)
+    monkeypatch.setattr(mcp_server.settings, "strategy_packet_enabled", packet)
+    monkeypatch.setattr(mcp_server.settings, "merch_strategy_context_enabled", merch_context)
+    monkeypatch.setattr(mcp_server.settings, "associate_priority_tags_enabled", associate_tags)
 
 
 def test_customer_lookup_supports_name_email_and_phone(monkeypatch):
@@ -926,6 +943,324 @@ def test_product_margin_sales_opportunities_supports_enterprise_and_store_scope(
             )
 
 
+def test_exec_auto_optimize_strategy_is_deterministic(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+
+        first = auto_optimize_strategy(
+            session,
+            store_id="1001",
+            lookback_days=90,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            discount_min_pct=0.0,
+            discount_max_pct=20.0,
+            discount_step_pct=10.0,
+            shift_min_pct=0.0,
+            shift_max_pct=20.0,
+            shift_step_pct=10.0,
+            top_k_scenarios=3,
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+        second = auto_optimize_strategy(
+            session,
+            store_id="1001",
+            lookback_days=90,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            discount_min_pct=0.0,
+            discount_max_pct=20.0,
+            discount_step_pct=10.0,
+            shift_min_pct=0.0,
+            shift_max_pct=20.0,
+            shift_step_pct=10.0,
+            top_k_scenarios=3,
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+
+        assert first.scenarios
+        assert second.scenarios
+        assert first.scope_store_ids == ["1001"]
+        assert [(row.scenario_id, row.objective_score) for row in first.scenarios] == [
+            (row.scenario_id, row.objective_score) for row in second.scenarios
+        ]
+        assert [row.guardrail_passed for row in first.scenarios] == [row.guardrail_passed for row in second.scenarios]
+
+
+def test_exec_strategy_packet_lifecycle_and_email_gate(monkeypatch):
+    import app.services.executive as executive_service
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        _set_strategy_flags(monkeypatch, mcp_server, exec_auto=True, packet=True)
+        monkeypatch.setattr(
+            executive_service.SesEmailService,
+            "send_email",
+            lambda self, to_email, subject, text_body, html_body=None: {"message_id": "SES_STRAT_001"},
+        )
+
+        optimize = mcp_server.fashion_exec_auto_optimize_strategy(
+            store_id="1001",
+            lookback_days=90,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            discount_min_pct=0.0,
+            discount_max_pct=20.0,
+            discount_step_pct=10.0,
+            shift_min_pct=0.0,
+            shift_max_pct=20.0,
+            shift_step_pct=10.0,
+            top_k_scenarios=3,
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+        assert optimize.scenarios
+        chosen = optimize.scenarios[0]
+
+        packet = mcp_server.fashion_exec_publish_strategy_packet(
+            scenario=chosen,
+            objective=Objective.revenue,
+            lookback_days=90,
+            store_id="1001",
+            brands=["Valentino"],
+            from_category="womens_apparel",
+            to_category="shoes",
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+            title="Demo packet",
+            summary="Apply to Dallas first.",
+        )
+        assert packet.packet_id.startswith("stratpkt_")
+        assert packet.status.value == "published"
+        assert packet.scope_store_ids == ["1001"]
+
+        draft = mcp_server.fashion_exec_prepare_strategy_packet_email(
+            packet_id=packet.packet_id,
+            to_email="manager@example.com",
+        )
+        assert draft.packet_id == packet.packet_id
+        assert draft.email_status.value == "draft"
+        assert draft.to_email == "manager@example.com"
+        assert "Strategy Packet" in draft.subject
+
+        with pytest.raises(ValueError):
+            mcp_server.fashion_exec_send_strategy_packet_email(packet_id=packet.packet_id, approved=False)
+
+        sent = mcp_server.fashion_exec_send_strategy_packet_email(packet_id=packet.packet_id, approved=True)
+        assert sent.packet_id == packet.packet_id
+        assert sent.email_status.value == "sent"
+        assert sent.provider_message_id == "SES_STRAT_001"
+
+        fetched = mcp_server.fashion_exec_get_strategy_packet(packet.packet_id)
+        assert fetched.email_status.value == "sent"
+        assert fetched.provider_message_id == "SES_STRAT_001"
+
+
+def test_exec_strategy_packet_enforces_feature_flags(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        _set_strategy_flags(monkeypatch, mcp_server, exec_auto=False, packet=False)
+
+        with pytest.raises(ValueError):
+            mcp_server.fashion_exec_auto_optimize_strategy(store_id="1001")
+
+        with pytest.raises(ValueError):
+            mcp_server.fashion_exec_get_strategy_packet(packet_id="stratpkt_missing")
+
+
+def test_merch_workspace_hydrates_strategy_context_from_packet(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        _set_strategy_flags(monkeypatch, mcp_server, exec_auto=True, packet=True, merch_context=True)
+
+        optimize = mcp_server.fashion_exec_auto_optimize_strategy(
+            store_id="1001",
+            lookback_days=180,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            top_k_scenarios=2,
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+        packet = mcp_server.fashion_exec_publish_strategy_packet(
+            scenario=optimize.scenarios[0],
+            objective=Objective.revenue,
+            lookback_days=180,
+            store_id="1001",
+            brands=["Valentino", "Jimmy Choo"],
+            from_category="womens_apparel",
+            to_category="shoes",
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+
+        workspace = mcp_server.fashion_render_merch_workspace(
+            store_id="1001",
+            objective=Objective.margin,
+            lookback_days=90,
+            strategy_packet_id=packet.packet_id,
+        )
+        payload = workspace.structuredContent["payload"]
+
+        assert payload["strategy_context"]["packet_id"] == packet.packet_id
+        assert payload["filters"]["objective"] == "revenue"
+        assert payload["filters"]["lookback_days"] == 180
+        assert payload["filters"]["category"] == "shoes"
+        assert payload["filters"]["brand"] == "valentino, jimmy choo"
+        assert payload["uiHints"]["features"]["merchStrategyContextEnabled"] is True
+
+
+def test_associate_recommendations_apply_priority_tags_when_enabled(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        _set_strategy_flags(monkeypatch, mcp_server, exec_auto=True, packet=True, associate_tags=True)
+
+        optimize = mcp_server.fashion_exec_auto_optimize_strategy(
+            store_id="1001",
+            lookback_days=180,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            top_k_scenarios=2,
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+        packet = mcp_server.fashion_exec_publish_strategy_packet(
+            scenario=optimize.scenarios[0],
+            objective=Objective.revenue,
+            lookback_days=180,
+            store_id="1001",
+            brands=["Valentino", "Jimmy Choo"],
+            from_category="womens_apparel",
+            to_category="shoes",
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            retrieval_mode=RetrievalMode.fast,
+            top_k=6,
+        )
+
+        assert response.recommendation.strategy_packet_id == packet.packet_id
+        assert response.recommendation.recommendations
+        allowed_tags = {"Focus This Week", "Margin Priority", "Campaign Assist"}
+        assert any(item.execution_tags for item in response.recommendation.recommendations)
+        assert all(set(item.execution_tags).issubset(allowed_tags) for item in response.recommendation.recommendations)
+
+
+def test_apply_execution_tags_uses_latest_published_packet(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, _):
+        _seed_data(session)
+
+        recommendation_rows = [
+            ProductRecommendation(
+                product_id="prod_2",
+                title="Jimmy Choo Satin Pump",
+                brand="Jimmy Choo",
+                category="shoes",
+                price=595.0,
+                availability="in stock",
+                score=0.93,
+                reasons=["High affinity match"],
+            )
+        ]
+
+        # no packet -> no tags
+        packet_id, tagged = apply_execution_tags_for_store(session, store_id="1001", recommendations=recommendation_rows)
+        assert packet_id is None
+        assert tagged[0].execution_tags == []
+
+        first = ExecutiveStrategyPacket(
+            id="stratpkt_old",
+            status="published",
+            title="Old",
+            summary="Old packet",
+            payload_json={
+                "objective": "revenue",
+                "lookback_days": 90,
+                "scope_label": "Dallas Downtown",
+                "scope_store_ids": ["1001"],
+                "brands": ["valentino"],
+                "from_category": "womens_apparel",
+                "to_category": "womens_apparel",
+                "min_margin_rate": 0.20,
+                "max_discount_pct": 20.0,
+                "scenario": {
+                    "scenario_id": "opt_001",
+                    "discount_pct": 5.0,
+                    "floor_space_shift_pct": 5.0,
+                    "from_category": "womens_apparel",
+                    "to_category": "womens_apparel",
+                    "expected_revenue": 1000.0,
+                    "expected_margin_rate": 0.5,
+                    "revenue_delta": 100.0,
+                    "margin_rate_delta": 0.01,
+                    "confidence_interval_low": 900.0,
+                    "confidence_interval_high": 1100.0,
+                    "objective_score": 100.0,
+                    "guardrail_passed": True,
+                    "guardrail_reasons": [],
+                    "rationale": "Old scenario",
+                },
+            },
+            email_status="draft",
+            created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        )
+        second = ExecutiveStrategyPacket(
+            id="stratpkt_new",
+            status="published",
+            title="New",
+            summary="New packet",
+            payload_json={
+                "objective": "revenue",
+                "lookback_days": 90,
+                "scope_label": "Dallas Downtown",
+                "scope_store_ids": ["1001"],
+                "brands": ["jimmy choo"],
+                "from_category": "womens_apparel",
+                "to_category": "shoes",
+                "min_margin_rate": 0.20,
+                "max_discount_pct": 20.0,
+                "scenario": {
+                    "scenario_id": "opt_002",
+                    "discount_pct": 10.0,
+                    "floor_space_shift_pct": 8.0,
+                    "from_category": "womens_apparel",
+                    "to_category": "shoes",
+                    "expected_revenue": 1100.0,
+                    "expected_margin_rate": 0.5,
+                    "revenue_delta": 110.0,
+                    "margin_rate_delta": 0.01,
+                    "confidence_interval_low": 950.0,
+                    "confidence_interval_high": 1200.0,
+                    "objective_score": 110.0,
+                    "guardrail_passed": True,
+                    "guardrail_reasons": [],
+                    "rationale": "New scenario",
+                },
+            },
+            email_status="draft",
+            created_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+        )
+        session.add_all([first, second])
+        session.commit()
+
+        packet_id, tagged = apply_execution_tags_for_store(session, store_id="1001", recommendations=recommendation_rows)
+        assert packet_id == "stratpkt_new"
+        assert tagged[0].execution_tags
+
+
 def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
@@ -1150,6 +1485,11 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_exec_overview" in tool_names
         assert "fashion_exec_event_readiness_radar" in tool_names
         assert "fashion_exec_what_if_simulator" in tool_names
+        assert "fashion_exec_auto_optimize_strategy" in tool_names
+        assert "fashion_exec_publish_strategy_packet" in tool_names
+        assert "fashion_exec_get_strategy_packet" in tool_names
+        assert "fashion_exec_prepare_strategy_packet_email" in tool_names
+        assert "fashion_exec_send_strategy_packet_email" in tool_names
         assert "fashion_exec_campaign_autopilot_prepare" in tool_names
         assert "fashion_exec_campaign_autopilot_send" in tool_names
         assert "fashion_product_margin_sales_opportunities" in tool_names

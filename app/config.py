@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     vector_top_k: int = 50
     index_worker_poll_seconds: float = 2.0
 
+    exec_auto_optimize_enabled: bool = False
+    strategy_packet_enabled: bool = False
+    merch_strategy_context_enabled: bool = False
+    associate_priority_tags_enabled: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

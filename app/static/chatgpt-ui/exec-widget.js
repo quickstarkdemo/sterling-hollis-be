@@ -28,6 +28,16 @@ const DEFAULT_PAYLOAD = {
     to_category: "shoes",
     to_email: DEFAULT_EXEC_TO_EMAIL,
     autopilot_top_k: 6,
+    optimize_discount_min_pct: 0,
+    optimize_discount_max_pct: 20,
+    optimize_discount_step_pct: 5,
+    optimize_shift_min_pct: 0,
+    optimize_shift_max_pct: 20,
+    optimize_shift_step_pct: 5,
+    optimize_top_k_scenarios: 3,
+    min_margin_rate: 0.4,
+    max_discount_pct: 20,
+    strategy_packet_id: null,
   },
   initial_result: null,
   last_result: null,
@@ -39,6 +49,10 @@ const DEFAULT_PAYLOAD = {
     events: ["wedding", "holiday_party", "workwear"],
     brandOptions: [],
     storeOptions: [],
+    features: {
+      execAutoOptimizeEnabled: false,
+      strategyPacketEnabled: false,
+    },
   },
 };
 
@@ -57,10 +71,23 @@ const state = {
     toCategory: "shoes",
     toEmail: DEFAULT_EXEC_TO_EMAIL,
     autopilotTopK: "6",
+    optimizeDiscountMinPct: "0",
+    optimizeDiscountMaxPct: "20",
+    optimizeDiscountStepPct: "5",
+    optimizeShiftMinPct: "0",
+    optimizeShiftMaxPct: "20",
+    optimizeShiftStepPct: "5",
+    optimizeTopKScenarios: "3",
+    minMarginRatePct: "40",
+    maxDiscountPct: "20",
+    strategyPacketId: "",
     notice: "",
     noticeTone: "info",
     isLoading: false,
     isSending: false,
+    isPublishingStrategy: false,
+    isPreparingStrategyEmail: false,
+    isSendingStrategyEmail: false,
   },
   runtime: {
     toolOutputApplied: false,
@@ -69,6 +96,9 @@ const state = {
     modelContextTimer: null,
     chartCleanupFns: [],
     autopilotDraftId: null,
+    strategyPacket: null,
+    strategyEmailDraft: null,
+    strategyEmailSend: null,
   },
 };
 
@@ -160,12 +190,38 @@ function normalizeWorkspacePayload(raw) {
           ? rawFilters.to_email.trim()
           : DEFAULT_EXEC_TO_EMAIL,
       autopilot_top_k: Number(rawFilters.autopilot_top_k) > 0 ? Number(rawFilters.autopilot_top_k) : 6,
+      optimize_discount_min_pct:
+        Number.isFinite(Number(rawFilters.optimize_discount_min_pct)) ? Number(rawFilters.optimize_discount_min_pct) : 0,
+      optimize_discount_max_pct:
+        Number.isFinite(Number(rawFilters.optimize_discount_max_pct)) ? Number(rawFilters.optimize_discount_max_pct) : 20,
+      optimize_discount_step_pct:
+        Number.isFinite(Number(rawFilters.optimize_discount_step_pct)) ? Number(rawFilters.optimize_discount_step_pct) : 5,
+      optimize_shift_min_pct:
+        Number.isFinite(Number(rawFilters.optimize_shift_min_pct)) ? Number(rawFilters.optimize_shift_min_pct) : 0,
+      optimize_shift_max_pct:
+        Number.isFinite(Number(rawFilters.optimize_shift_max_pct)) ? Number(rawFilters.optimize_shift_max_pct) : 20,
+      optimize_shift_step_pct:
+        Number.isFinite(Number(rawFilters.optimize_shift_step_pct)) ? Number(rawFilters.optimize_shift_step_pct) : 5,
+      optimize_top_k_scenarios:
+        Number(rawFilters.optimize_top_k_scenarios) > 0 ? Number(rawFilters.optimize_top_k_scenarios) : 3,
+      min_margin_rate: Number.isFinite(Number(rawFilters.min_margin_rate)) ? Number(rawFilters.min_margin_rate) : 0.4,
+      max_discount_pct: Number.isFinite(Number(rawFilters.max_discount_pct)) ? Number(rawFilters.max_discount_pct) : 20,
+      strategy_packet_id:
+        typeof rawFilters.strategy_packet_id === "string" && rawFilters.strategy_packet_id.trim()
+          ? rawFilters.strategy_packet_id.trim()
+          : null,
     },
     initial_result: isObject(raw.initial_result) ? clone(raw.initial_result) : null,
     last_result: isObject(raw.last_result) ? clone(raw.last_result) : null,
     last_tool: typeof raw.last_tool === "string" ? raw.last_tool : "fashion_exec_overview",
     initial_notice: typeof raw.initial_notice === "string" ? raw.initial_notice : null,
-    uiHints: isObject(raw.uiHints) ? clone(raw.uiHints) : clone(DEFAULT_PAYLOAD.uiHints),
+    uiHints: {
+      ...(isObject(raw.uiHints) ? clone(raw.uiHints) : clone(DEFAULT_PAYLOAD.uiHints)),
+      features: {
+        execAutoOptimizeEnabled: Boolean(raw?.uiHints?.features?.execAutoOptimizeEnabled),
+        strategyPacketEnabled: Boolean(raw?.uiHints?.features?.strategyPacketEnabled),
+      },
+    },
   };
 }
 
@@ -187,6 +243,19 @@ function applyWorkspacePayload(raw) {
   state.ui.toCategory = payload.filters.to_category || "";
   state.ui.toEmail = (payload.filters.to_email || DEFAULT_EXEC_TO_EMAIL).trim() || DEFAULT_EXEC_TO_EMAIL;
   state.ui.autopilotTopK = String(payload.filters.autopilot_top_k ?? 6);
+  state.ui.optimizeDiscountMinPct = String(payload.filters.optimize_discount_min_pct ?? 0);
+  state.ui.optimizeDiscountMaxPct = String(payload.filters.optimize_discount_max_pct ?? 20);
+  state.ui.optimizeDiscountStepPct = String(payload.filters.optimize_discount_step_pct ?? 5);
+  state.ui.optimizeShiftMinPct = String(payload.filters.optimize_shift_min_pct ?? 0);
+  state.ui.optimizeShiftMaxPct = String(payload.filters.optimize_shift_max_pct ?? 20);
+  state.ui.optimizeShiftStepPct = String(payload.filters.optimize_shift_step_pct ?? 5);
+  state.ui.optimizeTopKScenarios = String(payload.filters.optimize_top_k_scenarios ?? 3);
+  state.ui.minMarginRatePct = String(Number(payload.filters.min_margin_rate ?? 0.4) * 100);
+  state.ui.maxDiscountPct = String(payload.filters.max_discount_pct ?? 20);
+  state.ui.strategyPacketId = payload.filters.strategy_packet_id || "";
+  state.runtime.strategyPacket = null;
+  state.runtime.strategyEmailDraft = null;
+  state.runtime.strategyEmailSend = null;
   if (payload.initial_notice) {
     setNotice(payload.initial_notice);
   }
@@ -436,6 +505,16 @@ function buildModelContextPayload() {
     events: selectedEventValues(),
     brands: selectedBrandValues(),
     to_email: state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL,
+    optimize_discount_min_pct: clampNumber(state.ui.optimizeDiscountMinPct, 0, 0, 60),
+    optimize_discount_max_pct: clampNumber(state.ui.optimizeDiscountMaxPct, 20, 0, 60),
+    optimize_discount_step_pct: clampNumber(state.ui.optimizeDiscountStepPct, 5, 1, 20),
+    optimize_shift_min_pct: clampNumber(state.ui.optimizeShiftMinPct, 0, -40, 40),
+    optimize_shift_max_pct: clampNumber(state.ui.optimizeShiftMaxPct, 20, -40, 40),
+    optimize_shift_step_pct: clampNumber(state.ui.optimizeShiftStepPct, 5, 1, 20),
+    optimize_top_k_scenarios: parsePositiveInt(state.ui.optimizeTopKScenarios, 3, 1, 10),
+    min_margin_rate: clampNumber(Number(state.ui.minMarginRatePct) / 100, 0.4, 0, 1),
+    max_discount_pct: clampNumber(state.ui.maxDiscountPct, 20, 0, 60),
+    strategy_packet_id: state.ui.strategyPacketId || null,
     autopilot_draft_id: state.runtime.autopilotDraftId || null,
   };
 }
@@ -535,10 +614,41 @@ function buildToolArgs(toolName) {
     }
     return args;
   }
+  if (toolName === "fashion_exec_auto_optimize_strategy") {
+    const brands = selectedBrandValues();
+    const args = {
+      ...common,
+      objective: state.ui.objective || "revenue",
+      from_category: state.ui.fromCategory || undefined,
+      to_category: state.ui.toCategory || undefined,
+      discount_min_pct: clampNumber(state.ui.optimizeDiscountMinPct, 0, 0, 60),
+      discount_max_pct: clampNumber(state.ui.optimizeDiscountMaxPct, 20, 0, 60),
+      discount_step_pct: clampNumber(state.ui.optimizeDiscountStepPct, 5, 1, 20),
+      shift_min_pct: clampNumber(state.ui.optimizeShiftMinPct, 0, -40, 40),
+      shift_max_pct: clampNumber(state.ui.optimizeShiftMaxPct, 20, -40, 40),
+      shift_step_pct: clampNumber(state.ui.optimizeShiftStepPct, 5, 1, 20),
+      top_k_scenarios: parsePositiveInt(state.ui.optimizeTopKScenarios, 3, 1, 10),
+      min_margin_rate: clampNumber(Number(state.ui.minMarginRatePct) / 100, 0.4, 0, 1),
+      max_discount_pct: clampNumber(state.ui.maxDiscountPct, 20, 0, 60),
+    };
+    if (brands.length) {
+      args.brands = brands;
+    }
+    return args;
+  }
   return common;
 }
 
 function toolLabel(toolName) {
+  if (
+    toolName === "fashion_exec_auto_optimize_strategy" ||
+    toolName === "fashion_exec_publish_strategy_packet" ||
+    toolName === "fashion_exec_get_strategy_packet" ||
+    toolName === "fashion_exec_prepare_strategy_packet_email" ||
+    toolName === "fashion_exec_send_strategy_packet_email"
+  ) {
+    return "Auto-Optimize Strategy";
+  }
   if (toolName === "fashion_exec_event_readiness_radar") {
     return "Event Readiness Radar";
   }
@@ -552,6 +662,15 @@ function toolLabel(toolName) {
 }
 
 function tabProblemStatement(toolName) {
+  if (
+    toolName === "fashion_exec_auto_optimize_strategy" ||
+    toolName === "fashion_exec_publish_strategy_packet" ||
+    toolName === "fashion_exec_get_strategy_packet" ||
+    toolName === "fashion_exec_prepare_strategy_packet_email" ||
+    toolName === "fashion_exec_send_strategy_packet_email"
+  ) {
+    return "Problem: Which strategy scenario should we publish and hand off so merch and associates execute the same plan?";
+  }
   if (toolName === "fashion_exec_event_readiness_radar") {
     return "Problem: Which store-event demand spikes are at risk so we can intervene early with transfers or bounded promotions?";
   }
@@ -565,6 +684,15 @@ function tabProblemStatement(toolName) {
 }
 
 function tabControlHint(toolName) {
+  if (
+    toolName === "fashion_exec_auto_optimize_strategy" ||
+    toolName === "fashion_exec_publish_strategy_packet" ||
+    toolName === "fashion_exec_get_strategy_packet" ||
+    toolName === "fashion_exec_prepare_strategy_packet_email" ||
+    toolName === "fashion_exec_send_strategy_packet_email"
+  ) {
+    return "Controls: set scenario ranges and guardrails, then publish one scenario and send an approval-gated strategy email.";
+  }
   if (toolName === "fashion_exec_event_readiness_radar") {
     return "Controls: scope + lookback + events + brands determine readiness signals.";
   }
@@ -637,6 +765,166 @@ async function sendAutopilotDraft() {
     setNotice(`Campaign package sent to ${payload.to_email || state.ui.toEmail}.`);
   } else {
     setNotice(payload.error_message || "Campaign send failed.", "error");
+  }
+  queueModelContextUpdate();
+  render();
+}
+
+function activeExecFeatureFlags() {
+  const features = isObject(state.payload.uiHints?.features) ? state.payload.uiHints.features : {};
+  return {
+    execAutoOptimizeEnabled: features.execAutoOptimizeEnabled === true,
+    strategyPacketEnabled: features.strategyPacketEnabled === true,
+  };
+}
+
+function canonicalTabTool(toolName) {
+  const key = String(toolName || "");
+  if (key === "fashion_exec_campaign_autopilot_send") {
+    return "fashion_exec_campaign_autopilot_prepare";
+  }
+  if (
+    key === "fashion_exec_publish_strategy_packet" ||
+    key === "fashion_exec_get_strategy_packet" ||
+    key === "fashion_exec_prepare_strategy_packet_email" ||
+    key === "fashion_exec_send_strategy_packet_email"
+  ) {
+    return "fashion_exec_auto_optimize_strategy";
+  }
+  return key || "fashion_exec_overview";
+}
+
+async function publishStrategyPacket(scenario) {
+  const features = activeExecFeatureFlags();
+  if (!features.strategyPacketEnabled) {
+    setNotice("Strategy packet feature is disabled.", "error");
+    render();
+    return;
+  }
+  if (!scenario || !isObject(scenario)) {
+    setNotice("Choose a scenario before publishing.", "error");
+    render();
+    return;
+  }
+  markUserInteraction();
+  state.ui.isPublishingStrategy = true;
+  setNotice("Publishing strategy packet...");
+  render();
+  const args = {
+    scenario,
+    objective: state.ui.objective || "revenue",
+    lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
+    store_ids: normalizeStoreIds(state.ui.storeIds),
+    brands: selectedBrandValues(),
+    from_category: state.ui.fromCategory || undefined,
+    to_category: state.ui.toCategory || undefined,
+    min_margin_rate: clampNumber(Number(state.ui.minMarginRatePct) / 100, 0.4, 0, 1),
+    max_discount_pct: clampNumber(state.ui.maxDiscountPct, 20, 0, 60),
+    title: `Strategy Packet - ${new Date().toISOString().slice(0, 10)}`,
+  };
+  const result = await callTool("fashion_exec_publish_strategy_packet", args);
+  state.ui.isPublishingStrategy = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+  const payload = parseToolPayload(result);
+  if (!payload || !isObject(payload) || typeof payload.packet_id !== "string") {
+    setNotice("Publish strategy packet returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+  state.runtime.strategyPacket = payload;
+  state.runtime.strategyEmailDraft = null;
+  state.runtime.strategyEmailSend = null;
+  state.ui.strategyPacketId = payload.packet_id;
+  if (isObject(state.payload.filters)) {
+    state.payload.filters.strategy_packet_id = payload.packet_id;
+  }
+  setNotice(`Published strategy packet ${payload.packet_id}.`);
+  queueModelContextUpdate();
+  render();
+}
+
+async function prepareStrategyPacketEmail() {
+  const features = activeExecFeatureFlags();
+  if (!features.strategyPacketEnabled) {
+    setNotice("Strategy packet feature is disabled.", "error");
+    render();
+    return;
+  }
+  const packetId = (state.ui.strategyPacketId || "").trim();
+  if (!packetId) {
+    setNotice("Publish a strategy packet before preparing email.", "error");
+    render();
+    return;
+  }
+  markUserInteraction();
+  state.ui.isPreparingStrategyEmail = true;
+  setNotice("Preparing strategy packet email...");
+  render();
+  const result = await callTool("fashion_exec_prepare_strategy_packet_email", {
+    packet_id: packetId,
+    to_email: (state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL).trim() || DEFAULT_EXEC_TO_EMAIL,
+  });
+  state.ui.isPreparingStrategyEmail = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+  const payload = parseToolPayload(result);
+  if (!payload || !isObject(payload) || typeof payload.packet_id !== "string") {
+    setNotice("Prepare strategy email returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+  state.runtime.strategyEmailDraft = payload;
+  setNotice(`Prepared strategy email draft for ${payload.to_email || state.ui.toEmail}.`);
+  queueModelContextUpdate();
+  render();
+}
+
+async function sendStrategyPacketEmail() {
+  const features = activeExecFeatureFlags();
+  if (!features.strategyPacketEnabled) {
+    setNotice("Strategy packet feature is disabled.", "error");
+    render();
+    return;
+  }
+  const packetId = (state.ui.strategyPacketId || "").trim();
+  if (!packetId) {
+    setNotice("Publish a strategy packet before sending email.", "error");
+    render();
+    return;
+  }
+  markUserInteraction();
+  state.ui.isSendingStrategyEmail = true;
+  setNotice("Sending strategy packet email...");
+  render();
+  const result = await callTool("fashion_exec_send_strategy_packet_email", {
+    packet_id: packetId,
+    approved: true,
+  });
+  state.ui.isSendingStrategyEmail = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+  const payload = parseToolPayload(result);
+  if (!payload || !isObject(payload) || typeof payload.packet_id !== "string") {
+    setNotice("Send strategy email returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+  state.runtime.strategyEmailSend = payload;
+  const status = String(payload.email_status || "");
+  if (status === "sent") {
+    setNotice(`Strategy packet email sent to ${payload.to_email || state.ui.toEmail}.`);
+  } else {
+    setNotice(payload.error_message || "Strategy packet email failed.", "error");
   }
   queueModelContextUpdate();
   render();
@@ -1150,12 +1438,217 @@ function renderAutopilot(result) {
   );
 }
 
+function renderAutoOptimize(result) {
+  const scenarios = Array.isArray(result?.scenarios) ? result.scenarios : [];
+  const packet = isObject(state.runtime.strategyPacket) ? state.runtime.strategyPacket : null;
+  const emailDraft = isObject(state.runtime.strategyEmailDraft) ? state.runtime.strategyEmailDraft : null;
+  const emailSend = isObject(state.runtime.strategyEmailSend) ? state.runtime.strategyEmailSend : null;
+  const features = activeExecFeatureFlags();
+  const strategyPacketId = packet?.packet_id || state.ui.strategyPacketId || "";
+
+  return el(
+    "div",
+    { className: "fw-list" },
+    el(
+      "section",
+      { className: "fw-panel" },
+      el(
+        "div",
+        { className: "fw-kpi-strip" },
+        kpi("Scope", result?.scope_label || "Network"),
+        kpi("Lookback", `${compactNumber(result?.lookback_days, 0)}d`),
+        kpi("Baseline Revenue", formatCurrency(result?.baseline_revenue)),
+        kpi("Baseline Margin", formatPct(Number(result?.baseline_margin_rate || 0) * 100, 1)),
+        kpi("Scenarios", compactNumber(scenarios.length, 0)),
+      ),
+    ),
+    el(
+      "section",
+      { className: "fw-panel" },
+      el("h3", { className: "fw-panel-title", text: "Recommended Scenarios" }),
+      scenarios.length
+        ? el(
+            "div",
+            { className: "fw-list" },
+            ...scenarios.map((scenario) =>
+              el(
+                "article",
+                { className: "fw-result" },
+                el(
+                  "div",
+                  { className: "fw-section-head" },
+                  el(
+                    "div",
+                    {},
+                    el("h4", {
+                      className: "fw-panel-title",
+                      text: `${scenario.scenario_id}: ${compactNumber(scenario.discount_pct, 1)}% discount, ${compactNumber(scenario.floor_space_shift_pct, 1)}% shift`,
+                    }),
+                    el("p", { className: "fw-empty", text: scenario.rationale || "" }),
+                  ),
+                  el(
+                    "div",
+                    { className: "fw-chip-row" },
+                    el("span", {
+                      className: `fw-chip fw-merch-status-chip ${scenario.guardrail_passed ? "positive" : "negative"}`,
+                      text: scenario.guardrail_passed ? "Guardrails Pass" : "Guardrails Fail",
+                    }),
+                    el("span", { className: "fw-chip subtle", text: `Score ${compactNumber(scenario.objective_score, 1)}` }),
+                    el("span", { className: "fw-chip subtle", text: `Revenue ${formatSignedCurrency(scenario.revenue_delta)}` }),
+                    el("span", {
+                      className: "fw-chip subtle",
+                      text: `Margin ${formatPct(Number(scenario.margin_rate_delta || 0) * 100, 2)}`,
+                    }),
+                  ),
+                ),
+                el(
+                  "p",
+                  {
+                    className: "fw-empty",
+                    text: `Confidence band: ${formatCurrency(scenario.confidence_interval_low)} to ${formatCurrency(scenario.confidence_interval_high)}`,
+                  },
+                ),
+                Array.isArray(scenario.guardrail_reasons) && scenario.guardrail_reasons.length
+                  ? el(
+                      "ul",
+                      { className: "fw-empty", style: "margin:0;padding-left:1rem;" },
+                      ...scenario.guardrail_reasons.map((reason) => el("li", { text: reason })),
+                    )
+                  : null,
+                features.strategyPacketEnabled
+                  ? el(
+                      "div",
+                      { className: "fw-toolbar" },
+                      el(
+                        "button",
+                        {
+                          className: "fw-button",
+                          type: "button",
+                          disabled:
+                            state.ui.isPublishingStrategy || !scenario.guardrail_passed || features.strategyPacketEnabled !== true
+                              ? "true"
+                              : null,
+                          onClick: () => {
+                            void publishStrategyPacket(scenario);
+                          },
+                        },
+                        state.ui.isPublishingStrategy ? "Publishing..." : "Publish Strategy",
+                      ),
+                    )
+                  : null,
+              ),
+            ),
+          )
+        : el("p", { className: "fw-empty", text: "No scenarios generated for this scope." }),
+    ),
+    features.strategyPacketEnabled
+      ? el(
+          "section",
+          { className: "fw-panel" },
+          el("h3", { className: "fw-panel-title", text: "Strategy Packet Handoff" }),
+          strategyPacketId ? el("p", { className: "fw-empty", text: `Packet ID: ${strategyPacketId}` }) : null,
+          packet
+            ? el(
+                "div",
+                { className: "fw-chip-row" },
+                packet.title ? el("span", { className: "fw-chip", text: packet.title }) : null,
+                packet.scope_label ? el("span", { className: "fw-chip subtle", text: packet.scope_label }) : null,
+                packet.to_category ? el("span", { className: "fw-chip subtle", text: `To ${humanizeToken(packet.to_category)}` }) : null,
+              )
+            : null,
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Merch Manager Email" }),
+            el("input", {
+              className: "fw-input",
+              type: "email",
+              value: state.ui.toEmail,
+              onInput: (event) => {
+                markUserInteraction();
+                state.ui.toEmail = event.target.value;
+                queueModelContextUpdate();
+              },
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-toolbar" },
+            el(
+              "button",
+              {
+                className: "fw-button secondary",
+                type: "button",
+                disabled: state.ui.isPreparingStrategyEmail || !strategyPacketId ? "true" : null,
+                onClick: () => {
+                  void prepareStrategyPacketEmail();
+                },
+              },
+              state.ui.isPreparingStrategyEmail ? "Preparing..." : "Prepare Email Draft",
+            ),
+            el(
+              "button",
+              {
+                className: "fw-button",
+                type: "button",
+                disabled: state.ui.isSendingStrategyEmail || !strategyPacketId ? "true" : null,
+                onClick: () => {
+                  void sendStrategyPacketEmail();
+                },
+              },
+              state.ui.isSendingStrategyEmail ? "Sending..." : "Approve + Send",
+            ),
+          ),
+          emailDraft
+            ? el(
+                "details",
+                { className: "fw-panel" },
+                el("summary", { className: "fw-empty", text: `Draft ready for ${emailDraft.to_email}` }),
+                el("p", { className: "fw-empty", text: emailDraft.subject || "" }),
+                emailDraft.body_text ? el("textarea", { className: "fw-textarea", rows: "8", readonly: "true", value: emailDraft.body_text }) : null,
+              )
+            : null,
+          emailSend
+            ? el(
+                "p",
+                {
+                  className: "fw-empty",
+                  text:
+                    emailSend.email_status === "sent"
+                      ? `Sent to ${emailSend.to_email}${emailSend.provider_message_id ? ` (id: ${emailSend.provider_message_id})` : ""}.`
+                      : emailSend.error_message || "Send failed.",
+                },
+              )
+            : null,
+        )
+      : null,
+  );
+}
+
+function formatSignedCurrency(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "-";
+  }
+  const sign = numeric > 0 ? "+" : numeric < 0 ? "-" : "";
+  return `${sign}${formatCurrency(Math.abs(numeric))}`;
+}
+
 function renderResults() {
   const result = activeResult();
   if (!result) {
     return el("p", { className: "fw-empty", text: state.payload.uiHints.emptyState });
   }
   const tool = state.payload.last_tool || "fashion_exec_overview";
+  if (
+    tool === "fashion_exec_auto_optimize_strategy" ||
+    tool === "fashion_exec_publish_strategy_packet" ||
+    tool === "fashion_exec_get_strategy_packet" ||
+    tool === "fashion_exec_prepare_strategy_packet_email" ||
+    tool === "fashion_exec_send_strategy_packet_email"
+  ) {
+    return renderAutoOptimize(result);
+  }
   if (tool === "fashion_exec_event_readiness_radar") {
     return renderRadar(result);
   }
@@ -1399,13 +1892,16 @@ function render() {
   );
 
   const tool = state.payload.last_tool || "fashion_exec_overview";
-  const activeTabTool = tool === "fashion_exec_campaign_autopilot_send" ? "fashion_exec_campaign_autopilot_prepare" : tool;
+  const features = activeExecFeatureFlags();
   const tabs = [
     { label: "Overview", tool: "fashion_exec_overview" },
     { label: "Readiness Radar", tool: "fashion_exec_event_readiness_radar" },
     { label: "What-if Simulator", tool: "fashion_exec_what_if_simulator" },
+    ...(features.execAutoOptimizeEnabled ? [{ label: "Auto-Optimize", tool: "fashion_exec_auto_optimize_strategy" }] : []),
     { label: "Campaign Autopilot", tool: "fashion_exec_campaign_autopilot_prepare" },
   ];
+  const normalizedTool = canonicalTabTool(tool);
+  const activeTabTool = tabs.some((tab) => tab.tool === normalizedTool) ? normalizedTool : tabs[0].tool;
   const activeTabIndex = Math.max(
     0,
     tabs.findIndex((tab) => tab.tool === activeTabTool),
@@ -1457,7 +1953,7 @@ function render() {
   });
 
   const tabScopedControls = [];
-  if (activeTabTool === "fashion_exec_overview") {
+  if (activeTabTool === "fashion_exec_overview" || activeTabTool === "fashion_exec_auto_optimize_strategy") {
     tabScopedControls.push(
       el(
         "div",
@@ -1560,6 +2056,161 @@ function render() {
               step: 1,
               onChange: (value) => {
                 state.ui.floorSpaceShiftPct = value;
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+  if (activeTabTool === "fashion_exec_auto_optimize_strategy") {
+    tabScopedControls.push(
+      el(
+        "div",
+        { className: "fw-field fw-span-full fw-exec-whatif-controls" },
+        el(
+          "div",
+          { className: "fw-exec-whatif-grid" },
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Brand Scope" }),
+            buildBrandsMultiSelect(state.ui.selectedBrands, brandOptions),
+            el("p", {
+              className: "fw-empty fw-inline-meta",
+              text: selectionCountText(selectedBrandCount, "brand", "brands", "No brand selected: includes all brands."),
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            el(
+              "div",
+              { className: "fw-field" },
+              el("label", { className: "fw-label", text: "Reallocate From Category" }),
+              buildSelect(state.ui.fromCategory, categoryOptions, (value) => {
+                state.ui.fromCategory = value;
+              }),
+            ),
+            el(
+              "div",
+              { className: "fw-field" },
+              el("label", { className: "fw-label", text: "Reallocate To Category" }),
+              buildSelect(state.ui.toCategory, categoryOptions, (value) => {
+                state.ui.toCategory = value;
+              }),
+            ),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            buildPercentLeverField({
+              label: "Discount Min (%)",
+              value: state.ui.optimizeDiscountMinPct,
+              min: 0,
+              max: 60,
+              step: 1,
+              onChange: (value) => {
+                state.ui.optimizeDiscountMinPct = value;
+              },
+            }),
+            buildPercentLeverField({
+              label: "Discount Max (%)",
+              value: state.ui.optimizeDiscountMaxPct,
+              min: 0,
+              max: 60,
+              step: 1,
+              onChange: (value) => {
+                state.ui.optimizeDiscountMaxPct = value;
+              },
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            buildPercentLeverField({
+              label: "Shift Min (%)",
+              value: state.ui.optimizeShiftMinPct,
+              min: -40,
+              max: 40,
+              step: 1,
+              onChange: (value) => {
+                state.ui.optimizeShiftMinPct = value;
+              },
+            }),
+            buildPercentLeverField({
+              label: "Shift Max (%)",
+              value: state.ui.optimizeShiftMaxPct,
+              min: -40,
+              max: 40,
+              step: 1,
+              onChange: (value) => {
+                state.ui.optimizeShiftMaxPct = value;
+              },
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            buildPercentLeverField({
+              label: "Discount Step (%)",
+              value: state.ui.optimizeDiscountStepPct,
+              min: 1,
+              max: 20,
+              step: 1,
+              onChange: (value) => {
+                state.ui.optimizeDiscountStepPct = value;
+              },
+            }),
+            buildPercentLeverField({
+              label: "Shift Step (%)",
+              value: state.ui.optimizeShiftStepPct,
+              min: 1,
+              max: 20,
+              step: 1,
+              onChange: (value) => {
+                state.ui.optimizeShiftStepPct = value;
+              },
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-exec-whatif-pair" },
+            buildPercentLeverField({
+              label: "Min Margin Guardrail (%)",
+              value: state.ui.minMarginRatePct,
+              min: 0,
+              max: 100,
+              step: 1,
+              onChange: (value) => {
+                state.ui.minMarginRatePct = value;
+              },
+            }),
+            buildPercentLeverField({
+              label: "Max Discount Guardrail (%)",
+              value: state.ui.maxDiscountPct,
+              min: 0,
+              max: 60,
+              step: 1,
+              onChange: (value) => {
+                state.ui.maxDiscountPct = value;
+              },
+            }),
+          ),
+          el(
+            "div",
+            { className: "fw-field" },
+            el("label", { className: "fw-label", text: "Top Scenarios" }),
+            el("input", {
+              className: "fw-input",
+              type: "number",
+              min: "1",
+              max: "10",
+              value: state.ui.optimizeTopKScenarios,
+              onInput: (event) => {
+                markUserInteraction();
+                state.ui.optimizeTopKScenarios = event.target.value;
+                queueModelContextUpdate();
               },
             }),
           ),
@@ -1704,11 +2355,12 @@ function render() {
     tabScopedControls.length ? el("div", { className: "fw-grid merch-filters fw-exec-tab-grid" }, ...tabScopedControls) : null,
   );
 
+  const contextTool = canonicalTabTool(tool);
   const contextPanel = el(
     "section",
     { className: "fw-panel", id: "fw-exec-view-panel", role: "tabpanel", "aria-labelledby": activeTabId },
-    el("h2", { className: "fw-panel-title", text: toolLabel(tool) }),
-    el("p", { className: "fw-empty fw-exec-problem", text: tabProblemStatement(tool) }),
+    el("h2", { className: "fw-panel-title", text: toolLabel(contextTool) }),
+    el("p", { className: "fw-empty fw-exec-problem", text: tabProblemStatement(contextTool) }),
     el("p", { className: "fw-empty", text: activeResult()?.summary || state.payload.uiHints.emptyState }),
   );
 

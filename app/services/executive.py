@@ -6,24 +6,34 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import ExecutiveCampaignDraft, Order, OrderItem, Product, Store, StoreDailyMetric
+from app.models import ExecutiveCampaignDraft, ExecutiveStrategyPacket, Order, OrderItem, Product, Store, StoreDailyMetric
 from app.schemas import (
+    ExecutiveAutoOptimizeRequest,
+    ExecutiveAutoOptimizeResponse,
+    ExecutiveAutoOptimizeScenario,
     ExecutiveCampaignAction,
     ExecutiveCampaignAutopilotDraftResponse,
     ExecutiveCampaignAutopilotSendResponse,
     ExecutiveCampaignCandidate,
     ExecutiveCampaignStatus,
+    ExecutivePublishStrategyPacketRequest,
     ExecutiveEventReadinessRadarResponse,
     ExecutiveOverviewResponse,
     ExecutiveReadinessRecommendation,
     ExecutiveReadinessRow,
     ExecutiveRiskLevel,
+    ExecutiveStrategyPacketEmailDraftResponse,
+    ExecutiveStrategyPacketEmailSendResponse,
+    ExecutiveStrategyPacketEmailStatus,
+    ExecutiveStrategyPacketResponse,
+    ExecutiveStrategyPacketStatus,
     ExecutiveStoreInsight,
     ExecutiveTrendPoint,
     ExecutiveWhatIfCategoryAllocation,
     ExecutiveWhatIfSimulatorResponse,
     ExecutiveWhatIfStoreAllocation,
     Objective,
+    ProductRecommendation,
     ResolvedStore,
 )
 from app.services.email_service import SesEmailService
@@ -793,6 +803,454 @@ def what_if_simulator(
         category_allocations=category_allocations,
         store_allocations=store_allocations,
     )
+
+
+def _inclusive_range(min_value: float, max_value: float, step: float) -> list[float]:
+    if step <= 0:
+        return [round(min_value, 4)]
+    values: list[float] = []
+    cursor = min_value
+    while cursor <= (max_value + 1e-9):
+        values.append(round(cursor, 4))
+        cursor += step
+    if not values:
+        values = [round(min_value, 4)]
+    if values[-1] != round(max_value, 4):
+        values.append(round(max_value, 4))
+    return sorted(list(dict.fromkeys(values)))
+
+
+def _objective_score(
+    objective: Objective,
+    *,
+    revenue_delta: float,
+    margin_rate_delta: float,
+    expected_revenue: float,
+    expected_margin_rate: float,
+) -> float:
+    if objective == Objective.margin:
+        return (margin_rate_delta * 10000.0) + (revenue_delta * 0.05)
+    if objective == Objective.sell_through:
+        return (revenue_delta * 0.35) + (expected_revenue * 0.0005)
+    return revenue_delta + (expected_margin_rate * 50.0)
+
+
+def auto_optimize_strategy(
+    session: Session,
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    brands: list[str] | None = None,
+    from_category: str | None = None,
+    to_category: str | None = None,
+    discount_min_pct: float = 0.0,
+    discount_max_pct: float = 20.0,
+    discount_step_pct: float = 5.0,
+    shift_min_pct: float = 0.0,
+    shift_max_pct: float = 20.0,
+    shift_step_pct: float = 5.0,
+    top_k_scenarios: int = 3,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+) -> ExecutiveAutoOptimizeResponse:
+    params = ExecutiveAutoOptimizeRequest(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        lookback_days=lookback_days,
+        objective=objective,
+        brands=brands or [],
+        from_category=from_category,
+        to_category=to_category,
+        discount_min_pct=discount_min_pct,
+        discount_max_pct=discount_max_pct,
+        discount_step_pct=discount_step_pct,
+        shift_min_pct=shift_min_pct,
+        shift_max_pct=shift_max_pct,
+        shift_step_pct=shift_step_pct,
+        top_k_scenarios=top_k_scenarios,
+        min_margin_rate=min_margin_rate,
+        max_discount_pct=max_discount_pct,
+    )
+
+    explicit_store_ids = [str(value).strip() for value in (params.store_ids or []) if str(value).strip()]
+    scoped_store_ids, resolved = _resolved_scope(
+        session,
+        store_query=params.store_query,
+        store_id=params.store_id,
+        store_ids=explicit_store_ids,
+    )
+    scope_label = _scope_label(resolved=resolved, explicit_store_ids=explicit_store_ids)
+
+    discount_values = _inclusive_range(params.discount_min_pct, params.discount_max_pct, params.discount_step_pct)
+    if params.from_category and params.to_category and params.from_category != params.to_category:
+        shift_values = _inclusive_range(params.shift_min_pct, params.shift_max_pct, params.shift_step_pct)
+    else:
+        shift_values = [0.0]
+
+    candidates: list[ExecutiveAutoOptimizeScenario] = []
+    scenario_counter = 0
+    baseline_revenue = 0.0
+    baseline_margin_rate = 0.0
+    normalized_brands = _normalized_brands(params.brands)
+    for discount in discount_values:
+        for shift in shift_values:
+            simulation = what_if_simulator(
+                session,
+                store_ids=scoped_store_ids,
+                lookback_days=params.lookback_days,
+                discount_pct=discount,
+                floor_space_shift_pct=shift,
+                from_category=params.from_category,
+                to_category=params.to_category,
+                brands=normalized_brands,
+            )
+            if scenario_counter == 0:
+                baseline_revenue = simulation.baseline_revenue
+                baseline_margin_rate = simulation.baseline_margin_rate
+
+            guardrail_reasons: list[str] = []
+            if float(discount) > float(params.max_discount_pct):
+                guardrail_reasons.append(
+                    f"Discount {discount:.1f}% exceeds max guardrail {params.max_discount_pct:.1f}%."
+                )
+            if simulation.expected_margin_rate < params.min_margin_rate:
+                guardrail_reasons.append(
+                    f"Projected margin {simulation.expected_margin_rate * 100:.1f}% is below guardrail {params.min_margin_rate * 100:.1f}%."
+                )
+            if simulation.revenue_delta <= 0:
+                guardrail_reasons.append("Projected revenue lift is non-positive.")
+
+            guardrail_passed = len(guardrail_reasons) == 0
+            score = _objective_score(
+                params.objective,
+                revenue_delta=simulation.revenue_delta,
+                margin_rate_delta=simulation.margin_rate_delta,
+                expected_revenue=simulation.expected_revenue,
+                expected_margin_rate=simulation.expected_margin_rate,
+            )
+            if not guardrail_passed:
+                score -= 1_000_000.0
+
+            scenario_counter += 1
+            candidates.append(
+                ExecutiveAutoOptimizeScenario(
+                    scenario_id=f"opt_{scenario_counter:03d}",
+                    discount_pct=round(discount, 4),
+                    floor_space_shift_pct=round(shift, 4),
+                    from_category=params.from_category,
+                    to_category=params.to_category,
+                    expected_revenue=simulation.expected_revenue,
+                    expected_margin_rate=simulation.expected_margin_rate,
+                    revenue_delta=simulation.revenue_delta,
+                    margin_rate_delta=simulation.margin_rate_delta,
+                    confidence_interval_low=simulation.confidence_interval_low,
+                    confidence_interval_high=simulation.confidence_interval_high,
+                    objective_score=round(score, 4),
+                    guardrail_passed=guardrail_passed,
+                    guardrail_reasons=guardrail_reasons,
+                    rationale=(
+                        f"Discount {discount:.1f}% and shift {shift:.1f}% maximize {params.objective.value.replace('_', ' ')} score "
+                        f"under current constraints."
+                    ),
+                )
+            )
+
+    candidates.sort(
+        key=lambda item: (
+            1 if item.guardrail_passed else 0,
+            item.objective_score,
+            item.revenue_delta,
+            item.margin_rate_delta,
+        ),
+        reverse=True,
+    )
+    scenarios = candidates[: params.top_k_scenarios]
+    summary = (
+        f"Auto-optimized {len(scenarios)} scenarios for {scope_label} over {params.lookback_days} days "
+        f"using deterministic grid search."
+    )
+    return ExecutiveAutoOptimizeResponse(
+        summary=summary,
+        objective=params.objective,
+        lookback_days=params.lookback_days,
+        generated_at=datetime.now(timezone.utc),
+        scope_label=scope_label,
+        scope_store_ids=scoped_store_ids,
+        baseline_revenue=round(baseline_revenue, 4),
+        baseline_margin_rate=round(baseline_margin_rate, 4),
+        scenarios=scenarios,
+    )
+
+
+def _strategy_packet_to_response(packet: ExecutiveStrategyPacket) -> ExecutiveStrategyPacketResponse:
+    payload = dict(packet.payload_json or {})
+    scenario_payload = payload.get("scenario", {})
+    if not isinstance(scenario_payload, dict):
+        scenario_payload = {}
+    scenario = ExecutiveAutoOptimizeScenario.model_validate(scenario_payload)
+    return ExecutiveStrategyPacketResponse(
+        packet_id=packet.id,
+        status=ExecutiveStrategyPacketStatus(packet.status),
+        title=str(packet.title or ""),
+        summary=str(packet.summary or ""),
+        objective=Objective(payload.get("objective", Objective.revenue.value)),
+        lookback_days=int(payload.get("lookback_days", 90)),
+        scope_label=str(payload.get("scope_label") or "company-wide network"),
+        scope_store_ids=[str(value) for value in payload.get("scope_store_ids", []) if str(value).strip()],
+        brands=[str(value) for value in payload.get("brands", []) if str(value).strip()],
+        from_category=payload.get("from_category"),
+        to_category=payload.get("to_category"),
+        min_margin_rate=float(payload.get("min_margin_rate", 0.40)),
+        max_discount_pct=float(payload.get("max_discount_pct", 20.0)),
+        scenario=scenario,
+        created_at=packet.created_at,
+        updated_at=packet.updated_at,
+        email_status=ExecutiveStrategyPacketEmailStatus(packet.email_status),
+        to_email=packet.to_email,
+        email_subject=packet.email_subject,
+        email_body_text=packet.email_body_text,
+        provider_message_id=packet.provider_message_id,
+        email_error_message=packet.email_error_message,
+        sent_at=packet.sent_at,
+    )
+
+
+def publish_strategy_packet(
+    session: Session,
+    *,
+    scenario: ExecutiveAutoOptimizeScenario,
+    objective: Objective = Objective.revenue,
+    lookback_days: int = 90,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    brands: list[str] | None = None,
+    from_category: str | None = None,
+    to_category: str | None = None,
+    min_margin_rate: float = 0.40,
+    max_discount_pct: float = 20.0,
+    title: str | None = None,
+    summary: str | None = None,
+) -> ExecutiveStrategyPacketResponse:
+    params = ExecutivePublishStrategyPacketRequest(
+        scenario=scenario,
+        objective=objective,
+        lookback_days=lookback_days,
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        brands=brands or [],
+        from_category=from_category,
+        to_category=to_category,
+        min_margin_rate=min_margin_rate,
+        max_discount_pct=max_discount_pct,
+        title=title,
+        summary=summary,
+    )
+    explicit_store_ids = [str(value).strip() for value in params.store_ids if str(value).strip()]
+    scoped_store_ids, resolved = _resolved_scope(
+        session,
+        store_query=params.store_query,
+        store_id=params.store_id,
+        store_ids=explicit_store_ids,
+    )
+    scope_label = _scope_label(resolved=resolved, explicit_store_ids=explicit_store_ids)
+    now = datetime.now(timezone.utc)
+    packet_id = f"stratpkt_{uuid.uuid4().hex[:12]}"
+    packet_title = (params.title or "").strip() or f"Strategy Packet - {now.date().isoformat()}"
+    packet_summary = (params.summary or "").strip() or params.scenario.rationale
+
+    payload = {
+        "objective": params.objective.value,
+        "lookback_days": params.lookback_days,
+        "scope_label": scope_label,
+        "scope_store_ids": scoped_store_ids,
+        "brands": _normalized_brands(params.brands),
+        "from_category": params.from_category,
+        "to_category": params.to_category,
+        "min_margin_rate": params.min_margin_rate,
+        "max_discount_pct": params.max_discount_pct,
+        "scenario": params.scenario.model_dump(mode="json"),
+    }
+
+    record = ExecutiveStrategyPacket(
+        id=packet_id,
+        status=ExecutiveStrategyPacketStatus.published.value,
+        title=packet_title,
+        summary=packet_summary,
+        payload_json=payload,
+        email_status=ExecutiveStrategyPacketEmailStatus.draft.value,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(record)
+    session.commit()
+    return _strategy_packet_to_response(record)
+
+
+def get_strategy_packet(session: Session, packet_id: str) -> ExecutiveStrategyPacketResponse:
+    record = session.get(ExecutiveStrategyPacket, packet_id)
+    if not record:
+        raise ValueError(f"Executive strategy packet {packet_id} was not found.")
+    return _strategy_packet_to_response(record)
+
+
+def _strategy_email_body(packet: ExecutiveStrategyPacketResponse) -> str:
+    scenario = packet.scenario
+    lines = [
+        packet.title,
+        "",
+        packet.summary,
+        "",
+        f"Objective: {packet.objective.value.replace('_', ' ')}",
+        f"Lookback: {packet.lookback_days} days",
+        f"Scope: {packet.scope_label}",
+        f"Reallocate From: {packet.from_category or 'n/a'}",
+        f"Reallocate To: {packet.to_category or 'n/a'}",
+        f"Discount: {scenario.discount_pct:.1f}%",
+        f"Floor Space Shift: {scenario.floor_space_shift_pct:.1f}%",
+        f"Projected Revenue Delta: {scenario.revenue_delta:.2f}",
+        f"Projected Margin Delta: {scenario.margin_rate_delta:.4f}",
+        "",
+        "Guardrails:",
+        f"- Min margin rate: {packet.min_margin_rate * 100:.1f}%",
+        f"- Max discount: {packet.max_discount_pct:.1f}%",
+        "",
+        "Execution note: apply strategy via merchandising controls and associate priority tags.",
+    ]
+    return "\n".join(lines)
+
+
+def prepare_strategy_packet_email(
+    session: Session,
+    *,
+    packet_id: str,
+    to_email: str,
+) -> ExecutiveStrategyPacketEmailDraftResponse:
+    destination = (to_email or "").strip().lower()
+    if not destination:
+        raise ValueError("to_email is required.")
+    record = session.get(ExecutiveStrategyPacket, packet_id)
+    if not record:
+        raise ValueError(f"Executive strategy packet {packet_id} was not found.")
+
+    packet = _strategy_packet_to_response(record)
+    record.to_email = destination
+    record.email_subject = f"Strategy Packet - {packet.title}"
+    record.email_body_text = _strategy_email_body(packet)
+    record.email_status = ExecutiveStrategyPacketEmailStatus.draft.value
+    record.email_error_message = None
+    record.updated_at = datetime.now(timezone.utc)
+    session.add(record)
+    session.commit()
+
+    return ExecutiveStrategyPacketEmailDraftResponse(
+        packet_id=record.id,
+        email_status=ExecutiveStrategyPacketEmailStatus(record.email_status),
+        to_email=destination,
+        subject=str(record.email_subject or ""),
+        body_text=str(record.email_body_text or ""),
+        generated_at=record.updated_at,
+    )
+
+
+def send_strategy_packet_email(
+    session: Session,
+    *,
+    packet_id: str,
+    approved: bool = False,
+) -> ExecutiveStrategyPacketEmailSendResponse:
+    if not approved:
+        raise ValueError("Explicit approval is required to send strategy packet emails.")
+
+    record = session.get(ExecutiveStrategyPacket, packet_id)
+    if not record:
+        raise ValueError(f"Executive strategy packet {packet_id} was not found.")
+    if record.email_status == ExecutiveStrategyPacketEmailStatus.sent.value:
+        raise ValueError("Strategy packet email was already sent.")
+    if not record.to_email or not record.email_subject or not record.email_body_text:
+        raise ValueError("Prepare a strategy packet email draft before sending.")
+
+    email_service = SesEmailService()
+    provider_message_id = None
+    try:
+        payload = email_service.send_email(
+            to_email=record.to_email,
+            subject=record.email_subject,
+            text_body=record.email_body_text,
+        )
+        provider_message_id = payload.get("message_id")
+        record.email_status = ExecutiveStrategyPacketEmailStatus.sent.value
+        record.provider_message_id = provider_message_id
+        record.email_error_message = None
+        record.sent_at = datetime.now(timezone.utc)
+    except Exception as exc:
+        record.email_status = ExecutiveStrategyPacketEmailStatus.failed.value
+        record.email_error_message = str(exc)[:2000]
+        record.sent_at = None
+    finally:
+        record.updated_at = datetime.now(timezone.utc)
+        session.add(record)
+        session.commit()
+
+    return ExecutiveStrategyPacketEmailSendResponse(
+        packet_id=record.id,
+        email_status=ExecutiveStrategyPacketEmailStatus(record.email_status),
+        to_email=record.to_email or "",
+        provider_message_id=provider_message_id,
+        error_message=record.email_error_message,
+        sent_at=record.sent_at,
+    )
+
+
+def active_strategy_packet_for_store(session: Session, store_id: str) -> ExecutiveStrategyPacketResponse | None:
+    records = session.scalars(
+        select(ExecutiveStrategyPacket)
+        .where(ExecutiveStrategyPacket.status == ExecutiveStrategyPacketStatus.published.value)
+        .order_by(ExecutiveStrategyPacket.created_at.desc())
+    ).all()
+    for record in records:
+        payload = dict(record.payload_json or {})
+        scope_store_ids = [str(value).strip() for value in payload.get("scope_store_ids", []) if str(value).strip()]
+        if not scope_store_ids or store_id in scope_store_ids:
+            return _strategy_packet_to_response(record)
+    return None
+
+
+def apply_execution_tags_for_store(
+    session: Session,
+    *,
+    store_id: str,
+    recommendations: list[ProductRecommendation],
+) -> tuple[str | None, list[ProductRecommendation]]:
+    strategy_packet = active_strategy_packet_for_store(session, store_id)
+    if strategy_packet is None or not recommendations:
+        return None, recommendations
+
+    focus_category = (strategy_packet.to_category or "").strip().lower()
+    prioritized_brands = {value.strip().lower() for value in strategy_packet.brands if str(value).strip()}
+    min_margin_rate = float(strategy_packet.min_margin_rate)
+    product_ids = [item.product_id for item in recommendations if item.product_id]
+    products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all() if product_ids else []
+    product_margin_map = {product.id: float(product.margin_pct or 0.0) for product in products}
+
+    for item in recommendations:
+        tags: list[str] = []
+        item_category = str(item.category or "").strip().lower()
+        item_brand = str(item.brand or "").strip().lower()
+        if focus_category and item_category == focus_category:
+            tags.append("Focus This Week")
+        if product_margin_map.get(item.product_id, 0.0) >= min_margin_rate:
+            tags.append("Margin Priority")
+        if (focus_category and item_category == focus_category) or (item_brand and item_brand in prioritized_brands):
+            tags.append("Campaign Assist")
+        item.execution_tags = list(dict.fromkeys(tags))
+
+    return strategy_packet.packet_id, recommendations
 
 
 def campaign_autopilot_prepare(

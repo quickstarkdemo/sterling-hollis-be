@@ -5,6 +5,7 @@ const TREND_DEBUG_ENABLED = meta?.trendDebug === true;
 
 const DEFAULT_PAYLOAD = {
   store: null,
+  strategy_context: null,
   filters: {
     question: null,
     objective: "margin",
@@ -33,6 +34,9 @@ const DEFAULT_PAYLOAD = {
       feature: "Strongest demand momentum versus baseline with healthy margin/inventory for full-price placement.",
       promote: "Featured Campaign candidates: margin >= 42%, inventory >= 6 units, and softer demand that can respond to campaign support.",
       deprioritize: "Inventory pressure plus below-baseline demand; reduce exposure and floor priority.",
+    },
+    features: {
+      merchStrategyContextEnabled: false,
     },
   },
 };
@@ -192,6 +196,33 @@ function normalizeActionDefinitions(raw) {
   return defaults;
 }
 
+function normalizeStrategyContext(raw) {
+  if (!isObject(raw)) {
+    return null;
+  }
+  const packetId = typeof raw.packet_id === "string" ? raw.packet_id.trim() : "";
+  if (!packetId) {
+    return null;
+  }
+  const scenario = isObject(raw.scenario) ? clone(raw.scenario) : null;
+  return {
+    packet_id: packetId,
+    title: typeof raw.title === "string" ? raw.title : "",
+    summary: typeof raw.summary === "string" ? raw.summary : "",
+    objective: typeof raw.objective === "string" ? raw.objective : "",
+    lookback_days: Number.isFinite(Number(raw.lookback_days)) ? Number(raw.lookback_days) : null,
+    scope_label: typeof raw.scope_label === "string" ? raw.scope_label : "",
+    scope_store_ids: normalizeSelectionList(raw.scope_store_ids),
+    brands: normalizeSelectionList(raw.brands),
+    from_category: typeof raw.from_category === "string" ? raw.from_category : null,
+    to_category: typeof raw.to_category === "string" ? raw.to_category : null,
+    min_margin_rate: Number.isFinite(Number(raw.min_margin_rate)) ? Number(raw.min_margin_rate) : null,
+    max_discount_pct: Number.isFinite(Number(raw.max_discount_pct)) ? Number(raw.max_discount_pct) : null,
+    scenario,
+    updated_at: typeof raw.updated_at === "string" ? raw.updated_at : null,
+  };
+}
+
 function normalizeCompareStoreOptions(raw) {
   const defaults = [{ value: "", label: "Auto peer set" }];
   if (!Array.isArray(raw)) {
@@ -285,6 +316,7 @@ function normalizeWorkspacePayload(raw) {
 
   return {
     store: clone(raw.store),
+    strategy_context: normalizeStrategyContext(raw.strategy_context),
     filters: {
       question: typeof rawFilters.question === "string" ? rawFilters.question : null,
       objective: typeof rawFilters.objective === "string" ? rawFilters.objective : "margin",
@@ -327,6 +359,9 @@ function normalizeWorkspacePayload(raw) {
       brandOptions: normalizeBrandOptions(raw.uiHints && raw.uiHints.brandOptions),
       compareStoreOptions: normalizeCompareStoreOptions(raw.uiHints && raw.uiHints.compareStoreOptions),
       actionDefinitions: normalizeActionDefinitions(raw.uiHints && raw.uiHints.actionDefinitions),
+      features: {
+        merchStrategyContextEnabled: Boolean(raw?.uiHints?.features?.merchStrategyContextEnabled),
+      },
     },
   };
 }
@@ -620,6 +655,7 @@ function stableTextHash(raw) {
 function buildModelContextPayload() {
   const active = activeResult();
   const compareStoreIds = normalizeSelectionList(state.ui.compareStoreIds);
+  const strategyContext = normalizeStrategyContext(state.payload.strategy_context);
   return {
     workspace: "merch_workspace",
     store_id: state.payload.store?.id || null,
@@ -637,6 +673,9 @@ function buildModelContextPayload() {
     compare_store_id: compareStoreIds[0] || null,
     compare_store_ids: compareStoreIds,
     top_k: Number(state.ui.topK || 9),
+    strategy_packet_id: strategyContext?.packet_id || null,
+    strategy_objective: strategyContext?.objective || null,
+    strategy_to_category: strategyContext?.to_category || null,
     row_count: rowCountForResult(active),
     csv_hash: stableTextHash(state.ui.csvText),
   };
@@ -1285,6 +1324,53 @@ function peerBoxLabel(result) {
     return result.compare_store_name.trim();
   }
   return autoPeerSetLabel(result);
+}
+
+function renderStrategyContextCard() {
+  const context = normalizeStrategyContext(state.payload.strategy_context);
+  const strategyEnabled = Boolean(state.payload?.uiHints?.features?.merchStrategyContextEnabled);
+  if (!strategyEnabled || !context) {
+    return null;
+  }
+  const scenario = isObject(context.scenario) ? context.scenario : null;
+  return el(
+    "section",
+    { className: "fw-panel" },
+    el(
+      "div",
+      { className: "fw-section-head" },
+      el(
+        "div",
+        {},
+        el("div", { className: "fw-kicker", text: "Strategy Context" }),
+        el("h3", { className: "fw-panel-title", text: context.title || "Active strategy packet" }),
+        context.summary ? el("p", { className: "fw-empty", text: context.summary }) : null,
+      ),
+      el("span", { className: "fw-chip subtle", text: context.packet_id }),
+    ),
+    el(
+      "div",
+      { className: "fw-chip-row" },
+      context.objective ? el("span", { className: "fw-chip", text: `Objective ${humanizeToken(context.objective)}` }) : null,
+      Number.isFinite(Number(context.lookback_days))
+        ? el("span", { className: "fw-chip subtle", text: `Lookback ${context.lookback_days}d` })
+        : null,
+      context.scope_label ? el("span", { className: "fw-chip subtle", text: context.scope_label }) : null,
+      context.to_category ? el("span", { className: "fw-chip subtle", text: `To ${humanizeToken(context.to_category)}` }) : null,
+      Number.isFinite(Number(context.min_margin_rate))
+        ? el("span", { className: "fw-chip subtle", text: `Min margin ${(Number(context.min_margin_rate) * 100).toFixed(1)}%` })
+        : null,
+      Number.isFinite(Number(context.max_discount_pct))
+        ? el("span", { className: "fw-chip subtle", text: `Max discount ${compactNumber(context.max_discount_pct)}%` })
+        : null,
+      Number.isFinite(Number(scenario?.discount_pct))
+        ? el("span", { className: "fw-chip subtle", text: `Scenario discount ${compactNumber(scenario.discount_pct)}%` })
+        : null,
+      Number.isFinite(Number(scenario?.floor_space_shift_pct))
+        ? el("span", { className: "fw-chip subtle", text: `Shift ${compactNumber(scenario.floor_space_shift_pct)}%` })
+        : null,
+    ),
+  );
 }
 
 function renderActions(result) {
@@ -2710,6 +2796,7 @@ function render() {
     store
       ? el("p", { className: "fw-empty", text: `${store.city}, ${store.state} • profile ${humanizeToken(store.profile_type)}` })
       : el("p", { className: "fw-empty", text: "No store resolved yet. Open from a store query in chat." }),
+    renderStrategyContextCard(),
     el(
       "div",
       { className: "fw-grid merch-filters fw-merch-clean-filters" },
