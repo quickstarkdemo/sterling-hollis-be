@@ -57,11 +57,14 @@ const state = {
     compareStoreId: "",
     compareStoreIds: [],
     topK: "9",
+    strategyTagIntensity: "medium",
     csvText: "",
     notice: "",
     noticeTone: "info",
     isLoading: false,
     isExporting: false,
+    isSavingStrategyOverride: false,
+    isResettingStrategyOverride: false,
   },
   runtime: {
     toolOutputApplied: false,
@@ -205,6 +208,33 @@ function normalizeStrategyContext(raw) {
     return null;
   }
   const scenario = isObject(raw.scenario) ? clone(raw.scenario) : null;
+  const normalizeStrategyCore = (candidate) => {
+    if (!isObject(candidate)) {
+      return null;
+    }
+    const objective = typeof candidate.objective === "string" ? candidate.objective : null;
+    const lookbackDays = Number.isFinite(Number(candidate.lookback_days)) ? Number(candidate.lookback_days) : null;
+    const category = typeof candidate.category === "string" ? candidate.category : null;
+    const brands = normalizeSelectionList(candidate.brands);
+    const discountPct = Number.isFinite(Number(candidate.discount_pct)) ? Number(candidate.discount_pct) : null;
+    const shiftPct = Number.isFinite(Number(candidate.floor_space_shift_pct))
+      ? Number(candidate.floor_space_shift_pct)
+      : null;
+    const minMarginRate = Number.isFinite(Number(candidate.min_margin_rate)) ? Number(candidate.min_margin_rate) : null;
+    const maxDiscountPct = Number.isFinite(Number(candidate.max_discount_pct)) ? Number(candidate.max_discount_pct) : null;
+    return {
+      objective,
+      lookback_days: lookbackDays,
+      category,
+      brands,
+      discount_pct: discountPct,
+      floor_space_shift_pct: shiftPct,
+      min_margin_rate: minMarginRate,
+      max_discount_pct: maxDiscountPct,
+    };
+  };
+  const packetStrategyCore = normalizeStrategyCore(raw.strategy_core);
+  const effectiveStrategyCore = normalizeStrategyCore(raw.effective_strategy_core) || packetStrategyCore;
   return {
     packet_id: packetId,
     title: typeof raw.title === "string" ? raw.title : "",
@@ -218,6 +248,13 @@ function normalizeStrategyContext(raw) {
     to_category: typeof raw.to_category === "string" ? raw.to_category : null,
     min_margin_rate: Number.isFinite(Number(raw.min_margin_rate)) ? Number(raw.min_margin_rate) : null,
     max_discount_pct: Number.isFinite(Number(raw.max_discount_pct)) ? Number(raw.max_discount_pct) : null,
+    strategy_core: packetStrategyCore,
+    effective_strategy_core: effectiveStrategyCore,
+    tag_intensity: typeof raw.tag_intensity === "string" ? raw.tag_intensity : "medium",
+    effective_tag_intensity: typeof raw.effective_tag_intensity === "string" ? raw.effective_tag_intensity : "medium",
+    override_active: raw.override_active === true,
+    effective_source: typeof raw.effective_source === "string" ? raw.effective_source : "packet",
+    override_updated_at: typeof raw.override_updated_at === "string" ? raw.override_updated_at : null,
     scenario,
     updated_at: typeof raw.updated_at === "string" ? raw.updated_at : null,
   };
@@ -380,6 +417,9 @@ function applyWorkspacePayload(raw) {
   state.runtime.diagnosticsShowAll = false;
   state.runtime.diagnosticsExpanded = {};
   hydrateUiFromFilters(payload.filters);
+  const context = normalizeStrategyContext(payload.strategy_context);
+  state.ui.strategyTagIntensity =
+    (context && typeof context.effective_tag_intensity === "string" && context.effective_tag_intensity) || "medium";
   if (payload.initial_notice) {
     setNotice(payload.initial_notice);
   }
@@ -458,6 +498,7 @@ function applyUiWidgetState(raw) {
     "compareMode",
     "peerMode",
     "topK",
+    "strategyTagIntensity",
     "csvText",
   ];
   for (const key of textFields) {
@@ -523,6 +564,7 @@ function persistWidgetState() {
       compareStoreId: state.ui.compareStoreId,
       compareStoreIds: clone(state.ui.compareStoreIds),
       topK: state.ui.topK,
+      strategyTagIntensity: state.ui.strategyTagIntensity,
       csvText: state.ui.csvText,
       lastTool: state.payload.last_tool,
     });
@@ -676,6 +718,7 @@ function buildModelContextPayload() {
     strategy_packet_id: strategyContext?.packet_id || null,
     strategy_objective: strategyContext?.objective || null,
     strategy_to_category: strategyContext?.to_category || null,
+    strategy_tag_intensity: state.ui.strategyTagIntensity || "medium",
     row_count: rowCountForResult(active),
     csv_hash: stableTextHash(state.ui.csvText),
   };
@@ -1043,6 +1086,108 @@ function brandSelectionSummary(values) {
   return `${values.length} brands selected`;
 }
 
+function currentStrategyCorePayload(context) {
+  const effectiveCore = isObject(context?.effective_strategy_core) ? context.effective_strategy_core : null;
+  const packetCore = isObject(context?.strategy_core) ? context.strategy_core : null;
+  const referenceCore = effectiveCore || packetCore || {};
+  return {
+    objective: state.ui.objective || referenceCore.objective || "margin",
+    lookback_days: Number(normalizeLookbackDays(state.ui.lookbackDays)),
+    category: state.ui.category.trim() || referenceCore.category || null,
+    brands: parseBrandSelections(state.ui.brand),
+    discount_pct: Number.isFinite(Number(referenceCore.discount_pct)) ? Number(referenceCore.discount_pct) : 0,
+    floor_space_shift_pct: Number.isFinite(Number(referenceCore.floor_space_shift_pct))
+      ? Number(referenceCore.floor_space_shift_pct)
+      : 0,
+    min_margin_rate: Number.isFinite(Number(referenceCore.min_margin_rate)) ? Number(referenceCore.min_margin_rate) : 0.4,
+    max_discount_pct: Number.isFinite(Number(referenceCore.max_discount_pct)) ? Number(referenceCore.max_discount_pct) : 20,
+  };
+}
+
+async function reloadMerchWorkspaceFromStrategy(context, noticeText) {
+  if (!context?.packet_id || !state.payload.store?.id) {
+    return false;
+  }
+  const compareStoreIds = normalizeSelectionList(state.ui.compareStoreIds);
+  const args = {
+    store_id: state.payload.store.id,
+    question: state.ui.question.trim() || undefined,
+    objective: "margin",
+    lookback_days: 90,
+    top_k: parsePositiveInt(state.ui.topK, 9, 1, 50),
+    category: undefined,
+    brand: undefined,
+    price_band: state.ui.priceBand || undefined,
+    occasion: state.ui.occasion.trim() || undefined,
+    compare_mode: state.ui.compareMode || "peer_and_prior_period",
+    peer_mode: state.ui.peerMode || "state_and_profile",
+    compare_store_id: compareStoreIds[0] || undefined,
+    strategy_packet_id: context.packet_id,
+    initial_notice: noticeText || undefined,
+  };
+  const result = await callTool("fashion_render_merch_workspace", args);
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return false;
+  }
+  const changed = applyWorkspacePayload(result);
+  if (!changed) {
+    setNotice("Strategy refresh returned an unexpected payload.", "error");
+    render();
+    return false;
+  }
+  persistWidgetState();
+  render();
+  return true;
+}
+
+async function saveStrategyOverride(options = {}) {
+  const usePacketDefaults = options.usePacketDefaults === true;
+  const context = normalizeStrategyContext(state.payload.strategy_context);
+  if (!context?.packet_id || !state.payload.store?.id) {
+    setNotice("No active strategy packet is loaded for this store.", "error");
+    render();
+    return;
+  }
+  markUserInteraction();
+  if (usePacketDefaults) {
+    state.ui.isResettingStrategyOverride = true;
+    setNotice("Applying packet defaults...");
+  } else {
+    state.ui.isSavingStrategyOverride = true;
+    setNotice("Saving store override...");
+  }
+  render();
+  const args = {
+    packet_id: context.packet_id,
+    store_id: state.payload.store.id,
+    use_packet_defaults: usePacketDefaults,
+  };
+  if (!usePacketDefaults) {
+    args.strategy_core = currentStrategyCorePayload(context);
+    args.tag_intensity = state.ui.strategyTagIntensity || "medium";
+  }
+  const result = await callTool("fashion_merch_save_strategy_override", args);
+  state.ui.isSavingStrategyOverride = false;
+  state.ui.isResettingStrategyOverride = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+  const payload = parseToolPayload(result);
+  if (!payload || !isObject(payload)) {
+    setNotice("Strategy override save returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+  await reloadMerchWorkspaceFromStrategy(
+    context,
+    usePacketDefaults ? "Reverted to packet defaults for this store." : "Saved store-level strategy override.",
+  );
+}
+
 function buildBrandMultiSelect(selectedCsv, options) {
   const currentValues = parseBrandSelections(selectedCsv);
   const selected = new Set(currentValues.map((value) => value.toLowerCase()));
@@ -1333,6 +1478,44 @@ function renderStrategyContextCard() {
     return null;
   }
   const scenario = isObject(context.scenario) ? context.scenario : null;
+  const packetCore = isObject(context.strategy_core) ? context.strategy_core : null;
+  const effectiveCore = isObject(context.effective_strategy_core) ? context.effective_strategy_core : packetCore;
+  const renderCoreChips = (core, prefix) => {
+    if (!core) {
+      return [];
+    }
+    const chips = [];
+    if (core.objective) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} Objective ${humanizeToken(core.objective)}` }));
+    }
+    if (Number.isFinite(Number(core.lookback_days))) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} Lookback ${core.lookback_days}d` }));
+    }
+    if (core.category) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} Category ${humanizeToken(core.category)}` }));
+    }
+    if (Array.isArray(core.brands) && core.brands.length) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} ${core.brands.length} brands` }));
+    }
+    if (Number.isFinite(Number(core.discount_pct))) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} Discount ${compactNumber(core.discount_pct)}%` }));
+    }
+    if (Number.isFinite(Number(core.floor_space_shift_pct))) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} Shift ${compactNumber(core.floor_space_shift_pct)}%` }));
+    }
+    if (Number.isFinite(Number(core.min_margin_rate))) {
+      chips.push(
+        el("span", {
+          className: "fw-chip subtle",
+          text: `${prefix} Min margin ${(Number(core.min_margin_rate) * 100).toFixed(1)}%`,
+        }),
+      );
+    }
+    if (Number.isFinite(Number(core.max_discount_pct))) {
+      chips.push(el("span", { className: "fw-chip subtle", text: `${prefix} Max discount ${compactNumber(core.max_discount_pct)}%` }));
+    }
+    return chips;
+  };
   return el(
     "section",
     { className: "fw-panel" },
@@ -1351,25 +1534,100 @@ function renderStrategyContextCard() {
     el(
       "div",
       { className: "fw-chip-row" },
-      context.objective ? el("span", { className: "fw-chip", text: `Objective ${humanizeToken(context.objective)}` }) : null,
-      Number.isFinite(Number(context.lookback_days))
-        ? el("span", { className: "fw-chip subtle", text: `Lookback ${context.lookback_days}d` })
-        : null,
+      context.objective ? el("span", { className: "fw-chip", text: `Packet Objective ${humanizeToken(context.objective)}` }) : null,
       context.scope_label ? el("span", { className: "fw-chip subtle", text: context.scope_label }) : null,
       context.to_category ? el("span", { className: "fw-chip subtle", text: `To ${humanizeToken(context.to_category)}` }) : null,
-      Number.isFinite(Number(context.min_margin_rate))
-        ? el("span", { className: "fw-chip subtle", text: `Min margin ${(Number(context.min_margin_rate) * 100).toFixed(1)}%` })
-        : null,
-      Number.isFinite(Number(context.max_discount_pct))
-        ? el("span", { className: "fw-chip subtle", text: `Max discount ${compactNumber(context.max_discount_pct)}%` })
-        : null,
-      Number.isFinite(Number(scenario?.discount_pct))
-        ? el("span", { className: "fw-chip subtle", text: `Scenario discount ${compactNumber(scenario.discount_pct)}%` })
-        : null,
-      Number.isFinite(Number(scenario?.floor_space_shift_pct))
-        ? el("span", { className: "fw-chip subtle", text: `Shift ${compactNumber(scenario.floor_space_shift_pct)}%` })
-        : null,
+      context.override_active
+        ? el("span", { className: "fw-chip fw-merch-status-chip positive", text: "Store Override Active" })
+        : el("span", { className: "fw-chip subtle", text: "Using Packet Defaults" }),
+      el("span", { className: "fw-chip subtle", text: `Tag Intensity ${humanizeToken(context.effective_tag_intensity || "medium")}` }),
     ),
+    packetCore
+      ? el(
+          "p",
+          { className: "fw-empty fw-inline-meta" },
+          "Packet defaults are shown below. Save Store Override to persist tuned store-specific strategy values.",
+        )
+      : null,
+    el("div", { className: "fw-chip-row" }, ...renderCoreChips(packetCore, "Packet")),
+    el("div", { className: "fw-chip-row" }, ...renderCoreChips(effectiveCore, "Effective")),
+    el(
+      "div",
+      { className: "fw-grid merch-filters" },
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Tag Intensity" }),
+        el(
+          "select",
+          {
+            className: "fw-input fw-select",
+            value: state.ui.strategyTagIntensity || "medium",
+            onChange: (event) => {
+              markUserInteraction();
+              state.ui.strategyTagIntensity = event.target.value;
+              persistWidgetState();
+              render();
+            },
+          },
+          el("option", {
+            value: "low",
+            selected: (state.ui.strategyTagIntensity || "medium") === "low" ? "true" : null,
+            text: "Low",
+          }),
+          el("option", {
+            value: "medium",
+            selected: (state.ui.strategyTagIntensity || "medium") === "medium" ? "true" : null,
+            text: "Medium",
+          }),
+          el("option", {
+            value: "high",
+            selected: (state.ui.strategyTagIntensity || "medium") === "high" ? "true" : null,
+            text: "High",
+          }),
+        ),
+      ),
+      el(
+        "div",
+        { className: "fw-field actions" },
+        el("label", { className: "fw-label", text: "Strategy Actions" }),
+        el(
+          "div",
+          { className: "fw-toolbar" },
+          el(
+            "button",
+            {
+              className: "fw-button",
+              type: "button",
+              disabled: state.ui.isSavingStrategyOverride || state.ui.isResettingStrategyOverride ? "true" : null,
+              onClick: () => {
+                void saveStrategyOverride({ usePacketDefaults: false });
+              },
+            },
+            state.ui.isSavingStrategyOverride ? "Saving..." : "Save Store Override",
+          ),
+          el(
+            "button",
+            {
+              className: "fw-button secondary",
+              type: "button",
+              disabled: state.ui.isSavingStrategyOverride || state.ui.isResettingStrategyOverride ? "true" : null,
+              onClick: () => {
+                void saveStrategyOverride({ usePacketDefaults: true });
+              },
+            },
+            state.ui.isResettingStrategyOverride ? "Reverting..." : "Use Packet Defaults",
+          ),
+        ),
+      ),
+    ),
+    scenario
+      ? el(
+          "p",
+          { className: "fw-empty fw-inline-meta" },
+          `Scenario ${scenario.scenario_id}: ${compactNumber(scenario.discount_pct)}% discount, ${compactNumber(scenario.floor_space_shift_pct)}% shift.`,
+        )
+      : null,
   );
 }
 

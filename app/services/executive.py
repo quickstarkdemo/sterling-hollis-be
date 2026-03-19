@@ -6,7 +6,16 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import ExecutiveCampaignDraft, ExecutiveStrategyPacket, Order, OrderItem, Product, Store, StoreDailyMetric
+from app.models import (
+    ExecutiveCampaignDraft,
+    ExecutiveStrategyPacket,
+    MerchStrategyStoreOverride,
+    Order,
+    OrderItem,
+    Product,
+    Store,
+    StoreDailyMetric,
+)
 from app.schemas import (
     ExecutiveAutoOptimizeRequest,
     ExecutiveAutoOptimizeResponse,
@@ -25,6 +34,7 @@ from app.schemas import (
     ExecutiveStrategyPacketEmailDraftResponse,
     ExecutiveStrategyPacketEmailSendResponse,
     ExecutiveStrategyPacketEmailStatus,
+    MerchEffectiveStrategyResponse,
     ExecutiveStrategyPacketResponse,
     ExecutiveStrategyPacketStatus,
     ExecutiveStoreInsight,
@@ -35,12 +45,16 @@ from app.schemas import (
     Objective,
     ProductRecommendation,
     ResolvedStore,
+    StrategyCore,
+    StrategyTagIntensity,
 )
 from app.services.email_service import SesEmailService
 from app.services.lookup import resolve_store
 from app.services.taxonomy import CATEGORY_TAXONOMY, OCCASION_TO_CATEGORY
 
 DEFAULT_EXEC_EVENTS = ("wedding", "holiday_party", "workwear")
+_MERCH_OVERRIDE_STATUS_ACTIVE = "active"
+_MERCH_OVERRIDE_STATUS_INACTIVE = "inactive"
 
 
 def _bounded_lookback(days: int) -> int:
@@ -84,6 +98,83 @@ def _normalized_brands(brands: list[str] | None) -> list[str]:
         if token not in normalized:
             normalized.append(token)
     return normalized
+
+
+def _parse_tag_intensity(raw: str | StrategyTagIntensity | None) -> StrategyTagIntensity:
+    if isinstance(raw, StrategyTagIntensity):
+        return raw
+    token = str(raw or "").strip().lower()
+    if token == StrategyTagIntensity.low.value:
+        return StrategyTagIntensity.low
+    if token == StrategyTagIntensity.high.value:
+        return StrategyTagIntensity.high
+    return StrategyTagIntensity.medium
+
+
+def _strategy_core_from_inputs(
+    *,
+    objective: Objective,
+    lookback_days: int,
+    category: str | None,
+    brands: list[str] | None,
+    discount_pct: float,
+    floor_space_shift_pct: float,
+    min_margin_rate: float,
+    max_discount_pct: float,
+) -> StrategyCore:
+    return StrategyCore(
+        objective=objective,
+        lookback_days=max(7, min(int(lookback_days), 730)),
+        category=(str(category).strip() if category else None) or None,
+        brands=_normalized_brands(brands),
+        discount_pct=float(discount_pct),
+        floor_space_shift_pct=float(floor_space_shift_pct),
+        min_margin_rate=float(min_margin_rate),
+        max_discount_pct=float(max_discount_pct),
+    )
+
+
+def _strategy_core_from_packet_payload(payload: dict) -> StrategyCore:
+    strategy_core_payload = payload.get("strategy_core")
+    if isinstance(strategy_core_payload, dict):
+        try:
+            return StrategyCore.model_validate(strategy_core_payload)
+        except Exception:
+            pass
+    scenario_payload = payload.get("scenario") if isinstance(payload.get("scenario"), dict) else {}
+    category = payload.get("to_category") or payload.get("from_category")
+    raw_objective = str(payload.get("objective", Objective.revenue.value))
+    try:
+        objective = Objective(raw_objective)
+    except Exception:
+        objective = Objective.revenue
+    def _float_or(value, fallback: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return fallback
+
+    return _strategy_core_from_inputs(
+        objective=objective,
+        lookback_days=int(payload.get("lookback_days", 90)),
+        category=category if isinstance(category, str) else None,
+        brands=[str(value) for value in payload.get("brands", []) if str(value).strip()],
+        discount_pct=_float_or(scenario_payload.get("discount_pct", 0.0), 0.0),
+        floor_space_shift_pct=_float_or(scenario_payload.get("floor_space_shift_pct", 0.0), 0.0),
+        min_margin_rate=_float_or(payload.get("min_margin_rate", 0.40), 0.40),
+        max_discount_pct=_float_or(payload.get("max_discount_pct", 20.0), 20.0),
+    )
+
+
+def _merge_strategy_core(base: StrategyCore, overrides: dict | None) -> StrategyCore:
+    if not isinstance(overrides, dict):
+        return base
+    payload = base.model_dump(mode="json")
+    for key in payload.keys():
+        if key not in overrides:
+            continue
+        payload[key] = overrides.get(key)
+    return StrategyCore.model_validate(payload)
 
 
 def _scope_label(*, resolved: ResolvedStore | None, explicit_store_ids: list[str]) -> str:
@@ -992,18 +1083,27 @@ def _strategy_packet_to_response(packet: ExecutiveStrategyPacket) -> ExecutiveSt
     if not isinstance(scenario_payload, dict):
         scenario_payload = {}
     scenario = ExecutiveAutoOptimizeScenario.model_validate(scenario_payload)
+    strategy_core = _strategy_core_from_packet_payload(payload)
+    tag_intensity = _parse_tag_intensity(payload.get("tag_intensity"))
+    raw_objective = str(payload.get("objective", Objective.revenue.value))
+    try:
+        objective = Objective(raw_objective)
+    except Exception:
+        objective = Objective.revenue
     return ExecutiveStrategyPacketResponse(
         packet_id=packet.id,
         status=ExecutiveStrategyPacketStatus(packet.status),
         title=str(packet.title or ""),
         summary=str(packet.summary or ""),
-        objective=Objective(payload.get("objective", Objective.revenue.value)),
+        objective=objective,
         lookback_days=int(payload.get("lookback_days", 90)),
         scope_label=str(payload.get("scope_label") or "company-wide network"),
         scope_store_ids=[str(value) for value in payload.get("scope_store_ids", []) if str(value).strip()],
         brands=[str(value) for value in payload.get("brands", []) if str(value).strip()],
         from_category=payload.get("from_category"),
         to_category=payload.get("to_category"),
+        strategy_core=strategy_core,
+        tag_intensity=tag_intensity,
         min_margin_rate=float(payload.get("min_margin_rate", 0.40)),
         max_discount_pct=float(payload.get("max_discount_pct", 20.0)),
         scenario=scenario,
@@ -1063,6 +1163,16 @@ def publish_strategy_packet(
     packet_id = f"stratpkt_{uuid.uuid4().hex[:12]}"
     packet_title = (params.title or "").strip() or f"Strategy Packet - {now.date().isoformat()}"
     packet_summary = (params.summary or "").strip() or params.scenario.rationale
+    strategy_core = _strategy_core_from_inputs(
+        objective=params.objective,
+        lookback_days=params.lookback_days,
+        category=params.to_category or params.from_category,
+        brands=params.brands,
+        discount_pct=params.scenario.discount_pct,
+        floor_space_shift_pct=params.scenario.floor_space_shift_pct,
+        min_margin_rate=params.min_margin_rate,
+        max_discount_pct=params.max_discount_pct,
+    )
 
     payload = {
         "objective": params.objective.value,
@@ -1074,6 +1184,8 @@ def publish_strategy_packet(
         "to_category": params.to_category,
         "min_margin_rate": params.min_margin_rate,
         "max_discount_pct": params.max_discount_pct,
+        "strategy_core": strategy_core.model_dump(mode="json"),
+        "tag_intensity": StrategyTagIntensity.medium.value,
         "scenario": params.scenario.model_dump(mode="json"),
     }
 
@@ -1101,6 +1213,7 @@ def get_strategy_packet(session: Session, packet_id: str) -> ExecutiveStrategyPa
 
 def _strategy_email_body(packet: ExecutiveStrategyPacketResponse) -> str:
     scenario = packet.scenario
+    core = packet.strategy_core
     lines = [
         packet.title,
         "",
@@ -1108,8 +1221,8 @@ def _strategy_email_body(packet: ExecutiveStrategyPacketResponse) -> str:
         "",
         packet.summary,
         "",
-        f"Objective: {packet.objective.value.replace('_', ' ')}",
-        f"Lookback: {packet.lookback_days} days",
+        f"Objective: {core.objective.value.replace('_', ' ')}",
+        f"Lookback: {core.lookback_days} days",
         f"Scope: {packet.scope_label}",
         (
             f"Scoped Stores: {', '.join(packet.scope_store_ids)}"
@@ -1118,14 +1231,17 @@ def _strategy_email_body(packet: ExecutiveStrategyPacketResponse) -> str:
         ),
         f"Reallocate From: {packet.from_category or 'n/a'}",
         f"Reallocate To: {packet.to_category or 'n/a'}",
-        f"Discount: {scenario.discount_pct:.1f}%",
-        f"Floor Space Shift: {scenario.floor_space_shift_pct:.1f}%",
+        f"Category Focus: {core.category or packet.to_category or packet.from_category or 'n/a'}",
+        f"Brands: {', '.join(core.brands) if core.brands else 'all brands'}",
+        f"Discount: {core.discount_pct:.1f}%",
+        f"Floor Space Shift: {core.floor_space_shift_pct:.1f}%",
         f"Projected Revenue Delta: {scenario.revenue_delta:.2f}",
         f"Projected Margin Delta: {scenario.margin_rate_delta:.4f}",
         "",
         "Guardrails:",
-        f"- Min margin rate: {packet.min_margin_rate * 100:.1f}%",
-        f"- Max discount: {packet.max_discount_pct:.1f}%",
+        f"- Min margin rate: {core.min_margin_rate * 100:.1f}%",
+        f"- Max discount: {core.max_discount_pct:.1f}%",
+        f"- Associate tag intensity: {packet.tag_intensity.value}",
         "",
         "Merchandising handoff:",
         f"- Use strategy_packet_id={packet.packet_id} when opening Merch workspace.",
@@ -1218,6 +1334,102 @@ def send_strategy_packet_email(
     )
 
 
+def get_effective_merch_strategy(
+    session: Session,
+    *,
+    store_id: str,
+    strategy_packet_id: str | None = None,
+) -> MerchEffectiveStrategyResponse:
+    packet: ExecutiveStrategyPacketResponse | None
+    if strategy_packet_id:
+        packet = get_strategy_packet(session, strategy_packet_id)
+    else:
+        packet = active_strategy_packet_for_store(session, store_id)
+    if packet is None:
+        return MerchEffectiveStrategyResponse(store_id=store_id)
+
+    packet_core = packet.strategy_core
+    packet_intensity = packet.tag_intensity
+    override = session.scalars(
+        select(MerchStrategyStoreOverride).where(
+            MerchStrategyStoreOverride.packet_id == packet.packet_id,
+            MerchStrategyStoreOverride.store_id == store_id,
+        )
+    ).first()
+    if override is None or override.status != _MERCH_OVERRIDE_STATUS_ACTIVE:
+        return MerchEffectiveStrategyResponse(
+            store_id=store_id,
+            strategy_packet_id=packet.packet_id,
+            source="packet",
+            strategy_core=packet_core,
+            tag_intensity=packet_intensity,
+            override_active=False,
+            override_updated_at=override.updated_at if override else None,
+        )
+
+    override_payload = dict(override.payload_json or {})
+    override_strategy_core = _merge_strategy_core(packet_core, override_payload.get("strategy_core"))
+    return MerchEffectiveStrategyResponse(
+        store_id=store_id,
+        strategy_packet_id=packet.packet_id,
+        source="override",
+        strategy_core=override_strategy_core,
+        tag_intensity=_parse_tag_intensity(override_payload.get("tag_intensity") or packet_intensity.value),
+        override_active=True,
+        override_updated_at=override.updated_at,
+    )
+
+
+def save_merch_strategy_override(
+    session: Session,
+    *,
+    packet_id: str,
+    store_id: str,
+    strategy_core: StrategyCore | None = None,
+    tag_intensity: StrategyTagIntensity = StrategyTagIntensity.medium,
+    use_packet_defaults: bool = False,
+) -> MerchEffectiveStrategyResponse:
+    _ = get_strategy_packet(session, packet_id)
+    now = datetime.now(timezone.utc)
+    override = session.scalars(
+        select(MerchStrategyStoreOverride).where(
+            MerchStrategyStoreOverride.packet_id == packet_id,
+            MerchStrategyStoreOverride.store_id == store_id,
+        )
+    ).first()
+    if use_packet_defaults:
+        if override is not None:
+            override.status = _MERCH_OVERRIDE_STATUS_INACTIVE
+            override.updated_at = now
+            session.add(override)
+            session.commit()
+        return get_effective_merch_strategy(session, store_id=store_id, strategy_packet_id=packet_id)
+
+    if strategy_core is None:
+        raise ValueError("strategy_core is required unless use_packet_defaults=true.")
+    payload = {
+        "strategy_core": strategy_core.model_dump(mode="json"),
+        "tag_intensity": _parse_tag_intensity(tag_intensity).value,
+    }
+    if override is None:
+        override = MerchStrategyStoreOverride(
+            id=f"msovr_{uuid.uuid4().hex[:12]}",
+            packet_id=packet_id,
+            store_id=store_id,
+            status=_MERCH_OVERRIDE_STATUS_ACTIVE,
+            payload_json=payload,
+            created_at=now,
+            updated_at=now,
+        )
+    else:
+        override.status = _MERCH_OVERRIDE_STATUS_ACTIVE
+        override.payload_json = payload
+        override.updated_at = now
+    session.add(override)
+    session.commit()
+    return get_effective_merch_strategy(session, store_id=store_id, strategy_packet_id=packet_id)
+
+
 def active_strategy_packet_for_store(session: Session, store_id: str) -> ExecutiveStrategyPacketResponse | None:
     records = session.scalars(
         select(ExecutiveStrategyPacket)
@@ -1237,14 +1449,24 @@ def apply_execution_tags_for_store(
     *,
     store_id: str,
     recommendations: list[ProductRecommendation],
-) -> tuple[str | None, list[ProductRecommendation]]:
-    strategy_packet = active_strategy_packet_for_store(session, store_id)
-    if strategy_packet is None or not recommendations:
-        return None, recommendations
+) -> tuple[str | None, StrategyTagIntensity | None, list[ProductRecommendation]]:
+    effective = get_effective_merch_strategy(session, store_id=store_id)
+    if (
+        not recommendations
+        or effective.strategy_packet_id is None
+        or effective.strategy_core is None
+    ):
+        return None, None, recommendations
 
-    focus_category = (strategy_packet.to_category or "").strip().lower()
-    prioritized_brands = {value.strip().lower() for value in strategy_packet.brands if str(value).strip()}
-    min_margin_rate = float(strategy_packet.min_margin_rate)
+    core = effective.strategy_core
+    intensity = effective.tag_intensity
+    focus_category = (core.category or "").strip().lower()
+    prioritized_brands = {value.strip().lower() for value in core.brands if str(value).strip()}
+    min_margin_rate = float(core.min_margin_rate)
+    if intensity == StrategyTagIntensity.low:
+        min_margin_rate = min(1.0, min_margin_rate + 0.05)
+    elif intensity == StrategyTagIntensity.high:
+        min_margin_rate = max(0.0, min_margin_rate - 0.05)
     product_ids = [item.product_id for item in recommendations if item.product_id]
     products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all() if product_ids else []
     product_margin_map = {product.id: float(product.margin_pct or 0.0) for product in products}
@@ -1253,15 +1475,26 @@ def apply_execution_tags_for_store(
         tags: list[str] = []
         item_category = str(item.category or "").strip().lower()
         item_brand = str(item.brand or "").strip().lower()
-        if focus_category and item_category == focus_category:
+        focus_match = bool(focus_category and item_category == focus_category)
+        brand_match = bool(item_brand and item_brand in prioritized_brands)
+        if intensity == StrategyTagIntensity.high and not focus_match and brand_match:
+            focus_match = True
+
+        if focus_match:
             tags.append("Focus This Week")
         if product_margin_map.get(item.product_id, 0.0) >= min_margin_rate:
             tags.append("Margin Priority")
-        if (focus_category and item_category == focus_category) or (item_brand and item_brand in prioritized_brands):
+        if intensity == StrategyTagIntensity.low:
+            should_tag_campaign = focus_match and (not prioritized_brands or brand_match)
+        elif intensity == StrategyTagIntensity.high:
+            should_tag_campaign = focus_match or brand_match or product_margin_map.get(item.product_id, 0.0) >= min_margin_rate
+        else:
+            should_tag_campaign = focus_match or brand_match
+        if should_tag_campaign:
             tags.append("Campaign Assist")
         item.execution_tags = list(dict.fromkeys(tags))
 
-    return strategy_packet.packet_id, recommendations
+    return effective.strategy_packet_id, intensity, recommendations
 
 
 def campaign_autopilot_prepare(

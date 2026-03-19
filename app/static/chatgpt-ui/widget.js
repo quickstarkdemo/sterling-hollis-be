@@ -2680,6 +2680,7 @@ function render() {
           response?.recommendation?.constraint_source ||
           (displayConstraints ? displayConstraints.constraint_source : null);
         const constraintStage = response?.recommendation?.constraint_stage;
+        const strategyTagIntensity = response?.recommendation?.strategy_tag_intensity;
         const retrievalModeRaw = response?.retrieval_mode;
         const retrievalMode =
           typeof retrievalModeRaw === "string"
@@ -2709,6 +2710,9 @@ function render() {
                 retrievalMode ? el("span", { className: "fw-chip subtle", text: retrievalMode }) : null,
                 response?.recommendation?.strategy_packet_id
                   ? el("span", { className: "fw-chip subtle", text: `Strategy ${response.recommendation.strategy_packet_id}` })
+                  : null,
+                strategyTagIntensity
+                  ? el("span", { className: "fw-chip subtle", text: `Intensity ${humanizeToken(strategyTagIntensity)}` })
                   : null,
               )
             : null,

@@ -319,3 +319,31 @@ class ExecutiveStrategyPacket(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MerchStrategyStoreOverride(Base):
+    __tablename__ = "merch_strategy_store_overrides"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    packet_id: Mapped[str] = mapped_column(
+        ForeignKey("executive_strategy_packets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    store_id: Mapped[str] = mapped_column(
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("packet_id", "store_id", name="uq_merch_strategy_override_packet_store"),
+    )

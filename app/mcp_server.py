@@ -55,6 +55,7 @@ from app.schemas import (
     InventoryFacetsResponse,
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
+    MerchEffectiveStrategyResponse,
     MerchExportCsvRequest,
     MerchExportCsvResponse,
     MerchExportCsvRow,
@@ -75,6 +76,8 @@ from app.schemas import (
     StoreAssociateRecommendationResponse,
     StoreResolutionResponse,
     StyleConstraints,
+    StrategyCore,
+    StrategyTagIntensity,
     SyntheticGenerateRequest,
     SyntheticGenerateResponse,
     SyntheticLoadRequest,
@@ -109,6 +112,7 @@ from app.services.customer_value import customer_value_summary
 from app.services.executive import (
     apply_execution_tags_for_store,
     auto_optimize_strategy,
+    get_effective_merch_strategy,
     get_strategy_packet,
     campaign_autopilot_prepare,
     campaign_autopilot_send,
@@ -117,6 +121,7 @@ from app.services.executive import (
     get_campaign_autopilot_draft,
     prepare_strategy_packet_email,
     publish_strategy_packet,
+    save_merch_strategy_override,
     send_strategy_packet_email,
     what_if_simulator,
 )
@@ -245,8 +250,13 @@ def _ensure_feature_enabled(enabled: bool, feature_name: str) -> None:
     raise ValueError(f"{feature_name} is disabled. Enable the matching feature flag to use this capability.")
 
 
-def _strategy_context_payload(packet: ExecutiveStrategyPacketResponse) -> dict:
+def _strategy_context_payload(
+    packet: ExecutiveStrategyPacketResponse,
+    effective: MerchEffectiveStrategyResponse | None = None,
+) -> dict:
     scenario = packet.scenario
+    effective_core = effective.strategy_core if effective and effective.strategy_core else packet.strategy_core
+    effective_tag_intensity = effective.tag_intensity if effective else packet.tag_intensity
     return {
         "packet_id": packet.packet_id,
         "title": packet.title,
@@ -260,7 +270,14 @@ def _strategy_context_payload(packet: ExecutiveStrategyPacketResponse) -> dict:
         "to_category": packet.to_category,
         "min_margin_rate": packet.min_margin_rate,
         "max_discount_pct": packet.max_discount_pct,
+        "strategy_core": packet.strategy_core.model_dump(mode="json"),
+        "tag_intensity": packet.tag_intensity.value,
         "scenario": scenario.model_dump(mode="json"),
+        "effective_strategy_core": effective_core.model_dump(mode="json"),
+        "effective_tag_intensity": effective_tag_intensity.value,
+        "override_active": bool(effective.override_active) if effective else False,
+        "effective_source": effective.source if effective else "packet",
+        "override_updated_at": effective.override_updated_at.isoformat() if effective and effective.override_updated_at else None,
         "updated_at": packet.updated_at.isoformat(),
     }
 
@@ -475,8 +492,9 @@ def _associate_recommendation_impl(
             db, req, retrieval_mode=effective_retrieval_mode
         )
         strategy_packet_id = None
+        strategy_tag_intensity = None
         if settings.associate_priority_tags_enabled:
-            strategy_packet_id, rows = apply_execution_tags_for_store(
+            strategy_packet_id, strategy_tag_intensity, rows = apply_execution_tags_for_store(
                 db,
                 store_id=resolved_store.id,
                 recommendations=rows,
@@ -486,6 +504,7 @@ def _associate_recommendation_impl(
             strategy=strategy,
             recommendations=rows,
             strategy_packet_id=strategy_packet_id,
+            strategy_tag_intensity=strategy_tag_intensity,
             applied_style_constraints=applied_constraints,
             constraint_source=applied_constraints.constraint_source if applied_constraints else None,
             constraint_stage=constraint_stage,
@@ -786,8 +805,9 @@ def fashion_customer_recommendations(
     with SessionLocal() as db:
         rows, strategy, applied_constraints, constraint_stage = customer_recommendations(db, params)
         strategy_packet_id = None
+        strategy_tag_intensity = None
         if settings.associate_priority_tags_enabled:
-            strategy_packet_id, rows = apply_execution_tags_for_store(
+            strategy_packet_id, strategy_tag_intensity, rows = apply_execution_tags_for_store(
                 db,
                 store_id=params.store_id,
                 recommendations=rows,
@@ -797,6 +817,7 @@ def fashion_customer_recommendations(
             strategy=strategy,
             recommendations=rows,
             strategy_packet_id=strategy_packet_id,
+            strategy_tag_intensity=strategy_tag_intensity,
             applied_style_constraints=applied_constraints,
             constraint_source=applied_constraints.constraint_source if applied_constraints else None,
             constraint_stage=constraint_stage,
@@ -1013,20 +1034,31 @@ def _merch_workspace_payload(
     effective_category = category
     effective_store_id = store_id
     strategy_context = None
+    packet = None
+    effective_strategy = None
     if settings.merch_strategy_context_enabled and strategy_packet_id:
         with SessionLocal() as db:
             packet = get_strategy_packet(db, strategy_packet_id)
-        strategy_context = _strategy_context_payload(packet)
+            if not effective_store_id and store_query:
+                resolved_store = resolve_store(db, store_query=store_query).resolved
+                effective_store_id = resolved_store.id
+            if not effective_store_id and packet.scope_store_ids:
+                effective_store_id = packet.scope_store_ids[0]
+            if effective_store_id:
+                effective_strategy = get_effective_merch_strategy(
+                    db,
+                    store_id=effective_store_id,
+                    strategy_packet_id=packet.packet_id,
+                )
+        source_core = effective_strategy.strategy_core if effective_strategy and effective_strategy.strategy_core else packet.strategy_core
         if objective == Objective.margin:
-            effective_objective = packet.objective
+            effective_objective = source_core.objective
         if bounded_lookback == 90:
-            effective_lookback = packet.lookback_days
-        if not effective_brand and packet.brands:
-            effective_brand = ", ".join(packet.brands)
-        if not effective_category and (packet.to_category or packet.from_category):
-            effective_category = packet.to_category or packet.from_category
-        if not effective_store_id and packet.scope_store_ids:
-            effective_store_id = packet.scope_store_ids[0]
+            effective_lookback = source_core.lookback_days
+        if not effective_brand and source_core.brands:
+            effective_brand = ", ".join(source_core.brands)
+        if not effective_category and source_core.category:
+            effective_category = source_core.category
 
     initial_result = fashion_merch_action_recommendations(
         store_query=store_query,
@@ -1043,6 +1075,17 @@ def _merch_workspace_payload(
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
     )
+    if settings.merch_strategy_context_enabled and strategy_packet_id:
+        with SessionLocal() as db:
+            if packet is None:
+                packet = get_strategy_packet(db, strategy_packet_id)
+            if effective_strategy is None:
+                effective_strategy = get_effective_merch_strategy(
+                    db,
+                    store_id=initial_result.store.id,
+                    strategy_packet_id=packet.packet_id,
+                )
+        strategy_context = _strategy_context_payload(packet, effective_strategy)
     compare_store_options = _merch_compare_store_options(initial_result.store.id)
     brand_options = _merch_brand_options(initial_result.store.id)
     return {
@@ -1601,7 +1644,8 @@ def fashion_render_merch_workspace(
     structured_output=False,
 )
 def fashion_open_merch_workspace(
-    store_query: str,
+    store_query: str | None = None,
+    store_id: str | None = None,
     question: str | None = None,
     objective: Objective = Objective.margin,
     lookback_days: int = 90,
@@ -1617,14 +1661,20 @@ def fashion_open_merch_workspace(
     initial_notice: str | None = None,
 ) -> CallToolResult:
     """Resolve a store query and open a hydrated merchandising workspace in one call."""
-    normalized_query = store_query.strip()
-    if not normalized_query:
-        raise ValueError("store_query is required.")
-
-    resolved_store = fashion_resolve_store(normalized_query).resolved
     notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
-    if not notice:
-        notice = f"Resolved store {resolved_store.name} from '{normalized_query}'."
+    resolved_store = None
+    if store_id:
+        with SessionLocal() as db:
+            resolved_store = resolve_store(db, store_id=store_id).resolved
+        if not notice:
+            notice = f"Opened merchandising workspace for {resolved_store.name}."
+    else:
+        normalized_query = (store_query or "").strip()
+        if not normalized_query:
+            raise ValueError("Provide store_query or store_id.")
+        resolved_store = fashion_resolve_store(normalized_query).resolved
+        if not notice:
+            notice = f"Resolved store {resolved_store.name} from '{normalized_query}'."
 
     return fashion_render_merch_workspace(
         store_id=resolved_store.id,
@@ -1642,6 +1692,49 @@ def fashion_open_merch_workspace(
         strategy_packet_id=strategy_packet_id,
         initial_notice=notice,
     )
+
+
+@mcp.tool(
+    name="fashion_merch_get_effective_strategy",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+)
+def fashion_merch_get_effective_strategy(
+    store_id: str,
+    strategy_packet_id: str | None = None,
+) -> MerchEffectiveStrategyResponse:
+    """Return effective strategy for a store from packet defaults plus optional merch override."""
+    _ensure_feature_enabled(settings.merch_strategy_context_enabled, "Merch strategy context")
+    with SessionLocal() as db:
+        return get_effective_merch_strategy(
+            db,
+            store_id=store_id,
+            strategy_packet_id=strategy_packet_id,
+        )
+
+
+@mcp.tool(
+    name="fashion_merch_save_strategy_override",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+)
+def fashion_merch_save_strategy_override(
+    packet_id: str,
+    store_id: str,
+    strategy_core: StrategyCore | None = None,
+    tag_intensity: StrategyTagIntensity = StrategyTagIntensity.medium,
+    use_packet_defaults: bool = False,
+) -> MerchEffectiveStrategyResponse:
+    """Save or clear store-level merchandising overrides for a published strategy packet."""
+    _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
+    _ensure_feature_enabled(settings.merch_strategy_context_enabled, "Merch strategy context")
+    with SessionLocal() as db:
+        return save_merch_strategy_override(
+            db,
+            packet_id=packet_id,
+            store_id=store_id,
+            strategy_core=strategy_core,
+            tag_intensity=tag_intensity,
+            use_packet_defaults=use_packet_defaults,
+        )
 
 
 @mcp.tool(

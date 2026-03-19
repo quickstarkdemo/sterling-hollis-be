@@ -671,7 +671,7 @@ function tabProblemStatement(toolName) {
     toolName === "fashion_exec_prepare_strategy_packet_email" ||
     toolName === "fashion_exec_send_strategy_packet_email"
   ) {
-    return "Problem: Which strategy scenario should we publish and hand off so merch and associates execute the same plan?";
+    return "Problem: Which strategy suggestions should we publish for merch and associate guidance?";
   }
   if (toolName === "fashion_exec_event_readiness_radar") {
     return "Problem: Which store-event demand spikes are at risk so we can intervene early with transfers or bounded promotions?";
@@ -680,7 +680,7 @@ function tabProblemStatement(toolName) {
     return "Problem: Before execution, what revenue and margin impact should we expect from category reallocation plus pricing/space levers?";
   }
   if (toolName === "fashion_exec_campaign_autopilot_prepare" || toolName === "fashion_exec_campaign_autopilot_send") {
-    return "Problem: Which campaign opportunities clear guardrails and are ready for manager approval and send?";
+    return "Problem: Which weekly campaign suggestions clear guardrails and are ready for manager approval and send?";
   }
   return "Problem: Are we on company plan, and which stores are driving or dragging performance?";
 }
@@ -693,7 +693,7 @@ function tabControlHint(toolName) {
     toolName === "fashion_exec_prepare_strategy_packet_email" ||
     toolName === "fashion_exec_send_strategy_packet_email"
   ) {
-    return "Controls: set scenario ranges and guardrails, then publish one scenario and send an approval-gated strategy email.";
+    return "Controls: set scenario ranges and guardrails, then publish one suggested strategy packet for downstream guidance.";
   }
   if (toolName === "fashion_exec_event_readiness_radar") {
     return "Controls: scope + lookback + events + brands determine readiness signals.";
@@ -702,7 +702,7 @@ function tabControlHint(toolName) {
     return "Controls: choose a category move and apply discount/space levers to the Reallocate-To category.";
   }
   if (toolName === "fashion_exec_campaign_autopilot_prepare" || toolName === "fashion_exec_campaign_autopilot_send") {
-    return "Controls: scope/events/brands filter candidates; email and shortlist size define the draft package.";
+    return "Controls: scope/events/brands filter candidates; email and shortlist size define weekly campaign suggestions (not forced store directives).";
   }
   return "Controls: scope + lookback apply globally; objective controls the overview lens.";
 }
@@ -963,6 +963,45 @@ async function sendStrategyPacketEmail() {
     setNotice(payload.error_message || "Strategy packet email failed.", "error");
   }
   queueModelContextUpdate();
+  render();
+}
+
+async function openStrategyInMerch() {
+  const packet = isObject(state.runtime.strategyPacket) ? state.runtime.strategyPacket : null;
+  const packetId = (packet?.packet_id || state.ui.strategyPacketId || "").trim();
+  if (!packetId) {
+    setNotice("Publish a strategy packet before opening Merch workspace.", "error");
+    render();
+    return;
+  }
+  const scopedStores = Array.isArray(packet?.scope_store_ids)
+    ? packet.scope_store_ids.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const fallbackStores = normalizeStoreIds(state.ui.storeIds);
+  const targetStoreId = scopedStores[0] || fallbackStores[0] || "";
+  if (!targetStoreId) {
+    setNotice("No scoped store found. Select store scope before opening Merch workspace.", "error");
+    render();
+    return;
+  }
+  setNotice("Opening merchandising workspace...");
+  render();
+  const result = await callTool("fashion_open_merch_workspace", {
+    store_id: targetStoreId,
+    strategy_packet_id: packetId,
+    initial_notice: `Loaded strategy packet ${packetId} from Executive workspace.`,
+  });
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+  const payload = parseToolPayload(result);
+  if (isObject(payload?.payload?.store) && payload.payload.store.name) {
+    setNotice(`Opened Merch workspace for ${payload.payload.store.name} with ${packetId}.`);
+  } else {
+    setNotice(`Opened Merch workspace with strategy packet ${packetId}.`);
+  }
   render();
 }
 
@@ -1421,6 +1460,13 @@ function renderAutopilot(result) {
       "section",
       { className: "fw-panel" },
       el("h3", { className: "fw-panel-title", text: "Campaign Package" }),
+      el(
+        "p",
+        {
+          className: "fw-empty",
+          text: "Autopilot builds weekly campaign suggestions for manager approval and send. It does not publish strategy packets or force store directives.",
+        },
+      ),
       result?.draft_id ? el("p", { className: "fw-empty", text: `Draft ID: ${result.draft_id}` }) : null,
       result?.to_email ? el("p", { className: "fw-empty", text: `Recipient: ${result.to_email}` }) : null,
       result?.subject ? el("p", { className: "fw-empty", text: `Subject: ${result.subject}` }) : null,
@@ -1592,8 +1638,27 @@ function renderAutoOptimize(result) {
                 packet.title ? el("span", { className: "fw-chip", text: packet.title }) : null,
                 packet.scope_label ? el("span", { className: "fw-chip subtle", text: packet.scope_label }) : null,
                 packet.to_category ? el("span", { className: "fw-chip subtle", text: `To ${humanizeToken(packet.to_category)}` }) : null,
+                Array.isArray(packet.scope_store_ids) && packet.scope_store_ids.length
+                  ? el("span", { className: "fw-chip subtle", text: `${packet.scope_store_ids.length} scoped stores` })
+                  : null,
               )
             : null,
+          el(
+            "div",
+            { className: "fw-toolbar" },
+            el(
+              "button",
+              {
+                className: "fw-button secondary",
+                type: "button",
+                disabled: !strategyPacketId || state.ui.isLoading ? "true" : null,
+                onClick: () => {
+                  void openStrategyInMerch();
+                },
+              },
+              "Open in Merch",
+            ),
+          ),
           el(
             "div",
             { className: "fw-field" },
@@ -2020,7 +2085,7 @@ function render() {
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Overview Objective" }),
+        el("label", { className: "fw-label", text: "Objective" }),
         buildSelect(
           state.ui.objective,
           [

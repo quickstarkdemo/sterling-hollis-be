@@ -188,8 +188,9 @@ def _build_email_recommendation_snapshot(
             session, req, retrieval_mode=retrieval_mode
         )
         strategy_packet_id = None
+        strategy_tag_intensity = None
         if settings.associate_priority_tags_enabled:
-            strategy_packet_id, rows = apply_execution_tags_for_store(
+            strategy_packet_id, strategy_tag_intensity, rows = apply_execution_tags_for_store(
                 session,
                 store_id=store_id,
                 recommendations=rows,
@@ -199,6 +200,7 @@ def _build_email_recommendation_snapshot(
             strategy=strategy,
             recommendations=rows,
             strategy_packet_id=strategy_packet_id,
+            strategy_tag_intensity=strategy_tag_intensity,
             applied_style_constraints=applied_constraints,
             constraint_source=applied_constraints.constraint_source if applied_constraints else None,
             constraint_stage=constraint_stage,
@@ -275,8 +277,9 @@ def prepare_customer_sms(
         session, req, retrieval_mode=retrieval_mode
     )
     strategy_packet_id = None
+    strategy_tag_intensity = None
     if settings.associate_priority_tags_enabled:
-        strategy_packet_id, rows = apply_execution_tags_for_store(
+        strategy_packet_id, strategy_tag_intensity, rows = apply_execution_tags_for_store(
             session,
             store_id=resolved_store.id,
             recommendations=rows,
@@ -286,6 +289,7 @@ def prepare_customer_sms(
         strategy=strategy,
         recommendations=rows,
         strategy_packet_id=strategy_packet_id,
+        strategy_tag_intensity=strategy_tag_intensity,
         applied_style_constraints=applied_constraints,
         constraint_source=applied_constraints.constraint_source if applied_constraints else None,
         constraint_stage=constraint_stage,

@@ -201,11 +201,18 @@ class ProductRecommendation(BaseModel):
     execution_tags: list[str] = Field(default_factory=list)
 
 
+class StrategyTagIntensity(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
 class CustomerRecommendationResponse(BaseModel):
     store_id: str
     strategy: str
     recommendations: list[ProductRecommendation]
     strategy_packet_id: str | None = None
+    strategy_tag_intensity: StrategyTagIntensity | None = None
     applied_style_constraints: StyleConstraints | None = None
     constraint_source: str | None = None
     constraint_stage: str | None = None
@@ -824,6 +831,17 @@ class ExecutiveAutoOptimizeResponse(BaseModel):
     scenarios: list[ExecutiveAutoOptimizeScenario] = Field(default_factory=list)
 
 
+class StrategyCore(BaseModel):
+    objective: Objective = Objective.revenue
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    category: str | None = None
+    brands: list[str] = Field(default_factory=list)
+    discount_pct: float = Field(default=0.0, ge=0.0, le=60.0)
+    floor_space_shift_pct: float = Field(default=0.0, ge=-40.0, le=40.0)
+    min_margin_rate: float = Field(default=0.40, ge=0.0, le=1.0)
+    max_discount_pct: float = Field(default=20.0, ge=0.0, le=60.0)
+
+
 class ExecutiveStrategyPacketStatus(str, Enum):
     published = "published"
 
@@ -862,6 +880,8 @@ class ExecutiveStrategyPacketResponse(BaseModel):
     brands: list[str] = Field(default_factory=list)
     from_category: str | None = None
     to_category: str | None = None
+    strategy_core: StrategyCore
+    tag_intensity: StrategyTagIntensity = StrategyTagIntensity.medium
     min_margin_rate: float
     max_discount_pct: float
     scenario: ExecutiveAutoOptimizeScenario
@@ -892,6 +912,16 @@ class ExecutiveStrategyPacketEmailSendResponse(BaseModel):
     provider_message_id: str | None = None
     error_message: str | None = None
     sent_at: datetime | None = None
+
+
+class MerchEffectiveStrategyResponse(BaseModel):
+    store_id: str
+    strategy_packet_id: str | None = None
+    source: str = "none"
+    strategy_core: StrategyCore | None = None
+    tag_intensity: StrategyTagIntensity = StrategyTagIntensity.medium
+    override_active: bool = False
+    override_updated_at: datetime | None = None
 
 
 class ProductPerformanceDimension(str, Enum):

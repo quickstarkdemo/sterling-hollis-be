@@ -229,12 +229,28 @@ body {
 .fw-exec-autopilot-row {
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(170px, 1fr) minmax(170px, 1fr) minmax(260px, 1.35fr) minmax(140px, 0.7fr);
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 1.45fr) minmax(120px, 0.55fr);
   align-items: end;
+  width: 100%;
+  min-width: 0;
 }
 
 .fw-exec-autopilot-row .fw-field {
   align-content: start;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.fw-exec-autopilot-row .fw-input,
+.fw-exec-autopilot-row .fw-select,
+.fw-exec-autopilot-row .fw-multi-select,
+.fw-exec-autopilot-row .fw-multi-select-summary {
+  min-width: 0;
+  width: 100%;
+}
+
+.fw-exec-autopilot-row .fw-label {
+  white-space: nowrap;
 }
 
 .fw-merch-tabs {

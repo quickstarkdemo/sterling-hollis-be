@@ -1038,6 +1038,9 @@ def test_exec_strategy_packet_lifecycle_and_email_gate(monkeypatch):
         assert packet.packet_id.startswith("stratpkt_")
         assert packet.status.value == "published"
         assert packet.scope_store_ids == ["1001"]
+        assert packet.strategy_core.category == "shoes"
+        assert packet.strategy_core.brands == ["valentino"]
+        assert packet.tag_intensity.value == "medium"
 
         draft = mcp_server.fashion_exec_prepare_strategy_packet_email(
             packet_id=packet.packet_id,
@@ -1071,6 +1074,9 @@ def test_exec_strategy_packet_enforces_feature_flags(monkeypatch):
 
         with pytest.raises(ValueError):
             mcp_server.fashion_exec_get_strategy_packet(packet_id="stratpkt_missing")
+
+        with pytest.raises(ValueError):
+            mcp_server.fashion_merch_get_effective_strategy(store_id="1001")
 
 
 def test_merch_workspace_hydrates_strategy_context_from_packet(monkeypatch):
@@ -1113,7 +1119,84 @@ def test_merch_workspace_hydrates_strategy_context_from_packet(monkeypatch):
         assert payload["filters"]["lookback_days"] == 180
         assert payload["filters"]["category"] == "shoes"
         assert payload["filters"]["brand"] == "valentino, jimmy choo"
+        assert payload["strategy_context"]["strategy_core"]["category"] == "shoes"
+        assert payload["strategy_context"]["effective_tag_intensity"] == "medium"
         assert payload["uiHints"]["features"]["merchStrategyContextEnabled"] is True
+
+
+def test_merch_strategy_override_persists_and_hydrates_effective_strategy(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        _set_strategy_flags(monkeypatch, mcp_server, exec_auto=True, packet=True, merch_context=True)
+
+        optimize = mcp_server.fashion_exec_auto_optimize_strategy(
+            store_id="1001",
+            lookback_days=180,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            top_k_scenarios=2,
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+        packet = mcp_server.fashion_exec_publish_strategy_packet(
+            scenario=optimize.scenarios[0],
+            objective=Objective.revenue,
+            lookback_days=180,
+            store_id="1001",
+            brands=["Jimmy Choo"],
+            from_category="womens_apparel",
+            to_category="shoes",
+            min_margin_rate=0.30,
+            max_discount_pct=25.0,
+        )
+
+        baseline = mcp_server.fashion_merch_get_effective_strategy(store_id="1001", strategy_packet_id=packet.packet_id)
+        assert baseline.source == "packet"
+        assert baseline.override_active is False
+        assert baseline.tag_intensity.value == "medium"
+
+        updated = mcp_server.fashion_merch_save_strategy_override(
+            packet_id=packet.packet_id,
+            store_id="1001",
+            strategy_core={
+                "objective": "revenue",
+                "lookback_days": 180,
+                "category": "mens_apparel",
+                "brands": ["Tom Ford"],
+                "discount_pct": 12.0,
+                "floor_space_shift_pct": 5.0,
+                "min_margin_rate": 0.45,
+                "max_discount_pct": 20.0,
+            },
+            tag_intensity="high",
+        )
+        assert updated.source == "override"
+        assert updated.override_active is True
+        assert updated.strategy_core is not None
+        assert updated.strategy_core.category == "mens_apparel"
+        assert updated.tag_intensity.value == "high"
+
+        workspace = mcp_server.fashion_render_merch_workspace(
+            store_id="1001",
+            objective=Objective.margin,
+            lookback_days=90,
+            strategy_packet_id=packet.packet_id,
+        )
+        payload = workspace.structuredContent["payload"]
+        assert payload["filters"]["objective"] == "revenue"
+        assert payload["filters"]["category"] == "mens_apparel"
+        assert payload["strategy_context"]["override_active"] is True
+        assert payload["strategy_context"]["effective_tag_intensity"] == "high"
+
+        reset = mcp_server.fashion_merch_save_strategy_override(
+            packet_id=packet.packet_id,
+            store_id="1001",
+            use_packet_defaults=True,
+        )
+        assert reset.source == "packet"
+        assert reset.override_active is False
+        assert reset.tag_intensity.value == "medium"
 
 
 def test_associate_recommendations_apply_priority_tags_when_enabled(monkeypatch):
@@ -1151,10 +1234,125 @@ def test_associate_recommendations_apply_priority_tags_when_enabled(monkeypatch)
         )
 
         assert response.recommendation.strategy_packet_id == packet.packet_id
+        assert response.recommendation.strategy_tag_intensity is not None
         assert response.recommendation.recommendations
         allowed_tags = {"Focus This Week", "Margin Priority", "Campaign Assist"}
         assert any(item.execution_tags for item in response.recommendation.recommendations)
         assert all(set(item.execution_tags).issubset(allowed_tags) for item in response.recommendation.recommendations)
+
+
+def test_strategy_tag_intensity_changes_tag_coverage(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        _set_strategy_flags(monkeypatch, mcp_server, exec_auto=True, packet=True, merch_context=True, associate_tags=True)
+
+        optimize = mcp_server.fashion_exec_auto_optimize_strategy(
+            store_id="1001",
+            lookback_days=180,
+            objective=Objective.revenue,
+            from_category="womens_apparel",
+            to_category="shoes",
+            top_k_scenarios=2,
+            min_margin_rate=0.50,
+            max_discount_pct=25.0,
+        )
+        packet = mcp_server.fashion_exec_publish_strategy_packet(
+            scenario=optimize.scenarios[0],
+            objective=Objective.revenue,
+            lookback_days=180,
+            store_id="1001",
+            brands=["Jimmy Choo"],
+            from_category="womens_apparel",
+            to_category="shoes",
+            min_margin_rate=0.50,
+            max_discount_pct=25.0,
+        )
+
+        mcp_server.fashion_merch_save_strategy_override(
+            packet_id=packet.packet_id,
+            store_id="1001",
+            strategy_core={
+                "objective": "revenue",
+                "lookback_days": 180,
+                "category": "shoes",
+                "brands": ["Jimmy Choo"],
+                "discount_pct": 10.0,
+                "floor_space_shift_pct": 0.0,
+                "min_margin_rate": 0.50,
+                "max_discount_pct": 20.0,
+            },
+            tag_intensity="low",
+        )
+        low_rows = [
+            ProductRecommendation(
+                product_id="prod_2",
+                title="Jimmy Choo Satin Pump",
+                brand="Jimmy Choo",
+                category="shoes",
+                price=595.0,
+                availability="in stock",
+                score=0.93,
+                reasons=["High affinity match"],
+            ),
+            ProductRecommendation(
+                product_id="prod_4",
+                title="Tom Ford Midnight Sport Coat",
+                brand="Tom Ford",
+                category="mens_apparel",
+                price=820.0,
+                availability="in stock",
+                score=0.84,
+                reasons=["Cross-sell option"],
+            ),
+        ]
+        _, low_intensity, low_tagged = apply_execution_tags_for_store(session, store_id="1001", recommendations=low_rows)
+
+        mcp_server.fashion_merch_save_strategy_override(
+            packet_id=packet.packet_id,
+            store_id="1001",
+            strategy_core={
+                "objective": "revenue",
+                "lookback_days": 180,
+                "category": "shoes",
+                "brands": ["Jimmy Choo"],
+                "discount_pct": 10.0,
+                "floor_space_shift_pct": 0.0,
+                "min_margin_rate": 0.50,
+                "max_discount_pct": 20.0,
+            },
+            tag_intensity="high",
+        )
+        high_rows = [
+            ProductRecommendation(
+                product_id="prod_2",
+                title="Jimmy Choo Satin Pump",
+                brand="Jimmy Choo",
+                category="shoes",
+                price=595.0,
+                availability="in stock",
+                score=0.93,
+                reasons=["High affinity match"],
+            ),
+            ProductRecommendation(
+                product_id="prod_4",
+                title="Tom Ford Midnight Sport Coat",
+                brand="Tom Ford",
+                category="mens_apparel",
+                price=820.0,
+                availability="in stock",
+                score=0.84,
+                reasons=["Cross-sell option"],
+            ),
+        ]
+        _, high_intensity, high_tagged = apply_execution_tags_for_store(session, store_id="1001", recommendations=high_rows)
+
+        assert low_intensity is not None and low_intensity.value == "low"
+        assert high_intensity is not None and high_intensity.value == "high"
+        low_count = sum(len(item.execution_tags) for item in low_tagged)
+        high_count = sum(len(item.execution_tags) for item in high_tagged)
+        assert high_count >= low_count
+        assert "Margin Priority" in high_tagged[0].execution_tags
+        assert "Campaign Assist" in high_tagged[1].execution_tags
 
 
 def test_apply_execution_tags_uses_latest_published_packet(monkeypatch):
@@ -1175,8 +1373,13 @@ def test_apply_execution_tags_uses_latest_published_packet(monkeypatch):
         ]
 
         # no packet -> no tags
-        packet_id, tagged = apply_execution_tags_for_store(session, store_id="1001", recommendations=recommendation_rows)
+        packet_id, intensity, tagged = apply_execution_tags_for_store(
+            session,
+            store_id="1001",
+            recommendations=recommendation_rows,
+        )
         assert packet_id is None
+        assert intensity is None
         assert tagged[0].execution_tags == []
 
         first = ExecutiveStrategyPacket(
@@ -1256,8 +1459,13 @@ def test_apply_execution_tags_uses_latest_published_packet(monkeypatch):
         session.add_all([first, second])
         session.commit()
 
-        packet_id, tagged = apply_execution_tags_for_store(session, store_id="1001", recommendations=recommendation_rows)
+        packet_id, intensity, tagged = apply_execution_tags_for_store(
+            session,
+            store_id="1001",
+            recommendations=recommendation_rows,
+        )
         assert packet_id == "stratpkt_new"
+        assert intensity is not None
         assert tagged[0].execution_tags
 
 
@@ -1490,6 +1698,8 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_exec_get_strategy_packet" in tool_names
         assert "fashion_exec_prepare_strategy_packet_email" in tool_names
         assert "fashion_exec_send_strategy_packet_email" in tool_names
+        assert "fashion_merch_get_effective_strategy" in tool_names
+        assert "fashion_merch_save_strategy_override" in tool_names
         assert "fashion_exec_campaign_autopilot_prepare" in tool_names
         assert "fashion_exec_campaign_autopilot_send" in tool_names
         assert "fashion_product_margin_sales_opportunities" in tool_names
