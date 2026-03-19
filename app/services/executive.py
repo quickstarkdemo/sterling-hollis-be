@@ -1104,11 +1104,18 @@ def _strategy_email_body(packet: ExecutiveStrategyPacketResponse) -> str:
     lines = [
         packet.title,
         "",
+        f"Strategy Packet ID: {packet.packet_id}",
+        "",
         packet.summary,
         "",
         f"Objective: {packet.objective.value.replace('_', ' ')}",
         f"Lookback: {packet.lookback_days} days",
         f"Scope: {packet.scope_label}",
+        (
+            f"Scoped Stores: {', '.join(packet.scope_store_ids)}"
+            if packet.scope_store_ids
+            else "Scoped Stores: all stores (company-wide)"
+        ),
         f"Reallocate From: {packet.from_category or 'n/a'}",
         f"Reallocate To: {packet.to_category or 'n/a'}",
         f"Discount: {scenario.discount_pct:.1f}%",
@@ -1119,6 +1126,10 @@ def _strategy_email_body(packet: ExecutiveStrategyPacketResponse) -> str:
         "Guardrails:",
         f"- Min margin rate: {packet.min_margin_rate * 100:.1f}%",
         f"- Max discount: {packet.max_discount_pct:.1f}%",
+        "",
+        "Merchandising handoff:",
+        f"- Use strategy_packet_id={packet.packet_id} when opening Merch workspace.",
+        "- Keep controls editable; packet values are the starting defaults.",
         "",
         "Execution note: apply strategy via merchandising controls and associate priority tags.",
     ]
@@ -1140,7 +1151,7 @@ def prepare_strategy_packet_email(
 
     packet = _strategy_packet_to_response(record)
     record.to_email = destination
-    record.email_subject = f"Strategy Packet - {packet.title}"
+    record.email_subject = f"Strategy Packet {packet.packet_id} - {packet.title}"
     record.email_body_text = _strategy_email_body(packet)
     record.email_status = ExecutiveStrategyPacketEmailStatus.draft.value
     record.email_error_message = None

@@ -86,6 +86,7 @@ const state = {
     isLoading: false,
     isSending: false,
     isPublishingStrategy: false,
+    publishingScenarioId: null,
     isPreparingStrategyEmail: false,
     isSendingStrategyEmail: false,
   },
@@ -253,6 +254,7 @@ function applyWorkspacePayload(raw) {
   state.ui.minMarginRatePct = String(Number(payload.filters.min_margin_rate ?? 0.4) * 100);
   state.ui.maxDiscountPct = String(payload.filters.max_discount_pct ?? 20);
   state.ui.strategyPacketId = payload.filters.strategy_packet_id || "";
+  state.ui.publishingScenarioId = null;
   state.runtime.strategyPacket = null;
   state.runtime.strategyEmailDraft = null;
   state.runtime.strategyEmailSend = null;
@@ -806,8 +808,10 @@ async function publishStrategyPacket(scenario) {
     render();
     return;
   }
+  const scenarioId = typeof scenario.scenario_id === "string" ? scenario.scenario_id : null;
   markUserInteraction();
   state.ui.isPublishingStrategy = true;
+  state.ui.publishingScenarioId = scenarioId;
   setNotice("Publishing strategy packet...");
   render();
   const args = {
@@ -822,8 +826,13 @@ async function publishStrategyPacket(scenario) {
     max_discount_pct: clampNumber(state.ui.maxDiscountPct, 20, 0, 60),
     title: `Strategy Packet - ${new Date().toISOString().slice(0, 10)}`,
   };
-  const result = await callTool("fashion_exec_publish_strategy_packet", args);
-  state.ui.isPublishingStrategy = false;
+  let result;
+  try {
+    result = await callTool("fashion_exec_publish_strategy_packet", args);
+  } finally {
+    state.ui.isPublishingStrategy = false;
+    state.ui.publishingScenarioId = null;
+  }
   if (result.__toolError) {
     setNotice(result.__toolError, "error");
     render();
@@ -842,7 +851,32 @@ async function publishStrategyPacket(scenario) {
   if (isObject(state.payload.filters)) {
     state.payload.filters.strategy_packet_id = payload.packet_id;
   }
-  setNotice(`Published strategy packet ${payload.packet_id}.`);
+  let autoDraftPrepared = false;
+  let autoDraftError = "";
+  state.ui.isPreparingStrategyEmail = true;
+  const autoDraftResult = await callTool("fashion_exec_prepare_strategy_packet_email", {
+    packet_id: payload.packet_id,
+    to_email: (state.ui.toEmail || DEFAULT_EXEC_TO_EMAIL).trim() || DEFAULT_EXEC_TO_EMAIL,
+  });
+  state.ui.isPreparingStrategyEmail = false;
+  if (autoDraftResult.__toolError) {
+    autoDraftError = autoDraftResult.__toolError;
+  } else {
+    const autoDraftPayload = parseToolPayload(autoDraftResult);
+    if (autoDraftPayload && isObject(autoDraftPayload) && typeof autoDraftPayload.packet_id === "string") {
+      state.runtime.strategyEmailDraft = autoDraftPayload;
+      autoDraftPrepared = true;
+    } else {
+      autoDraftError = "Initial draft response was unexpected.";
+    }
+  }
+  if (autoDraftPrepared) {
+    setNotice(`Published strategy packet ${payload.packet_id} and created initial draft.`);
+  } else if (autoDraftError) {
+    setNotice(`Published strategy packet ${payload.packet_id}. Initial draft failed: ${autoDraftError}`, "error");
+  } else {
+    setNotice(`Published strategy packet ${payload.packet_id}.`);
+  }
   queueModelContextUpdate();
   render();
 }
@@ -860,9 +894,11 @@ async function prepareStrategyPacketEmail() {
     render();
     return;
   }
+  const existingDraft =
+    isObject(state.runtime.strategyEmailDraft) && state.runtime.strategyEmailDraft.packet_id === packetId;
   markUserInteraction();
   state.ui.isPreparingStrategyEmail = true;
-  setNotice("Preparing strategy packet email...");
+  setNotice(existingDraft ? "Refreshing strategy packet draft..." : "Preparing strategy packet email...");
   render();
   const result = await callTool("fashion_exec_prepare_strategy_packet_email", {
     packet_id: packetId,
@@ -881,7 +917,7 @@ async function prepareStrategyPacketEmail() {
     return;
   }
   state.runtime.strategyEmailDraft = payload;
-  setNotice(`Prepared strategy email draft for ${payload.to_email || state.ui.toEmail}.`);
+  setNotice(`${existingDraft ? "Refreshed" : "Prepared"} strategy email draft for ${payload.to_email || state.ui.toEmail}.`);
   queueModelContextUpdate();
   render();
 }
@@ -1443,6 +1479,7 @@ function renderAutoOptimize(result) {
   const packet = isObject(state.runtime.strategyPacket) ? state.runtime.strategyPacket : null;
   const emailDraft = isObject(state.runtime.strategyEmailDraft) ? state.runtime.strategyEmailDraft : null;
   const emailSend = isObject(state.runtime.strategyEmailSend) ? state.runtime.strategyEmailSend : null;
+  const hasDraft = Boolean(emailDraft && typeof emailDraft.packet_id === "string");
   const features = activeExecFeatureFlags();
   const strategyPacketId = packet?.packet_id || state.ui.strategyPacketId || "";
 
@@ -1463,84 +1500,85 @@ function renderAutoOptimize(result) {
       ),
     ),
     el(
-      "section",
-      { className: "fw-panel" },
-      el("h3", { className: "fw-panel-title", text: "Recommended Scenarios" }),
-      scenarios.length
-        ? el(
-            "div",
-            { className: "fw-list" },
-            ...scenarios.map((scenario) =>
-              el(
-                "article",
-                { className: "fw-result" },
-                el(
-                  "div",
-                  { className: "fw-section-head" },
-                  el(
-                    "div",
-                    {},
-                    el("h4", {
-                      className: "fw-panel-title",
-                      text: `${scenario.scenario_id}: ${compactNumber(scenario.discount_pct, 1)}% discount, ${compactNumber(scenario.floor_space_shift_pct, 1)}% shift`,
-                    }),
-                    el("p", { className: "fw-empty", text: scenario.rationale || "" }),
-                  ),
-                  el(
-                    "div",
-                    { className: "fw-chip-row" },
-                    el("span", {
-                      className: `fw-chip fw-merch-status-chip ${scenario.guardrail_passed ? "positive" : "negative"}`,
-                      text: scenario.guardrail_passed ? "Guardrails Pass" : "Guardrails Fail",
-                    }),
-                    el("span", { className: "fw-chip subtle", text: `Score ${compactNumber(scenario.objective_score, 1)}` }),
-                    el("span", { className: "fw-chip subtle", text: `Revenue ${formatSignedCurrency(scenario.revenue_delta)}` }),
-                    el("span", {
-                      className: "fw-chip subtle",
-                      text: `Margin ${formatPct(Number(scenario.margin_rate_delta || 0) * 100, 2)}`,
-                    }),
-                  ),
-                ),
-                el(
-                  "p",
-                  {
-                    className: "fw-empty",
-                    text: `Confidence band: ${formatCurrency(scenario.confidence_interval_low)} to ${formatCurrency(scenario.confidence_interval_high)}`,
-                  },
-                ),
-                Array.isArray(scenario.guardrail_reasons) && scenario.guardrail_reasons.length
-                  ? el(
-                      "ul",
-                      { className: "fw-empty", style: "margin:0;padding-left:1rem;" },
-                      ...scenario.guardrail_reasons.map((reason) => el("li", { text: reason })),
-                    )
-                  : null,
-                features.strategyPacketEnabled
-                  ? el(
+          "section",
+          { className: "fw-panel" },
+          el("h3", { className: "fw-panel-title", text: "Recommended Scenarios" }),
+          scenarios.length
+            ? el(
+                "div",
+                { className: "fw-list" },
+                ...scenarios.map((scenario) => {
+                  const isPublishingThis = state.ui.publishingScenarioId === scenario.scenario_id;
+                  return el(
+                    "article",
+                    { className: "fw-result" },
+                    el(
                       "div",
-                      { className: "fw-toolbar" },
+                      { className: "fw-section-head" },
                       el(
-                        "button",
-                        {
-                          className: "fw-button",
-                          type: "button",
-                          disabled:
-                            state.ui.isPublishingStrategy || !scenario.guardrail_passed || features.strategyPacketEnabled !== true
-                              ? "true"
-                              : null,
-                          onClick: () => {
-                            void publishStrategyPacket(scenario);
-                          },
-                        },
-                        state.ui.isPublishingStrategy ? "Publishing..." : "Publish Strategy",
+                        "div",
+                        {},
+                        el("h4", {
+                          className: "fw-panel-title",
+                          text: `${scenario.scenario_id}: ${compactNumber(scenario.discount_pct, 1)}% discount, ${compactNumber(scenario.floor_space_shift_pct, 1)}% shift`,
+                        }),
+                        el("p", { className: "fw-empty", text: scenario.rationale || "" }),
                       ),
-                    )
-                  : null,
-              ),
-            ),
-          )
-        : el("p", { className: "fw-empty", text: "No scenarios generated for this scope." }),
-    ),
+                      el(
+                        "div",
+                        { className: "fw-chip-row" },
+                        el("span", {
+                          className: `fw-chip fw-merch-status-chip ${scenario.guardrail_passed ? "positive" : "negative"}`,
+                          text: scenario.guardrail_passed ? "Guardrails Pass" : "Guardrails Fail",
+                        }),
+                        el("span", { className: "fw-chip subtle", text: `Score ${compactNumber(scenario.objective_score, 1)}` }),
+                        el("span", { className: "fw-chip subtle", text: `Revenue ${formatSignedCurrency(scenario.revenue_delta)}` }),
+                        el("span", {
+                          className: "fw-chip subtle",
+                          text: `Margin ${formatPct(Number(scenario.margin_rate_delta || 0) * 100, 2)}`,
+                        }),
+                      ),
+                    ),
+                    el(
+                      "p",
+                      {
+                        className: "fw-empty",
+                        text: `Confidence band: ${formatCurrency(scenario.confidence_interval_low)} to ${formatCurrency(scenario.confidence_interval_high)}`,
+                      },
+                    ),
+                    Array.isArray(scenario.guardrail_reasons) && scenario.guardrail_reasons.length
+                      ? el(
+                          "ul",
+                          { className: "fw-empty", style: "margin:0;padding-left:1rem;" },
+                          ...scenario.guardrail_reasons.map((reason) => el("li", { text: reason })),
+                        )
+                      : null,
+                    features.strategyPacketEnabled
+                      ? el(
+                          "div",
+                          { className: "fw-toolbar" },
+                          el(
+                            "button",
+                            {
+                              className: "fw-button",
+                              type: "button",
+                              disabled:
+                                state.ui.isPublishingStrategy || !scenario.guardrail_passed || features.strategyPacketEnabled !== true
+                                  ? "true"
+                                  : null,
+                              onClick: () => {
+                                void publishStrategyPacket(scenario);
+                              },
+                            },
+                            isPublishingThis ? "Publishing..." : "Publish Strategy",
+                          ),
+                        )
+                      : null,
+                  );
+                }),
+              )
+            : el("p", { className: "fw-empty", text: "No scenarios generated for this scope." }),
+      ),
     features.strategyPacketEnabled
       ? el(
           "section",
@@ -1584,7 +1622,13 @@ function renderAutoOptimize(result) {
                   void prepareStrategyPacketEmail();
                 },
               },
-              state.ui.isPreparingStrategyEmail ? "Preparing..." : "Prepare Email Draft",
+              state.ui.isPreparingStrategyEmail
+                ? hasDraft
+                  ? "Refreshing..."
+                  : "Creating..."
+                : hasDraft
+                  ? "Refresh Draft"
+                  : "Create Initial Draft",
             ),
             el(
               "button",
