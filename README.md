@@ -11,7 +11,7 @@ Synthetic fashion data platform with:
 
 - Live store seeding from configurable source endpoints
 - Deterministic synthetic generators for:
-  - `stores`, `customers`, `products`, `orders`, `order_items`, `store_daily_metrics`
+  - `stores`, `customers`, `products`, `orders`, `order_items`, `store_daily_metrics`, `analyst_store_category_v1`
 - CSV run artifacts under `data/runs/<run_id>/`
 - Admin load and finalize endpoints
 - Product embedding/index endpoint (OpenAI + Pinecone when configured, deterministic fallback otherwise)
@@ -183,6 +183,17 @@ curl -X POST http://localhost:8000/admin/synthetic/index-products \
 
 # Run report
 curl http://localhost:8000/admin/synthetic/runs/<RUN_ID>/report
+```
+
+Each generated run now also includes `analyst_store_category_v1.csv`, a 30-row
+store+category analyst-mock dataset designed for Google Sheets/ChatGPT
+comparison workflows (`current 90d` vs `prior 90d`) with a moderate aligned vs
+contrarian recommendation mix.
+
+You can also generate a standalone sample file without running the API:
+
+```bash
+python3 scripts/generate_analyst_story_sample.py --output /tmp/analyst_store_category_v1_sample.csv
 ```
 
 For MCP/operator flows, prefer the durable async indexing path:

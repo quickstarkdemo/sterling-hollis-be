@@ -15,7 +15,12 @@ from app.services.synthetic_generator import (
     GenerationVolumes,
     generate_synthetic_dataset,
 )
+from app.services.analyst_story import (
+    ANALYST_STORE_CATEGORY_V1_FILE,
+    ANALYST_STORE_CATEGORY_V1_HEADERS,
+)
 from app.services.customer_preferences import product_allowed_for_sex, top_style_categories
+from app.services.taxonomy import CATEGORY_TAXONOMY
 
 
 def _sample_stores(run_id: str) -> list[dict]:
@@ -286,3 +291,113 @@ def test_orders_show_holiday_seasonality_curve(tmp_path: Path):
     assert counts_by_month[12] > counts_by_month[11]
     assert counts_by_month[11] > counts_by_month[2]
     assert counts_by_month[12] > counts_by_month[1]
+
+
+def test_analyst_store_category_csv_contract_and_divergence(tmp_path: Path):
+    run_id = "run_test_9"
+    stores = [
+        *_sample_stores(run_id),
+        {
+            "id": "1003",
+            "seed_run_id": run_id,
+            "name": "NYC - Flagship",
+            "city": "New York",
+            "state": "NY",
+            "postal_code": "10001",
+            "address_line1": "500 5th Ave",
+            "address_line2": None,
+            "phone": "555-333-3333",
+            "latitude": 40.75,
+            "longitude": -73.99,
+            "profile_type": "flagship_urban",
+            "services": ["Personal Shopping"],
+            "raw_source": {},
+        },
+        {
+            "id": "1004",
+            "seed_run_id": run_id,
+            "name": "Houston - Galleria",
+            "city": "Houston",
+            "state": "TX",
+            "postal_code": "77056",
+            "address_line1": "8 Market St",
+            "address_line2": None,
+            "phone": "555-444-4444",
+            "latitude": 29.74,
+            "longitude": -95.46,
+            "profile_type": "suburban_affluent",
+            "services": ["Alterations"],
+            "raw_source": {},
+        },
+    ]
+    volumes = GenerationVolumes(stores=4, products=520, customers=320, orders=2600)
+
+    artifacts = generate_synthetic_dataset(
+        seed=20260320,
+        run_id=run_id,
+        stores=stores,
+        volumes=volumes,
+        trailing_months=18,
+        output_root=tmp_path,
+        raw_snapshot={"stores": []},
+        now=datetime(2026, 3, 13, tzinfo=timezone.utc),
+    )
+
+    path = artifacts.output_dir / ANALYST_STORE_CATEGORY_V1_FILE
+    with path.open("r", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        rows = list(reader)
+        assert reader.fieldnames == ANALYST_STORE_CATEGORY_V1_HEADERS
+
+    assert len(rows) == 30
+
+    store_ids = {row["id"] for row in _read_csv(artifacts.output_dir / "stores.csv")}
+    categories = set(CATEGORY_TAXONOMY.keys())
+
+    required = [
+        "as_of_date",
+        "store_id",
+        "store_name",
+        "state",
+        "profile_type",
+        "category",
+        "category_label",
+        "analyst_priority",
+        "divergence_flag",
+        "analyst_rationale",
+    ]
+    for row in rows:
+        for field in required:
+            assert row[field]
+        assert row["store_id"] in store_ids
+        assert row["category"] in categories
+        assert row["category_label"] == CATEGORY_TAXONOMY[row["category"]]["label"]
+        assert row["lookback_days"] == "90"
+        assert row["prior_lookback_days"] == "90"
+        assert row["analyst_priority"] in {"grow", "protect", "deprioritize"}
+        assert row["divergence_flag"] in {"aligned", "contrarian"}
+
+        assert float(row["current_revenue"]) >= 0.0
+        assert float(row["prior_revenue"]) >= 0.0
+        assert float(row["current_units"]) >= 0.0
+        assert float(row["prior_units"]) >= 0.0
+        assert 0.0 <= float(row["analyst_recommended_discount_pct"]) <= 20.0
+        assert -40.0 <= float(row["analyst_floor_space_shift_pct"]) <= 40.0
+        assert 0.0 <= float(row["current_margin_rate_pct"]) <= 100.0
+        assert 0.0 <= float(row["analyst_confidence"]) <= 1.0
+
+    contrarian_count = sum(1 for row in rows if row["divergence_flag"] == "contrarian")
+    ratio = contrarian_count / max(len(rows), 1)
+    assert 0.2 <= ratio <= 0.4
+
+    for row in rows[:5]:
+        rationale = row["analyst_rationale"].lower()
+        priority = row["analyst_priority"]
+        if priority == "grow":
+            assert "grow" in rationale
+        elif priority == "protect":
+            assert "protect" in rationale
+        else:
+            assert "deprioritize" in rationale or "rotate" in rationale or "reallocate" in rationale
+        if row["divergence_flag"] == "contrarian":
+            assert "contrarian" in rationale

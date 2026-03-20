@@ -1490,14 +1490,26 @@ function buildCompareStoreMultiSelect(selectedValuesRaw, options, autoLabel, aut
   return details;
 }
 
-function buildSelect(currentValue, options, onChange) {
+function buildSelect(currentValue, options, onChange, config = {}) {
+  const markDirty = config.markDirty !== false;
+  const shouldPersist = config.persist !== false;
+  const shouldRender = config.rerender !== false;
   const node = el("select", {
     className: "fw-input fw-select",
+    disabled: config.disabled ? "true" : null,
     onChange: (event) => {
-      markFilterChange();
+      if (markDirty) {
+        markFilterChange();
+      } else {
+        markUserInteraction();
+      }
       onChange(event.target.value);
-      persistWidgetState();
-      render();
+      if (shouldPersist) {
+        persistWidgetState();
+      }
+      if (shouldRender) {
+        render();
+      }
     },
   });
   options.forEach((option) => {
@@ -1687,33 +1699,17 @@ function renderStrategyContextCard() {
         "div",
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Tag Intensity" }),
-        el(
-          "select",
-          {
-            className: "fw-input fw-select",
-            value: state.ui.strategyTagIntensity || "medium",
-            onChange: (event) => {
-              markUserInteraction();
-              state.ui.strategyTagIntensity = event.target.value;
-              persistWidgetState();
-              render();
-            },
+        buildSelect(
+          state.ui.strategyTagIntensity || "medium",
+          [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+          ],
+          (value) => {
+            state.ui.strategyTagIntensity = value;
           },
-          el("option", {
-            value: "low",
-            selected: (state.ui.strategyTagIntensity || "medium") === "low" ? "true" : null,
-            text: "Low",
-          }),
-          el("option", {
-            value: "medium",
-            selected: (state.ui.strategyTagIntensity || "medium") === "medium" ? "true" : null,
-            text: "Medium",
-          }),
-          el("option", {
-            value: "high",
-            selected: (state.ui.strategyTagIntensity || "medium") === "high" ? "true" : null,
-            text: "High",
-          }),
+          { markDirty: false, persist: true, rerender: false },
         ),
       ),
       el(
@@ -3221,26 +3217,15 @@ function render() {
   });
   const activeTabId = tabDefinitions[activeTabIndex] ? `fw-tab-${tabDefinitions[activeTabIndex].id}` : "fw-tab-actions";
   const strategyStoreSelect = showStrategyStorePicker
-    ? el(
-        "select",
-        {
-          className: "fw-input fw-select",
-          value: selectedStrategyStoreId,
-          disabled: state.ui.isLoading ? "true" : null,
-          onChange: (event) => {
-            const nextStoreId = String(event.target.value || "").trim();
-            state.ui.strategyStoreId = nextStoreId;
-            persistWidgetState();
-            void switchStrategyStore(strategyContext, nextStoreId);
-          },
+    ? buildSelect(
+        selectedStrategyStoreId,
+        strategyScopedStores,
+        (value) => {
+          const nextStoreId = String(value || "").trim();
+          state.ui.strategyStoreId = nextStoreId;
+          void switchStrategyStore(strategyContext, nextStoreId);
         },
-        ...strategyScopedStores.map((option) =>
-          el("option", {
-            value: option.value,
-            selected: option.value === selectedStrategyStoreId ? "true" : null,
-            text: option.label,
-          }),
-        ),
+        { markDirty: false, persist: false, rerender: false, disabled: state.ui.isLoading },
       )
     : null;
 

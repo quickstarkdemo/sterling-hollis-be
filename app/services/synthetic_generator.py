@@ -12,6 +12,18 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import TypeVar
 
+from app.services.analyst_story import (
+    ANALYST_STORE_CATEGORY_V1_FILE,
+    generate_analyst_store_category_v1_rows,
+)
+from app.services.demo_customer import (
+    DEMO_CUSTOMER_EMAIL,
+    DEMO_CUSTOMER_FIRST_NAME,
+    DEMO_CUSTOMER_ID,
+    DEMO_CUSTOMER_LAST_NAME,
+    DEMO_CUSTOMER_PHONE_E164,
+    DEMO_CUSTOMER_SEX,
+)
 from app.services.taxonomy import (
     CATEGORY_TAXONOMY,
     KNOWN_COLORS,
@@ -21,14 +33,6 @@ from app.services.taxonomy import (
     REAL_BRANDS,
     STORE_ASSORTMENT_PROFILES,
     SYNTHETIC_BRANDS,
-)
-from app.services.demo_customer import (
-    DEMO_CUSTOMER_EMAIL,
-    DEMO_CUSTOMER_FIRST_NAME,
-    DEMO_CUSTOMER_ID,
-    DEMO_CUSTOMER_LAST_NAME,
-    DEMO_CUSTOMER_PHONE_E164,
-    DEMO_CUSTOMER_SEX,
 )
 
 FIRST_NAMES = [
@@ -718,6 +722,7 @@ def materialize_synthetic_csvs(
     orders: list[dict],
     order_items: list[dict],
     store_daily_metrics: list[dict],
+    analyst_store_category_v1: list[dict],
     raw_snapshot: dict,
     config: dict,
 ) -> SyntheticArtifacts:
@@ -731,6 +736,7 @@ def materialize_synthetic_csvs(
         "orders": _write_csv(output_dir / "orders.csv", orders),
         "order_items": _write_csv(output_dir / "order_items.csv", order_items),
         "store_daily_metrics": _write_csv(output_dir / "store_daily_metrics.csv", store_daily_metrics),
+        "analyst_store_category_v1": _write_csv(output_dir / ANALYST_STORE_CATEGORY_V1_FILE, analyst_store_category_v1),
     }
 
     (output_dir / "snapshot.json").write_text(json.dumps(raw_snapshot), encoding="utf-8")
@@ -781,6 +787,18 @@ def generate_synthetic_dataset(
         now,
     )
     metrics = build_store_daily_metrics(run_id, orders, order_items, products)
+    analyst_store_category_v1 = generate_analyst_store_category_v1_rows(
+        run_id=run_id,
+        seed=seed,
+        as_of=now,
+        stores=selected_stores,
+        products=products,
+        orders=orders,
+        order_items=order_items,
+        lookback_days=90,
+        prior_lookback_days=90,
+        target_rows=30,
+    )
 
     return materialize_synthetic_csvs(
         output_root=output_root,
@@ -791,6 +809,7 @@ def generate_synthetic_dataset(
         orders=orders,
         order_items=order_items,
         store_daily_metrics=metrics,
+        analyst_store_category_v1=analyst_store_category_v1,
         raw_snapshot=raw_snapshot,
         config={
             "seed": seed,
