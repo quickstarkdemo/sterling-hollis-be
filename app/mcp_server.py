@@ -253,6 +253,10 @@ def _ensure_feature_enabled(enabled: bool, feature_name: str) -> None:
 def _strategy_context_payload(
     packet: ExecutiveStrategyPacketResponse,
     effective: MerchEffectiveStrategyResponse | None = None,
+    *,
+    scope_store_options: list[dict[str, str]] | None = None,
+    handoff_store_id: str | None = None,
+    current_store_id: str | None = None,
 ) -> dict:
     scenario = packet.scenario
     effective_core = effective.strategy_core if effective and effective.strategy_core else packet.strategy_core
@@ -265,6 +269,9 @@ def _strategy_context_payload(
         "lookback_days": packet.lookback_days,
         "scope_label": packet.scope_label,
         "scope_store_ids": list(packet.scope_store_ids or []),
+        "scope_store_options": list(scope_store_options or []),
+        "handoff_store_id": handoff_store_id,
+        "current_store_id": current_store_id,
         "brands": list(packet.brands or []),
         "from_category": packet.from_category,
         "to_category": packet.to_category,
@@ -328,6 +335,27 @@ def _exec_store_options() -> list[dict[str, str]]:
             }
             for store in stores
         ]
+
+
+def _strategy_scope_store_options(db: Session, store_ids: list[str]) -> list[dict[str, str]]:
+    normalized_ids = [str(value).strip() for value in (store_ids or []) if str(value).strip()]
+    if not normalized_ids:
+        return []
+    rows = db.scalars(select(Store).where(Store.id.in_(normalized_ids))).all()
+    by_id = {row.id: row for row in rows}
+    options: list[dict[str, str]] = []
+    for store_id in normalized_ids:
+        row = by_id.get(store_id)
+        if row is None:
+            options.append({"value": store_id, "label": store_id})
+            continue
+        options.append(
+            {
+                "value": row.id,
+                "label": f"{row.name} ({row.city}, {row.state})",
+            }
+        )
+    return options
 
 
 def _exec_brand_options() -> list[dict[str, str]]:
@@ -1033,6 +1061,8 @@ def _merch_workspace_payload(
     effective_brand = brand
     effective_category = category
     effective_store_id = store_id
+    handoff_store_id = store_id
+    scope_store_options: list[dict[str, str]] = []
     strategy_context = None
     packet = None
     effective_strategy = None
@@ -1044,6 +1074,9 @@ def _merch_workspace_payload(
                 effective_store_id = resolved_store.id
             if not effective_store_id and packet.scope_store_ids:
                 effective_store_id = packet.scope_store_ids[0]
+            if not handoff_store_id:
+                handoff_store_id = effective_store_id
+            scope_store_options = _strategy_scope_store_options(db, packet.scope_store_ids)
             if effective_store_id:
                 effective_strategy = get_effective_merch_strategy(
                     db,
@@ -1079,13 +1112,21 @@ def _merch_workspace_payload(
         with SessionLocal() as db:
             if packet is None:
                 packet = get_strategy_packet(db, strategy_packet_id)
+            if not scope_store_options:
+                scope_store_options = _strategy_scope_store_options(db, packet.scope_store_ids)
             if effective_strategy is None:
                 effective_strategy = get_effective_merch_strategy(
                     db,
                     store_id=initial_result.store.id,
                     strategy_packet_id=packet.packet_id,
                 )
-        strategy_context = _strategy_context_payload(packet, effective_strategy)
+        strategy_context = _strategy_context_payload(
+            packet,
+            effective_strategy,
+            scope_store_options=scope_store_options,
+            handoff_store_id=handoff_store_id or initial_result.store.id,
+            current_store_id=initial_result.store.id,
+        )
     compare_store_options = _merch_compare_store_options(initial_result.store.id)
     brand_options = _merch_brand_options(initial_result.store.id)
     return {

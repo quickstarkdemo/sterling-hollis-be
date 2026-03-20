@@ -58,6 +58,9 @@ const state = {
     compareStoreIds: [],
     topK: "9",
     strategyTagIntensity: "medium",
+    strategyContextExpanded: false,
+    merchAdvancedOpen: true,
+    strategyStoreId: "",
     csvText: "",
     notice: "",
     noticeTone: "info",
@@ -235,6 +238,36 @@ function normalizeStrategyContext(raw) {
   };
   const packetStrategyCore = normalizeStrategyCore(raw.strategy_core);
   const effectiveStrategyCore = normalizeStrategyCore(raw.effective_strategy_core) || packetStrategyCore;
+  const normalizeScopeStoreOptions = (candidate, fallbackIds) => {
+    const ids = normalizeSelectionList(fallbackIds);
+    const seen = new Set();
+    const options = [];
+    if (Array.isArray(candidate)) {
+      candidate.forEach((item) => {
+        if (!isObject(item)) {
+          return;
+        }
+        const value = typeof item.value === "string" ? item.value.trim() : "";
+        if (!value || seen.has(value)) {
+          return;
+        }
+        seen.add(value);
+        const label = typeof item.label === "string" && item.label.trim() ? item.label.trim() : value;
+        options.push({ value, label });
+      });
+    }
+    ids.forEach((storeId) => {
+      if (!seen.has(storeId)) {
+        seen.add(storeId);
+        options.push({ value: storeId, label: storeId });
+      }
+    });
+    return options;
+  };
+  const scopeStoreIds = normalizeSelectionList(raw.scope_store_ids);
+  const scopeStoreOptions = normalizeScopeStoreOptions(raw.scope_store_options, scopeStoreIds);
+  const handoffStoreId = typeof raw.handoff_store_id === "string" ? raw.handoff_store_id.trim() : "";
+  const currentStoreId = typeof raw.current_store_id === "string" ? raw.current_store_id.trim() : "";
   return {
     packet_id: packetId,
     title: typeof raw.title === "string" ? raw.title : "",
@@ -242,7 +275,10 @@ function normalizeStrategyContext(raw) {
     objective: typeof raw.objective === "string" ? raw.objective : "",
     lookback_days: Number.isFinite(Number(raw.lookback_days)) ? Number(raw.lookback_days) : null,
     scope_label: typeof raw.scope_label === "string" ? raw.scope_label : "",
-    scope_store_ids: normalizeSelectionList(raw.scope_store_ids),
+    scope_store_ids: scopeStoreIds,
+    scope_store_options: scopeStoreOptions,
+    handoff_store_id: handoffStoreId || null,
+    current_store_id: currentStoreId || null,
     brands: normalizeSelectionList(raw.brands),
     from_category: typeof raw.from_category === "string" ? raw.from_category : null,
     to_category: typeof raw.to_category === "string" ? raw.to_category : null,
@@ -420,6 +456,9 @@ function applyWorkspacePayload(raw) {
   const context = normalizeStrategyContext(payload.strategy_context);
   state.ui.strategyTagIntensity =
     (context && typeof context.effective_tag_intensity === "string" && context.effective_tag_intensity) || "medium";
+  state.ui.strategyStoreId = payload.store && typeof payload.store.id === "string" ? payload.store.id : "";
+  state.ui.strategyContextExpanded = false;
+  state.ui.merchAdvancedOpen = context ? false : true;
   if (payload.initial_notice) {
     setNotice(payload.initial_notice);
   }
@@ -499,6 +538,7 @@ function applyUiWidgetState(raw) {
     "peerMode",
     "topK",
     "strategyTagIntensity",
+    "strategyStoreId",
     "csvText",
   ];
   for (const key of textFields) {
@@ -513,6 +553,14 @@ function applyUiWidgetState(raw) {
       state.ui.lookbackPreset = derivedPreset;
       changed = true;
     }
+  }
+  if (typeof raw.strategyContextExpanded === "boolean" && raw.strategyContextExpanded !== state.ui.strategyContextExpanded) {
+    state.ui.strategyContextExpanded = raw.strategyContextExpanded;
+    changed = true;
+  }
+  if (typeof raw.merchAdvancedOpen === "boolean" && raw.merchAdvancedOpen !== state.ui.merchAdvancedOpen) {
+    state.ui.merchAdvancedOpen = raw.merchAdvancedOpen;
+    changed = true;
   }
   const compareStoreIdsInput =
     Array.isArray(raw.compareStoreIds) || typeof raw.compareStoreIds === "string"
@@ -565,6 +613,9 @@ function persistWidgetState() {
       compareStoreIds: clone(state.ui.compareStoreIds),
       topK: state.ui.topK,
       strategyTagIntensity: state.ui.strategyTagIntensity,
+      strategyContextExpanded: Boolean(state.ui.strategyContextExpanded),
+      merchAdvancedOpen: Boolean(state.ui.merchAdvancedOpen),
+      strategyStoreId: state.ui.strategyStoreId,
       csvText: state.ui.csvText,
       lastTool: state.payload.last_tool,
     });
@@ -719,6 +770,7 @@ function buildModelContextPayload() {
     strategy_objective: strategyContext?.objective || null,
     strategy_to_category: strategyContext?.to_category || null,
     strategy_tag_intensity: state.ui.strategyTagIntensity || "medium",
+    strategy_store_id: state.ui.strategyStoreId || state.payload.store?.id || null,
     row_count: rowCountForResult(active),
     csv_hash: stableTextHash(state.ui.csvText),
   };
@@ -1104,19 +1156,28 @@ function currentStrategyCorePayload(context) {
   };
 }
 
-async function reloadMerchWorkspaceFromStrategy(context, noticeText) {
-  if (!context?.packet_id || !state.payload.store?.id) {
+async function reloadMerchWorkspaceFromStrategy(context, noticeText, options = {}) {
+  if (!context?.packet_id) {
+    return false;
+  }
+  const nextStoreId =
+    typeof options.storeId === "string" && options.storeId.trim()
+      ? options.storeId.trim()
+      : state.payload.store?.id || context.handoff_store_id || "";
+  if (!nextStoreId) {
     return false;
   }
   const compareStoreIds = normalizeSelectionList(state.ui.compareStoreIds);
+  const activeToolBeforeReload = options.activeTool || state.payload.last_tool || "fashion_merch_action_recommendations";
   const args = {
-    store_id: state.payload.store.id,
+    store_id: nextStoreId,
     question: state.ui.question.trim() || undefined,
-    objective: "margin",
-    lookback_days: 90,
+    objective: options.resetStrategyCore === true ? "margin" : state.ui.objective || "margin",
+    lookback_days:
+      options.resetStrategyCore === true ? 90 : Number(normalizeLookbackDays(state.ui.lookbackDays || "90")),
     top_k: parsePositiveInt(state.ui.topK, 9, 1, 50),
-    category: undefined,
-    brand: undefined,
+    category: options.resetStrategyCore === true ? undefined : state.ui.category.trim() || undefined,
+    brand: options.resetStrategyCore === true ? undefined : state.ui.brand.trim() || undefined,
     price_band: state.ui.priceBand || undefined,
     occasion: state.ui.occasion.trim() || undefined,
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
@@ -1125,7 +1186,7 @@ async function reloadMerchWorkspaceFromStrategy(context, noticeText) {
     strategy_packet_id: context.packet_id,
     initial_notice: noticeText || undefined,
   };
-  const result = await callTool("fashion_render_merch_workspace", args);
+  const result = await callTool("fashion_open_merch_workspace", args);
   if (result.__toolError) {
     setNotice(result.__toolError, "error");
     render();
@@ -1137,7 +1198,15 @@ async function reloadMerchWorkspaceFromStrategy(context, noticeText) {
     render();
     return false;
   }
+  state.ui.strategyStoreId = nextStoreId;
   persistWidgetState();
+  if (activeToolBeforeReload !== "fashion_merch_action_recommendations") {
+    await refreshMerch(activeToolBeforeReload);
+    return true;
+  }
+  if (noticeText) {
+    setNotice(noticeText);
+  }
   render();
   return true;
 }
@@ -1185,7 +1254,47 @@ async function saveStrategyOverride(options = {}) {
   await reloadMerchWorkspaceFromStrategy(
     context,
     usePacketDefaults ? "Reverted to packet defaults for this store." : "Saved store-level strategy override.",
+    {
+      resetStrategyCore: true,
+    },
   );
+}
+
+async function switchStrategyStore(context, nextStoreId) {
+  const normalizedStoreId = String(nextStoreId || "").trim();
+  if (!context?.packet_id || !normalizedStoreId) {
+    return;
+  }
+  if (state.ui.isLoading || state.ui.isSavingStrategyOverride || state.ui.isResettingStrategyOverride) {
+    return;
+  }
+  if (normalizedStoreId === (state.payload.store?.id || "")) {
+    state.ui.strategyStoreId = normalizedStoreId;
+    persistWidgetState();
+    return;
+  }
+  markUserInteraction();
+  state.ui.isLoading = true;
+  state.ui.strategyStoreId = normalizedStoreId;
+  setNotice("Switching strategy store...");
+  persistWidgetState();
+  render();
+  const switched = await reloadMerchWorkspaceFromStrategy(
+    context,
+    "Pinned strategy store updated.",
+    {
+      storeId: normalizedStoreId,
+      resetStrategyCore: false,
+      activeTool: state.payload.last_tool || "fashion_merch_action_recommendations",
+    },
+  );
+  state.ui.isLoading = false;
+  if (!switched) {
+    setNotice("Unable to switch strategy store.", "error");
+    render();
+    return;
+  }
+  render();
 }
 
 function buildBrandMultiSelect(selectedCsv, options) {
@@ -1480,6 +1589,35 @@ function renderStrategyContextCard() {
   const scenario = isObject(context.scenario) ? context.scenario : null;
   const packetCore = isObject(context.strategy_core) ? context.strategy_core : null;
   const effectiveCore = isObject(context.effective_strategy_core) ? context.effective_strategy_core : packetCore;
+  const scopeOptions = Array.isArray(context.scope_store_options) ? context.scope_store_options : [];
+  const scopeCount = Array.isArray(context.scope_store_ids) ? context.scope_store_ids.length : scopeOptions.length;
+  const storeName = state.payload.store?.name || "Current store";
+  const effectiveSummary = [];
+  if (effectiveCore?.objective) {
+    effectiveSummary.push(`Objective ${humanizeToken(effectiveCore.objective)}`);
+  }
+  if (Number.isFinite(Number(effectiveCore?.lookback_days))) {
+    effectiveSummary.push(`Lookback ${effectiveCore.lookback_days}d`);
+  }
+  if (effectiveCore?.category) {
+    effectiveSummary.push(`Category ${humanizeToken(effectiveCore.category)}`);
+  }
+  if (Array.isArray(effectiveCore?.brands) && effectiveCore.brands.length) {
+    effectiveSummary.push(`${effectiveCore.brands.length} brands`);
+  }
+  if (Number.isFinite(Number(effectiveCore?.discount_pct))) {
+    effectiveSummary.push(`Discount ${compactNumber(effectiveCore.discount_pct)}%`);
+  }
+  if (Number.isFinite(Number(effectiveCore?.floor_space_shift_pct))) {
+    effectiveSummary.push(`Shift ${compactNumber(effectiveCore.floor_space_shift_pct)}%`);
+  }
+  if (Number.isFinite(Number(effectiveCore?.min_margin_rate))) {
+    effectiveSummary.push(`Min margin ${(Number(effectiveCore.min_margin_rate) * 100).toFixed(1)}%`);
+  }
+  if (Number.isFinite(Number(effectiveCore?.max_discount_pct))) {
+    effectiveSummary.push(`Max discount ${compactNumber(effectiveCore.max_discount_pct)}%`);
+  }
+  const effectiveSummaryText = effectiveSummary.length ? effectiveSummary.join(" · ") : "Using packet defaults.";
   const renderCoreChips = (core, prefix) => {
     if (!core) {
       return [];
@@ -1518,42 +1656,33 @@ function renderStrategyContextCard() {
   };
   return el(
     "section",
-    { className: "fw-panel" },
+    { className: "fw-panel fw-strategy-context-card" },
     el(
       "div",
       { className: "fw-section-head" },
       el(
         "div",
-        {},
+        { className: "fw-strategy-title-wrap" },
         el("div", { className: "fw-kicker", text: "Strategy Context" }),
         el("h3", { className: "fw-panel-title", text: context.title || "Active strategy packet" }),
-        context.summary ? el("p", { className: "fw-empty", text: context.summary }) : null,
+        el("p", { className: "fw-empty fw-strategy-summary-line", text: effectiveSummaryText }),
       ),
       el("span", { className: "fw-chip subtle", text: context.packet_id }),
     ),
     el(
       "div",
       { className: "fw-chip-row" },
-      context.objective ? el("span", { className: "fw-chip", text: `Packet Objective ${humanizeToken(context.objective)}` }) : null,
-      context.scope_label ? el("span", { className: "fw-chip subtle", text: context.scope_label }) : null,
-      context.to_category ? el("span", { className: "fw-chip subtle", text: `To ${humanizeToken(context.to_category)}` }) : null,
+      context.objective ? el("span", { className: "fw-chip", text: `Objective ${humanizeToken(context.objective)}` }) : null,
+      scopeCount ? el("span", { className: "fw-chip subtle", text: `${scopeCount} scoped stores` }) : null,
+      el("span", { className: "fw-chip subtle", text: `Pinned ${storeName}` }),
       context.override_active
         ? el("span", { className: "fw-chip fw-merch-status-chip positive", text: "Store Override Active" })
         : el("span", { className: "fw-chip subtle", text: "Using Packet Defaults" }),
       el("span", { className: "fw-chip subtle", text: `Tag Intensity ${humanizeToken(context.effective_tag_intensity || "medium")}` }),
     ),
-    packetCore
-      ? el(
-          "p",
-          { className: "fw-empty fw-inline-meta" },
-          "Packet defaults are shown below. Save Store Override to persist tuned store-specific strategy values.",
-        )
-      : null,
-    el("div", { className: "fw-chip-row" }, ...renderCoreChips(packetCore, "Packet")),
-    el("div", { className: "fw-chip-row" }, ...renderCoreChips(effectiveCore, "Effective")),
     el(
       "div",
-      { className: "fw-grid merch-filters" },
+      { className: "fw-grid merch-filters fw-strategy-actions-row" },
       el(
         "div",
         { className: "fw-field" },
@@ -1621,11 +1750,40 @@ function renderStrategyContextCard() {
         ),
       ),
     ),
-    scenario
+    context.summary ? el("p", { className: "fw-empty fw-inline-meta", text: context.summary }) : null,
+    el(
+      "button",
+      {
+        className: "fw-text-button",
+        type: "button",
+        onClick: () => {
+          state.ui.strategyContextExpanded = !state.ui.strategyContextExpanded;
+          persistWidgetState();
+          render();
+        },
+      },
+      state.ui.strategyContextExpanded ? "Hide details" : "Show details",
+    ),
+    state.ui.strategyContextExpanded
       ? el(
-          "p",
-          { className: "fw-empty fw-inline-meta" },
-          `Scenario ${scenario.scenario_id}: ${compactNumber(scenario.discount_pct)}% discount, ${compactNumber(scenario.floor_space_shift_pct)}% shift.`,
+          "div",
+          { className: "fw-strategy-details" },
+          packetCore
+            ? el(
+                "p",
+                { className: "fw-empty fw-inline-meta" },
+                "Packet defaults are shown below. Save Store Override to persist tuned store-specific strategy values.",
+              )
+            : null,
+          el("div", { className: "fw-chip-row" }, ...renderCoreChips(packetCore, "Packet")),
+          el("div", { className: "fw-chip-row" }, ...renderCoreChips(effectiveCore, "Effective")),
+          scenario
+            ? el(
+                "p",
+                { className: "fw-empty fw-inline-meta" },
+                `Scenario ${scenario.scenario_id}: ${compactNumber(scenario.discount_pct)}% discount, ${compactNumber(scenario.floor_space_shift_pct)}% shift.`,
+              )
+            : null,
         )
       : null,
   );
@@ -2870,6 +3028,23 @@ function render() {
   const activeTool = state.payload.last_tool || "fashion_merch_action_recommendations";
   const result = activeResult();
   const store = state.payload.store;
+  const strategyContext = normalizeStrategyContext(state.payload.strategy_context);
+  const strategyScopedStores = Array.isArray(strategyContext?.scope_store_options)
+    ? strategyContext.scope_store_options
+    : [];
+  const showStrategyStorePicker = Boolean(strategyContext?.packet_id && strategyScopedStores.length);
+  const selectedStrategyStoreId = (() => {
+    const current = String(state.ui.strategyStoreId || store?.id || strategyContext?.handoff_store_id || "").trim();
+    if (!showStrategyStorePicker) {
+      return current;
+    }
+    const matched = strategyScopedStores.find((option) => option.value === current);
+    if (matched) {
+      return matched.value;
+    }
+    return strategyScopedStores[0].value;
+  })();
+  state.ui.strategyStoreId = selectedStrategyStoreId;
 
   const header = el(
     "header",
@@ -3045,29 +3220,62 @@ function render() {
     );
   });
   const activeTabId = tabDefinitions[activeTabIndex] ? `fw-tab-${tabDefinitions[activeTabIndex].id}` : "fw-tab-actions";
+  const strategyStoreSelect = showStrategyStorePicker
+    ? el(
+        "select",
+        {
+          className: "fw-input fw-select",
+          value: selectedStrategyStoreId,
+          disabled: state.ui.isLoading ? "true" : null,
+          onChange: (event) => {
+            const nextStoreId = String(event.target.value || "").trim();
+            state.ui.strategyStoreId = nextStoreId;
+            persistWidgetState();
+            void switchStrategyStore(strategyContext, nextStoreId);
+          },
+        },
+        ...strategyScopedStores.map((option) =>
+          el("option", {
+            value: option.value,
+            selected: option.value === selectedStrategyStoreId ? "true" : null,
+            text: option.label,
+          }),
+        ),
+      )
+    : null;
 
   const controlsPanel = el(
     "section",
     { className: "fw-panel fw-controls-panel" },
-    el("h2", { className: "fw-panel-title", text: store ? `Store: ${store.name}` : "Merch Workspace" }),
+    el("h2", { className: "fw-panel-title", text: showStrategyStorePicker ? "Strategy Store" : store ? `Store: ${store.name}` : "Merch Workspace" }),
     notice,
-    store
-      ? el("p", { className: "fw-empty", text: `${store.city}, ${store.state} • profile ${humanizeToken(store.profile_type)}` })
-      : el("p", { className: "fw-empty", text: "No store resolved yet. Open from a store query in chat." }),
+    showStrategyStorePicker
+      ? el(
+          "div",
+          { className: "fw-field fw-strategy-store-field" },
+          el("label", { className: "fw-label", text: "Strategy Store" }),
+          strategyStoreSelect,
+          el("p", {
+            className: "fw-empty fw-inline-meta fw-strategy-store-help",
+            text: "Evaluations apply to selected strategy store.",
+          }),
+          store
+            ? el("p", {
+                className: "fw-empty",
+                text: `${store.city}, ${store.state} • profile ${humanizeToken(store.profile_type)}`,
+              })
+            : null,
+        )
+      : store
+        ? el("p", {
+            className: "fw-empty",
+            text: `${store.city}, ${store.state} • profile ${humanizeToken(store.profile_type)}`,
+          })
+        : el("p", { className: "fw-empty", text: "No store resolved yet. Open from a store query in chat." }),
     renderStrategyContextCard(),
     el(
       "div",
       { className: "fw-grid merch-filters fw-merch-clean-filters" },
-      el(
-        "div",
-        { className: "fw-field fw-span-full" },
-        el("label", { className: "fw-label", text: "Context (Optional)" }),
-        questionInput,
-        el("p", {
-          className: "fw-empty fw-merch-question-hint",
-          text: "Use this for nuance not captured by filters. It guides the analysis on refresh and never overrides selected controls.",
-        }),
-      ),
       el(
         "div",
         { className: "fw-field" },
@@ -3124,30 +3332,57 @@ function render() {
             })
           : null,
       ),
-      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare Mode" }), compareModeSelect),
-      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Peer Mode" }), peerModeSelect),
+    ),
+    el(
+      "details",
+      {
+        className: "fw-advanced-controls",
+        open: state.ui.merchAdvancedOpen ? "true" : null,
+        onToggle: (event) => {
+          state.ui.merchAdvancedOpen = event.currentTarget.open;
+          persistWidgetState();
+          render();
+        },
+      },
+      el("summary", { className: "fw-advanced-summary", text: "Advanced Merch Controls" }),
       el(
         "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Compare Stores" }),
-        compareStoreMultiSelect,
-      ),
-      el(
-        "div",
-        { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Top K" }),
-        el("input", {
-          className: "fw-input",
-          type: "number",
-          min: "1",
-          max: "50",
-          value: state.ui.topK,
-          onInput: (event) => {
-            markFilterChange();
-            state.ui.topK = event.target.value;
-            persistWidgetState();
-          },
-        }),
+        { className: "fw-grid merch-filters fw-merch-clean-filters fw-merch-advanced-grid" },
+        el(
+          "div",
+          { className: "fw-field fw-span-full" },
+          el("label", { className: "fw-label", text: "Context (Optional)" }),
+          questionInput,
+          el("p", {
+            className: "fw-empty fw-merch-question-hint",
+            text: "Use this for nuance not captured by filters. It guides the analysis on refresh and never overrides selected controls.",
+          }),
+        ),
+        el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Compare Mode" }), compareModeSelect),
+        el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Peer Mode" }), peerModeSelect),
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Compare Stores" }),
+          compareStoreMultiSelect,
+        ),
+        el(
+          "div",
+          { className: "fw-field" },
+          el("label", { className: "fw-label", text: "Top K" }),
+          el("input", {
+            className: "fw-input",
+            type: "number",
+            min: "1",
+            max: "50",
+            value: state.ui.topK,
+            onInput: (event) => {
+              markFilterChange();
+              state.ui.topK = event.target.value;
+              persistWidgetState();
+            },
+          }),
+        ),
       ),
     ),
     el(

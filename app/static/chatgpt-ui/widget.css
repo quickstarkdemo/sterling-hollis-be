@@ -1,12 +1,14 @@
 :root {
   color-scheme: light;
-  --bg: #f4f6f8;
+  --bg: #eef3f8;
   --panel: #ffffff;
+  --panel-muted: #f6f9fc;
   --ink: #13212d;
   --muted: #5d6a75;
-  --line: #d8e0e7;
+  --line: #d3deea;
   --accent: #1f5d8f;
   --accent-strong: #154261;
+  --accent-soft: #edf4fb;
   --notice: #e8f2fc;
   --notice-error: #fdecef;
   --notice-error-ink: #8a2539;
@@ -46,6 +48,7 @@ body {
 
 .fw-hero {
   padding: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fbfe 100%);
 }
 
 .fw-kicker {
@@ -90,6 +93,7 @@ body {
   padding: 12px;
   display: grid;
   gap: 10px;
+  box-shadow: 0 1px 0 rgba(31, 93, 143, 0.04);
 }
 
 .fw-panel-title {
@@ -127,7 +131,7 @@ body {
   padding: 4px;
   border: 1px solid #c8d6e3;
   border-radius: 12px;
-  background: #f4f8fc;
+  background: #f2f7fc;
 }
 
 .fw-tab {
@@ -146,7 +150,7 @@ body {
 }
 
 .fw-tab:hover:not(.active):not(:disabled) {
-  background: #e4edf6;
+  background: #e8f0f8;
 }
 
 .fw-tab.active {
@@ -303,8 +307,42 @@ body {
 .fw-merch-clean-filters .fw-select,
 .fw-merch-clean-filters .fw-multi-select-summary {
   min-height: 36px;
-  padding-top: 7px;
-  padding-bottom: 7px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.fw-strategy-store-field {
+  gap: 4px;
+}
+
+.fw-strategy-store-help {
+  color: #2a5b84;
+}
+
+.fw-advanced-controls {
+  border: 1px solid #d3dfea;
+  border-radius: 11px;
+  padding: 8px 9px;
+  background: var(--panel-muted);
+}
+
+.fw-advanced-summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: #2f5069;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.fw-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fw-merch-advanced-grid {
+  margin-top: 9px;
 }
 
 .fw-span-full {
@@ -331,7 +369,7 @@ body {
   flex: 1 1 320px;
   min-width: 220px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
   padding: 9px 11px;
   font: inherit;
   font-size: 13px;
@@ -440,7 +478,7 @@ body {
 }
 
 .fw-button.secondary {
-  background: #e9eff4;
+  background: #edf3f8;
   color: #2c4c66;
   border: 1px solid #c8d6e3;
 }
@@ -543,14 +581,40 @@ body {
   align-items: center;
   border-radius: 999px;
   padding: 4px 9px;
-  background: #edf5fb;
+  background: var(--accent-soft);
   color: #1f4d72;
   font-size: 12px;
 }
 
 .fw-chip.subtle {
-  background: #f0f2f4;
+  background: #f1f4f7;
   color: #3f4d59;
+}
+
+.fw-strategy-context-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
+  border-color: #cddceb;
+}
+
+.fw-strategy-title-wrap {
+  display: grid;
+  gap: 4px;
+}
+
+.fw-strategy-summary-line {
+  margin: 0;
+  color: #2b4f6d;
+}
+
+.fw-strategy-actions-row {
+  align-items: end;
+}
+
+.fw-strategy-details {
+  border-top: 1px solid #dce7f1;
+  padding-top: 8px;
+  display: grid;
+  gap: 8px;
 }
 
 .fw-kpi-strip {

@@ -978,7 +978,8 @@ async function openStrategyInMerch() {
     ? packet.scope_store_ids.map((value) => String(value || "").trim()).filter(Boolean)
     : [];
   const fallbackStores = normalizeStoreIds(state.ui.storeIds);
-  const targetStoreId = scopedStores[0] || fallbackStores[0] || "";
+  const scopedPreferredStoreId = fallbackStores.find((storeId) => scopedStores.includes(storeId)) || "";
+  const targetStoreId = scopedPreferredStoreId || scopedStores[0] || fallbackStores[0] || "";
   if (!targetStoreId) {
     setNotice("No scoped store found. Select store scope before opening Merch workspace.", "error");
     render();
@@ -1658,6 +1659,13 @@ function renderAutoOptimize(result) {
               },
               "Open in Merch",
             ),
+          ),
+          el(
+            "p",
+            {
+              className: "fw-empty fw-inline-meta",
+              text: "Opens pinned to selected strategy store so merchandising evaluations run in that exact scope.",
+            },
           ),
           el(
             "div",
