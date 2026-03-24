@@ -2116,15 +2116,21 @@ def test_exec_export_csv_returns_raw_store_performance(monkeypatch):
         )
 
         assert scoped.view.value == "store_performance"
-        assert scoped.row_count == 1
+        assert scoped.row_count > 1
         assert scoped.csv_text.splitlines()[0].startswith(
-            "data_mode,view,store_id,store_name,city,state,rank,revenue,units,margin_rate,revenue_share_pct"
+            "data_mode,view,row_type,store_id,store_name,city,state,rank,category,revenue,units,margin_rate,revenue_share_pct"
         )
-        scoped_row = scoped.rows[0].values
-        assert scoped_row["data_mode"] == "raw"
-        assert scoped_row["store_id"] == "1001"
-        assert scoped_row["objective"] == "revenue"
-        assert "expected_revenue" not in scoped_row
+        store_rows = [row.values for row in scoped.rows if row.values.get("row_type") == "store_summary"]
+        category_rows = [row.values for row in scoped.rows if row.values.get("row_type") == "category_performance"]
+        assert len(store_rows) == 1
+        scoped_store_row = store_rows[0]
+        assert scoped_store_row["data_mode"] == "raw"
+        assert scoped_store_row["store_id"] == "1001"
+        assert scoped_store_row["objective"] == "revenue"
+        assert "expected_revenue" not in scoped_store_row
+        assert category_rows
+        assert all(row["store_id"] == "1001" for row in category_rows)
+        assert all(row["category"] for row in category_rows)
         assert network.row_count >= 2
 
 

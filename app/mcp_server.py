@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from io import StringIO
 from pathlib import Path
@@ -15,7 +15,7 @@ from sqlalchemy import case, func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Order, Product, ProductEmbedding, Store, SyntheticRun
+from app.models import Order, OrderItem, Product, ProductEmbedding, Store, SyntheticRun
 from app.schemas import (
     CompareMode,
     CustomerCommunicationDraftResponse,
@@ -254,6 +254,12 @@ def _int_value(value) -> int:
         return int(round(float(value or 0)))
     except Exception:
         return 0
+
+
+def _pct_delta(current: float, baseline: float) -> float | None:
+    if baseline == 0:
+        return None
+    return ((current - baseline) / abs(baseline)) * 100.0
 
 
 def _ensure_feature_enabled(enabled: bool, feature_name: str) -> None:
@@ -1690,15 +1696,58 @@ def _exec_export_csv_impl(params: ExecutiveExportCsvRequest) -> ExecutiveExportC
             objective=params.objective,
             top_k_stores=params.top_k_stores,
         )
+        scoped_store_ids = [item.store_id for item in overview.stores]
+        current_by_store_category: dict[tuple[str, str], dict[str, float]] = {}
+        prior_revenue_by_store_category: dict[tuple[str, str], float] = {}
+        if scoped_store_ids:
+            since = overview.generated_at - timedelta(days=overview.lookback_days)
+            prior_since = since - timedelta(days=overview.lookback_days)
+            current_rows = db.execute(
+                select(
+                    Order.store_id.label("store_id"),
+                    Product.category.label("category"),
+                    func.sum(OrderItem.line_total).label("revenue"),
+                    func.sum(OrderItem.quantity).label("units"),
+                    func.sum(OrderItem.line_total * Product.margin_pct).label("margin_value"),
+                )
+                .join(OrderItem, OrderItem.order_id == Order.id)
+                .join(Product, Product.id == OrderItem.product_id)
+                .where(Order.store_id.in_(scoped_store_ids), Order.ordered_at >= since, Order.ordered_at < overview.generated_at)
+                .group_by(Order.store_id, Product.category)
+            ).all()
+            prior_rows = db.execute(
+                select(
+                    Order.store_id.label("store_id"),
+                    Product.category.label("category"),
+                    func.sum(OrderItem.line_total).label("revenue"),
+                )
+                .join(OrderItem, OrderItem.order_id == Order.id)
+                .join(Product, Product.id == OrderItem.product_id)
+                .where(Order.store_id.in_(scoped_store_ids), Order.ordered_at >= prior_since, Order.ordered_at < since)
+                .group_by(Order.store_id, Product.category)
+            ).all()
+            for row in current_rows:
+                revenue = float(row.revenue or 0.0)
+                units = float(row.units or 0.0)
+                margin_value = float(row.margin_value or 0.0)
+                current_by_store_category[(row.store_id, row.category)] = {
+                    "revenue": revenue,
+                    "units": units,
+                    "margin_rate": (margin_value / revenue) if revenue > 0 else 0.0,
+                }
+            for row in prior_rows:
+                prior_revenue_by_store_category[(row.store_id, row.category)] = float(row.revenue or 0.0)
 
     headers = [
         "data_mode",
         "view",
+        "row_type",
         "store_id",
         "store_name",
         "city",
         "state",
         "rank",
+        "category",
         "revenue",
         "units",
         "margin_rate",
@@ -1712,11 +1761,13 @@ def _exec_export_csv_impl(params: ExecutiveExportCsvRequest) -> ExecutiveExportC
         {
             "data_mode": "raw",
             "view": params.view.value,
+            "row_type": "store_summary",
             "store_id": _as_scalar(item.store_id),
             "store_name": _as_scalar(item.store_name),
             "city": _as_scalar(item.city),
             "state": _as_scalar(item.state),
             "rank": _as_scalar(item.rank),
+            "category": "",
             "revenue": _as_scalar(item.revenue),
             "units": _as_scalar(item.units),
             "margin_rate": _as_scalar(item.margin_rate),
@@ -1728,6 +1779,40 @@ def _exec_export_csv_impl(params: ExecutiveExportCsvRequest) -> ExecutiveExportC
         }
         for item in overview.stores
     ]
+    for item in overview.stores:
+        store_revenue = float(item.revenue or 0.0)
+        category_rows = [
+            (category, payload)
+            for (store_id, category), payload in current_by_store_category.items()
+            if store_id == item.store_id
+        ]
+        category_rows.sort(key=lambda entry: entry[1].get("revenue", 0.0), reverse=True)
+        for category, payload in category_rows:
+            category_revenue = float(payload.get("revenue", 0.0))
+            prior_revenue = float(prior_revenue_by_store_category.get((item.store_id, category), 0.0))
+            category_delta_pct = _pct_delta(category_revenue, prior_revenue)
+            rows.append(
+                {
+                    "data_mode": "raw",
+                    "view": params.view.value,
+                    "row_type": "category_performance",
+                    "store_id": _as_scalar(item.store_id),
+                    "store_name": _as_scalar(item.store_name),
+                    "city": _as_scalar(item.city),
+                    "state": _as_scalar(item.state),
+                    "rank": _as_scalar(item.rank),
+                    "category": _as_scalar(category),
+                    "revenue": _as_scalar(category_revenue),
+                    "units": _as_scalar(payload.get("units", 0.0)),
+                    "margin_rate": _as_scalar(payload.get("margin_rate", 0.0)),
+                    "revenue_share_pct": _as_scalar(((category_revenue / store_revenue) * 100.0) if store_revenue > 0 else 0.0),
+                    "revenue_delta_pct": _as_scalar(category_delta_pct),
+                    "lookback_days": _as_scalar(overview.lookback_days),
+                    "objective": _as_scalar(overview.objective),
+                    "generated_at": overview.generated_at.isoformat(),
+                }
+            )
+
     csv_payload = _csv_text(headers, rows)
     scope_label = "selected" if params.store_ids or params.store_id or params.store_query else "network"
     filename = f"exec_{scope_label}_{params.view.value}_{generated_at.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2796,7 +2881,7 @@ def fashion_exec_export_csv(
     objective: Objective = Objective.revenue,
     top_k_stores: int = 50,
 ) -> ExecutiveExportCsvResponse:
-    """Export executive store performance rows as deterministic raw CSV text for spreadsheet use."""
+    """Export raw executive store performance CSV, including per-store category performance rows."""
     params = ExecutiveExportCsvRequest(
         view=view,
         store_query=store_query,
