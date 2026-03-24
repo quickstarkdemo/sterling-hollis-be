@@ -633,42 +633,12 @@ function applyUiWidgetState(raw, options = {}) {
 }
 
 function loadWidgetState() {
-  if (!window.openai || !isObject(window.openai.widgetState)) {
-    return;
-  }
-  applyUiWidgetState(window.openai.widgetState, { force: true });
+  // Merch workspace now follows the Executive workspace lifecycle:
+  // avoid external widget-state hydration to prevent host-driven control churn.
 }
 
 function persistWidgetState() {
-  if (!window.openai || typeof window.openai.setWidgetState !== "function") {
-    queueModelContextUpdate();
-    return;
-  }
-  try {
-    window.openai.setWidgetState({
-      question: state.ui.question,
-      objective: state.ui.objective,
-      category: state.ui.category,
-      brand: state.ui.brand,
-      priceBand: state.ui.priceBand,
-      occasion: state.ui.occasion,
-      lookbackPreset: state.ui.lookbackPreset,
-      lookbackDays: state.ui.lookbackDays,
-      compareMode: state.ui.compareMode,
-      peerMode: state.ui.peerMode,
-      compareStoreId: state.ui.compareStoreId,
-      compareStoreIds: clone(state.ui.compareStoreIds),
-      topK: state.ui.topK,
-      strategyTagIntensity: state.ui.strategyTagIntensity,
-      strategyContextExpanded: Boolean(state.ui.strategyContextExpanded),
-      merchAdvancedOpen: Boolean(state.ui.merchAdvancedOpen),
-      strategyStoreId: state.ui.strategyStoreId,
-      csvText: state.ui.csvText,
-      lastTool: state.payload.last_tool,
-    });
-  } catch {
-    // Best-effort only.
-  }
+  // Keep model context in sync without relying on host widget-state writes.
   queueModelContextUpdate();
 }
 
@@ -3704,7 +3674,6 @@ function render() {
 function boot() {
   applyWorkspacePayload(meta.initialPayload);
   applyInitialToolOutput(window.openai && window.openai.toolOutput, { force: true });
-  loadWidgetState();
   queueModelContextUpdate({ force: true, immediate: true });
   render();
   if (!normalizeInventoryProducts(state.payload.inventory_products) && state.payload.store?.id) {
@@ -3717,11 +3686,8 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
-    const uiChanged = applyUiWidgetState(globals.widgetState, { force: false });
-    if (uiChanged) {
+    if (payloadChanged) {
       queueModelContextUpdate();
-    }
-    if (payloadChanged || uiChanged) {
       render();
     }
   },
@@ -3735,25 +3701,11 @@ window.addEventListener(
       return;
     }
     const data = event.data;
-    if (!data || typeof data !== "object") {
+    if (!isObject(data) || data.method !== "openai:tool_result") {
       return;
     }
-    if (data.method === "openai:tool_result") {
-      const payload = parseToolPayload(data.params);
-      const payloadChanged = applyWorkspacePayload(payload);
-      if (payloadChanged) {
-        queueModelContextUpdate();
-        render();
-      }
-      return;
-    }
-    if (data.jsonrpc !== "2.0") {
-      return;
-    }
-    if (data.method !== "ui/notifications/tool-result") {
-      return;
-    }
-    const payloadChanged = applyWorkspacePayload(data.params);
+    const payload = parseToolPayload(data.params);
+    const payloadChanged = applyWorkspacePayload(payload);
     if (payloadChanged) {
       queueModelContextUpdate();
       render();

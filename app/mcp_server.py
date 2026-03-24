@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from io import StringIO
@@ -186,9 +187,30 @@ _MERCH_WORKSPACE_TEMPLATE_BASE = "ui://widgets/merch/workspace"
 _EXEC_WORKSPACE_TEMPLATE_BASE = "ui://widgets/exec/workspace"
 _DEFAULT_EXEC_TO_EMAIL = "djn12313@gmail.com"
 _WIDGET_BUILD_TAG = re.sub(r"[^A-Za-z0-9._-]", "-", settings.app_build_version or "dev")
-_CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
-_MERCH_WORKSPACE_RESOURCE_URI = f"{_MERCH_WORKSPACE_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
-_EXEC_WORKSPACE_RESOURCE_URI = f"{_EXEC_WORKSPACE_TEMPLATE_BASE}-{_WIDGET_BUILD_TAG}.html"
+_WIDGET_ASSET_DIR = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
+
+
+def _widget_asset_hash(filename: str) -> str:
+    asset_path = _WIDGET_ASSET_DIR / filename
+    try:
+        digest = hashlib.sha1(asset_path.read_bytes()).hexdigest()[:8]
+    except OSError:
+        digest = "missing"
+    return digest
+
+
+_CUSTOMER_WIDGET_TAG = (
+    f"{_WIDGET_BUILD_TAG}-{_widget_asset_hash('widget.js')}-{_widget_asset_hash('widget.css')}"
+)
+_MERCH_WIDGET_TAG = (
+    f"{_WIDGET_BUILD_TAG}-{_widget_asset_hash('merch-widget.js')}-{_widget_asset_hash('widget.css')}"
+)
+_EXEC_WIDGET_TAG = (
+    f"{_WIDGET_BUILD_TAG}-{_widget_asset_hash('exec-widget.js')}-{_widget_asset_hash('widget.css')}"
+)
+_CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_CUSTOMER_WIDGET_TAG}.html"
+_MERCH_WORKSPACE_RESOURCE_URI = f"{_MERCH_WORKSPACE_TEMPLATE_BASE}-{_MERCH_WIDGET_TAG}.html"
+_EXEC_WORKSPACE_RESOURCE_URI = f"{_EXEC_WORKSPACE_TEMPLATE_BASE}-{_EXEC_WIDGET_TAG}.html"
 
 
 class LatestRunResponse(BaseModel):
