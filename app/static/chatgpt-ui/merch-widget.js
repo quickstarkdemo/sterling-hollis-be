@@ -3705,6 +3705,16 @@ function boot() {
   applyWorkspacePayload(meta.initialPayload);
   applyInitialToolOutput(window.openai && window.openai.toolOutput, { force: true });
   loadWidgetState();
+  if (root) {
+    root.addEventListener(
+      "pointerdown",
+      () => {
+        markUserInteraction();
+      },
+      { passive: true },
+    );
+    root.addEventListener("keydown", () => markUserInteraction(), { passive: true });
+  }
   queueModelContextUpdate({ force: true, immediate: true });
   render();
   if (!normalizeInventoryProducts(state.payload.inventory_products) && state.payload.store?.id) {
@@ -3738,6 +3748,9 @@ window.addEventListener(
       return;
     }
     if (data.method !== "ui/notifications/tool-result") {
+      return;
+    }
+    if (state.runtime.userInteracted) {
       return;
     }
     const payloadChanged = applyWorkspacePayload(data.params);
