@@ -19,6 +19,7 @@ from app.services.customer_preferences import normalize_customer_sex, product_al
 from app.services.demo_customer import DEMO_CUSTOMER_ID, DEMO_CUSTOMER_SEX
 from app.services.embeddings import EmbeddingService
 from app.services.demo_assets import demo_image_url
+from app.services.inventory_status import is_customer_recommendation_eligible, is_in_stock, is_preorder
 from app.services.pinecone_service import PineconeService
 from app.services.taxonomy import CATEGORY_TAXONOMY, OCCASION_TO_CATEGORY
 
@@ -274,9 +275,12 @@ def _rule_rerank(
         score += 0.14
         reasons.append("inside requested budget")
 
-    if product.availability == "in stock":
+    if is_in_stock(product.availability, getattr(product, "inventory_qty", None)):
         score += 0.08
         reasons.append("currently in stock")
+    elif is_preorder(product.availability):
+        score += 0.02
+        reasons.append("available for preorder (not currently in stock)")
 
     if product.brand in customer_brand_prefs:
         score += 0.11
@@ -319,6 +323,14 @@ def _filter_products_for_customer_sex(products: list[Product], customer_sex: str
         product
         for product in products
         if product_allowed_for_sex(product.gender, product.category, customer_sex)
+    ]
+
+
+def _filter_products_for_inventory_policy(products: list[Product]) -> list[Product]:
+    return [
+        product
+        for product in products
+        if is_customer_recommendation_eligible(product.availability, getattr(product, "inventory_qty", None))
     ]
 
 
@@ -379,6 +391,7 @@ def customer_recommendations(
 
         products = db.scalars(select(Product).where(Product.id.in_(ids))).all()
         products = _filter_products_for_customer_sex(products, customer_sex)
+        products = _filter_products_for_inventory_policy(products)
         products, applied_style_constraints, constraint_stage = _apply_style_constraints_with_relaxation(
             products, normalized_style_constraints
         )
@@ -425,7 +438,7 @@ def customer_recommendations(
     # SQL fallback path for local mode or when vector hits cannot be resolved against Postgres.
     strategy = "sql_rules_fast_path"
     def _sql_candidate_products(include_occasion_filter: bool) -> list[Product]:
-        query = select(Product).where(Product.store_id == req.store_id, Product.availability != "out of stock")
+        query = select(Product).where(Product.store_id == req.store_id)
         if include_occasion_filter and req.occasion and req.occasion in OCCASION_TO_CATEGORY:
             query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))
         if req.budget_max is not None:
@@ -436,12 +449,14 @@ def customer_recommendations(
 
     products = _sql_candidate_products(include_occasion_filter=True)
     products = _filter_products_for_customer_sex(products, customer_sex)
+    products = _filter_products_for_inventory_policy(products)
     products, applied_style_constraints, constraint_stage = _apply_style_constraints_with_relaxation(
         products, normalized_style_constraints
     )
     if not products and req.occasion:
         products = _sql_candidate_products(include_occasion_filter=False)
         products = _filter_products_for_customer_sex(products, customer_sex)
+        products = _filter_products_for_inventory_policy(products)
         products, applied_style_constraints, constraint_stage = _apply_style_constraints_with_relaxation(
             products, normalized_style_constraints
         )

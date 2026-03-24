@@ -6,6 +6,7 @@ const TREND_DEBUG_ENABLED = meta?.trendDebug === true;
 const DEFAULT_PAYLOAD = {
   store: null,
   strategy_context: null,
+  inventory_check: null,
   filters: {
     question: null,
     objective: "margin",
@@ -296,6 +297,25 @@ function normalizeStrategyContext(raw) {
   };
 }
 
+function normalizeInventoryCheck(raw) {
+  if (!isObject(raw)) {
+    return null;
+  }
+  const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+  const currentStore = isObject(raw.current_store) ? clone(raw.current_store) : null;
+  const topRiskStores = Array.isArray(raw.top_risk_stores) ? clone(raw.top_risk_stores) : [];
+  const totals = isObject(raw.totals) ? clone(raw.totals) : {};
+  if (!summary && !currentStore && !topRiskStores.length) {
+    return null;
+  }
+  return {
+    summary,
+    current_store: currentStore,
+    top_risk_stores: topRiskStores,
+    totals,
+  };
+}
+
 function normalizeCompareStoreOptions(raw) {
   const defaults = [{ value: "", label: "Auto peer set" }];
   if (!Array.isArray(raw)) {
@@ -390,6 +410,7 @@ function normalizeWorkspacePayload(raw) {
   return {
     store: clone(raw.store),
     strategy_context: normalizeStrategyContext(raw.strategy_context),
+    inventory_check: normalizeInventoryCheck(raw.inventory_check),
     filters: {
       question: typeof rawFilters.question === "string" ? rawFilters.question : null,
       objective: typeof rawFilters.objective === "string" ? rawFilters.objective : "margin",
@@ -1780,6 +1801,69 @@ function renderStrategyContextCard() {
                 `Scenario ${scenario.scenario_id}: ${compactNumber(scenario.discount_pct)}% discount, ${compactNumber(scenario.floor_space_shift_pct)}% shift.`,
               )
             : null,
+        )
+      : null,
+  );
+}
+
+function renderInventoryCheckCard() {
+  const inventoryCheck = normalizeInventoryCheck(state.payload.inventory_check);
+  if (!inventoryCheck) {
+    return null;
+  }
+  const currentStore = isObject(inventoryCheck.current_store) ? inventoryCheck.current_store : null;
+  const topRiskStores = Array.isArray(inventoryCheck.top_risk_stores) ? inventoryCheck.top_risk_stores : [];
+  const totals = isObject(inventoryCheck.totals) ? inventoryCheck.totals : {};
+
+  return el(
+    "section",
+    { className: "fw-panel fw-inventory-check-card" },
+    el("h3", { className: "fw-panel-title", text: "Inventory Check by Store" }),
+    inventoryCheck.summary ? el("p", { className: "fw-empty", text: inventoryCheck.summary }) : null,
+    currentStore
+      ? el(
+          "div",
+          { className: "fw-kpi-strip" },
+          kpi("Current Store Risk", `${compactNumber(currentStore.not_in_stock_rate_pct)}%`),
+          kpi("Not In Stock", `${compactNumber(currentStore.not_in_stock_skus)} / ${compactNumber(currentStore.sku_count)}`),
+          kpi("Preorder SKUs", compactNumber(currentStore.preorder_skus)),
+          kpi("Out-of-Stock SKUs", compactNumber(currentStore.out_of_stock_skus)),
+        )
+      : null,
+    Number.isFinite(Number(totals.not_in_stock_rate_pct))
+      ? el(
+          "p",
+          {
+            className: "fw-empty fw-inline-meta",
+            text: `Network not-in-stock rate ${compactNumber(totals.not_in_stock_rate_pct)}% across ${compactNumber(totals.sku_count)} SKUs.`,
+          },
+        )
+      : null,
+    topRiskStores.length
+      ? el(
+          "div",
+          { className: "fw-list" },
+          ...topRiskStores.slice(0, 5).map((row) =>
+            el(
+              "div",
+              { className: "fw-result" },
+              el("div", { className: "fw-result-title", text: `${row.store_name} (${row.city}, ${row.state})` }),
+              el(
+                "p",
+                {
+                  className: "fw-empty",
+                  text: `${compactNumber(row.not_in_stock_skus)} / ${compactNumber(row.sku_count)} not currently in stock (${compactNumber(row.not_in_stock_rate_pct)}%).`,
+                },
+              ),
+              el(
+                "div",
+                { className: "fw-chip-row" },
+                el("span", { className: "fw-chip subtle", text: `in stock ${compactNumber(row.in_stock_skus)}` }),
+                el("span", { className: "fw-chip subtle", text: `preorder ${compactNumber(row.preorder_skus)}` }),
+                el("span", { className: "fw-chip subtle", text: `out ${compactNumber(row.out_of_stock_skus)}` }),
+              ),
+            ),
+          ),
         )
       : null,
   );
@@ -3258,6 +3342,7 @@ function render() {
           })
         : el("p", { className: "fw-empty", text: "No store resolved yet. Open from a store query in chat." }),
     renderStrategyContextCard(),
+    renderInventoryCheckCard(),
     el(
       "div",
       { className: "fw-grid merch-filters fw-merch-clean-filters" },

@@ -591,6 +591,12 @@ body {
   color: #3f4d59;
 }
 
+.fw-chip-stock-risk {
+  background: #fff1e8 !important;
+  color: #8a3c00 !important;
+  border: 1px solid #f4c9a8;
+}
+
 .fw-strategy-context-card {
   background: linear-gradient(180deg, #ffffff 0%, #f8fbfe 100%);
   border-color: #cddceb;

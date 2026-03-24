@@ -1101,3 +1101,35 @@ class InventoryFacetsResponse(BaseModel):
     rows: list[InventoryFacetRow] = Field(default_factory=list)
     total_units_in_stock: int = 0
     total_skus: int = 0
+
+
+class InventoryCheckByStoreRow(BaseModel):
+    store_id: str
+    store_name: str
+    city: str
+    state: str
+    sku_count: int
+    in_stock_skus: int
+    preorder_skus: int
+    out_of_stock_skus: int
+    not_in_stock_skus: int
+    not_in_stock_rate_pct: float
+    in_stock_units: int
+    preorder_units: int
+
+
+class InventoryCheckByStoreResponse(BaseModel):
+    store: ResolvedStore | None = None
+    product_query: str | None = None
+    product_id: str | None = None
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    rows: list[InventoryCheckByStoreRow] = Field(default_factory=list)
+    total_skus: int = 0
+    total_in_stock_skus: int = 0
+    total_preorder_skus: int = 0
+    total_out_of_stock_skus: int = 0
+    total_not_in_stock_skus: int = 0
+    total_in_stock_units: int = 0
+    total_preorder_units: int = 0

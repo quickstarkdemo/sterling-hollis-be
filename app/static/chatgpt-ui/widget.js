@@ -50,6 +50,7 @@ const state = {
     isRefreshingEmailDraft: false,
     isUpdatingEmailDraft: false,
     selectedProductIds: [],
+    inventoryByProduct: {},
     seedAttemptedCustomerId: null,
     seedAttemptedDraftCustomerId: null,
   },
@@ -702,6 +703,7 @@ function clearRecommendationState() {
   state.recommendation.isRefreshingEmailDraft = false;
   state.recommendation.isUpdatingEmailDraft = false;
   state.recommendation.selectedProductIds = [];
+  state.recommendation.inventoryByProduct = {};
   state.recommendation.seedAttemptedCustomerId = null;
   state.recommendation.seedAttemptedDraftCustomerId = null;
   state.runtime.draftHydrationRequestedForId = null;
@@ -881,6 +883,7 @@ async function loadRecommendations(selected, options = {}) {
 
   state.recommendation.isLoading = true;
   state.recommendation.error = "";
+  state.recommendation.inventoryByProduct = {};
   setNotice(autoSeed ? "Loading starter recommendations..." : "Loading recommendations...");
   persistWidgetState();
   render();
@@ -890,6 +893,7 @@ async function loadRecommendations(selected, options = {}) {
   if (result.__toolError) {
     state.recommendation.error = result.__toolError;
     state.recommendation.response = null;
+    state.recommendation.inventoryByProduct = {};
     setNotice(result.__toolError, "error");
     render();
     return;
@@ -900,6 +904,7 @@ async function loadRecommendations(selected, options = {}) {
   if (!Array.isArray(rows)) {
     state.recommendation.error = "Recommendation tool returned an unexpected payload.";
     state.recommendation.response = null;
+    state.recommendation.inventoryByProduct = {};
     setNotice(state.recommendation.error, "error");
     render();
     return;
@@ -908,6 +913,7 @@ async function loadRecommendations(selected, options = {}) {
   state.recommendation.customerId = selected.id;
   state.recommendation.response = response;
   state.recommendation.error = "";
+  state.recommendation.inventoryByProduct = {};
   const appliedConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
   state.ui.styleConstraints = appliedConstraints;
   state.recommendation.selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
@@ -1200,6 +1206,101 @@ function recommendationProductId(item) {
     return item.id.trim();
   }
   return null;
+}
+
+function normalizeAvailabilityToken(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function recommendationIsPreorder(item) {
+  return normalizeAvailabilityToken(item?.availability) === "preorder";
+}
+
+function recommendationIsInStock(item) {
+  return normalizeAvailabilityToken(item?.availability) === "in stock";
+}
+
+function normalizeInventoryCheckResponse(raw) {
+  if (isObject(raw?.structuredContent)) {
+    return normalizeInventoryCheckResponse(raw.structuredContent);
+  }
+  if (isObject(raw?.result)) {
+    return normalizeInventoryCheckResponse(raw.result);
+  }
+  if (!isObject(raw)) {
+    return null;
+  }
+  if (Array.isArray(raw.rows)) {
+    return raw;
+  }
+  const parsed = parseJsonContentPayload(raw);
+  if (parsed) {
+    return normalizeInventoryCheckResponse(parsed);
+  }
+  return null;
+}
+
+function inventoryCheckState(productId) {
+  if (!productId) {
+    return null;
+  }
+  return isObject(state.recommendation.inventoryByProduct?.[productId]) ? state.recommendation.inventoryByProduct[productId] : null;
+}
+
+function inventoryCheckSummaryLine(response) {
+  if (!isObject(response) || !Array.isArray(response.rows) || !response.rows.length) {
+    return "";
+  }
+  const rows = response.rows;
+  const inStockStores = rows.filter((row) => Number(row.in_stock_skus || 0) > 0).length;
+  const top = rows.slice(0, 3).map((row) => {
+    const name = typeof row.store_name === "string" ? row.store_name : String(row.store_id || "store");
+    const inStock = compactNumber(row.in_stock_skus || 0);
+    const preorder = compactNumber(row.preorder_skus || 0);
+    const risk = compactNumber(row.not_in_stock_rate_pct || 0);
+    return `${name} (in stock ${inStock}, preorder ${preorder}, risk ${risk}%)`;
+  });
+  return `In stock in ${inStockStores}/${rows.length} stores. Top: ${top.join(" • ")}.`;
+}
+
+async function checkInventoryByStore(item) {
+  const productId = recommendationProductId(item);
+  if (!productId) {
+    return;
+  }
+  markUserInteraction();
+  state.recommendation.inventoryByProduct = {
+    ...state.recommendation.inventoryByProduct,
+    [productId]: { isLoading: true, error: "", response: null },
+  };
+  render();
+
+  const result = await callTool("fashion_inventory_check_by_store", { product_id: productId, limit: 8 });
+  if (result.__toolError) {
+    state.recommendation.inventoryByProduct = {
+      ...state.recommendation.inventoryByProduct,
+      [productId]: { isLoading: false, error: result.__toolError, response: null },
+    };
+    render();
+    return;
+  }
+
+  const response = normalizeInventoryCheckResponse(result);
+  if (!response) {
+    state.recommendation.inventoryByProduct = {
+      ...state.recommendation.inventoryByProduct,
+      [productId]: { isLoading: false, error: "Inventory check returned an unexpected payload.", response: null },
+    };
+    render();
+    return;
+  }
+
+  state.recommendation.inventoryByProduct = {
+    ...state.recommendation.inventoryByProduct,
+    [productId]: { isLoading: false, error: "", response },
+  };
+  setNotice(`Checked inventory by store for ${item?.title || productId}.`);
+  render();
 }
 
 function syncSelectedProducts(rows, existingSelection = [], options = {}) {
@@ -1865,6 +1966,9 @@ function recommendationCards(response) {
   }
   return rows.map((item) => {
     const itemId = recommendationProductId(item) || "";
+    const isPreorder = recommendationIsPreorder(item);
+    const stockCheck = inventoryCheckState(itemId);
+    const stockSummary = stockCheck?.response ? inventoryCheckSummaryLine(stockCheck.response) : "";
     const executionTags = Array.isArray(item.execution_tags)
       ? item.execution_tags
           .map((tag) => String(tag || "").trim())
@@ -1919,6 +2023,12 @@ function recommendationCards(response) {
               )
             : null,
           reasonText ? el("p", { className: "fw-rec-reason-inline", text: reasonText }) : null,
+          isPreorder
+            ? el("p", {
+                className: "fw-empty fw-inline-meta",
+                text: "Preorder item: not currently in stock at this store.",
+              })
+            : null,
           item.link
             ? el(
                 "a",
@@ -1931,6 +2041,22 @@ function recommendationCards(response) {
                 "Open product",
               )
             : null,
+          itemId
+            ? el(
+                "button",
+                {
+                  className: "fw-text-button",
+                  type: "button",
+                  disabled: stockCheck?.isLoading ? "true" : null,
+                  onClick: () => {
+                    void checkInventoryByStore(item);
+                  },
+                },
+                stockCheck?.isLoading ? "Checking stores..." : "Check by store",
+              )
+            : null,
+          stockCheck?.error ? el("p", { className: "fw-empty fw-inline-meta", text: stockCheck.error }) : null,
+          stockSummary ? el("p", { className: "fw-empty fw-inline-meta", text: stockSummary }) : null,
         ),
         el(
           "div",
@@ -1940,7 +2066,15 @@ function recommendationCards(response) {
             "div",
             { className: "fw-chip-row fw-chip-row-right" },
             item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
-            item.availability ? el("span", { className: "fw-chip subtle", text: item.availability }) : null,
+            item.availability
+              ? el(
+                  "span",
+                  {
+                    className: `fw-chip subtle ${isPreorder ? "fw-chip-stock-risk" : ""}`,
+                    text: item.availability,
+                  },
+                )
+              : null,
             item.score !== undefined
               ? el("span", { className: "fw-chip", text: `score ${Number(item.score).toFixed(2)}` })
               : null,
@@ -2688,6 +2822,18 @@ function render() {
             : typeof retrievalModeRaw?.value === "string"
               ? retrievalModeRaw.value
               : null;
+        const preorderCount = rows.filter((item) => recommendationIsPreorder(item)).length;
+        const inStockCount = rows.filter((item) => recommendationIsInStock(item)).length;
+        const storeName =
+          response?.store?.name ||
+          selected.home_store_name ||
+          selected.home_store_id ||
+          "selected store";
+        const stockSummaryText = rows.length
+          ? preorderCount > 0
+            ? `${storeName}: ${preorderCount} of ${rows.length} recommendations are preorder and not currently in stock. Out-of-stock items are excluded.`
+            : `${storeName}: all ${inStockCount} recommendations are currently in stock. Out-of-stock items are excluded.`
+          : "Out-of-stock items are excluded. Run recommendations to inspect preorder risk.";
         const emailDraftBusy =
           state.recommendation.isPreparingEmailDraft ||
           state.recommendation.isRefreshingEmailDraft ||
@@ -2723,6 +2869,7 @@ function render() {
                 ...styleConstraintChips(displayConstraints, constraintSource, constraintStage),
               )
             : null,
+          el("p", { className: "fw-empty fw-inline-meta", text: stockSummaryText }),
           response
             ? el(
                 "div",

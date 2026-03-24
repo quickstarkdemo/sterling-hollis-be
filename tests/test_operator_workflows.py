@@ -314,6 +314,50 @@ def _seed_data(session):
             objective_weight=Decimal("0.8800"),
             metadata_json={},
         ),
+        Product(
+            id="prod_pre_1",
+            seed_run_id="run_test",
+            store_id="1001",
+            title="Theory Preorder Linen Trouser",
+            description="Upcoming tailored trouser drop",
+            link="https://fashion.example/products/prod_pre_1",
+            image_link="https://fashion.example/images/prod_pre_1.jpg",
+            price=Decimal("420.00"),
+            availability="preorder",
+            brand="Theory",
+            category="mens_apparel",
+            color="Stone",
+            size="M",
+            material="linen",
+            gender="men",
+            season="spring",
+            margin_pct=Decimal("0.5100"),
+            inventory_qty=6,
+            objective_weight=Decimal("0.9500"),
+            metadata_json={},
+        ),
+        Product(
+            id="prod_oos_1",
+            seed_run_id="run_test",
+            store_id="1001",
+            title="Zegna Out-of-Stock Suit",
+            description="Sold out tailored suit",
+            link="https://fashion.example/products/prod_oos_1",
+            image_link="https://fashion.example/images/prod_oos_1.jpg",
+            price=Decimal("980.00"),
+            availability="out of stock",
+            brand="Zegna",
+            category="mens_apparel",
+            color="Charcoal",
+            size="M",
+            material="wool",
+            gender="men",
+            season="all-season",
+            margin_pct=Decimal("0.7000"),
+            inventory_qty=0,
+            objective_weight=Decimal("0.9900"),
+            metadata_json={},
+        ),
     ]
     session.add_all(products)
 
@@ -545,6 +589,63 @@ def test_recommendations_respect_customer_sex_and_preferences(monkeypatch):
         products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
         assert products
         assert all((product.gender or "").lower() not in {"women", "female", "girls"} for product in products)
+
+
+def test_recommendations_exclude_out_of_stock_and_keep_preorder(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            retrieval_mode=RetrievalMode.fast,
+            top_k=10,
+        )
+
+        recs = response.recommendation.recommendations
+        rec_ids = {item.product_id for item in recs}
+        assert "prod_oos_1" not in rec_ids
+        assert "prod_pre_1" in rec_ids
+
+        preorder_row = next(item for item in recs if item.product_id == "prod_pre_1")
+        assert preorder_row.availability.lower() == "preorder"
+        assert any("preorder" in reason.lower() for reason in preorder_row.reasons)
+
+
+def test_semantic_recommendations_exclude_out_of_stock_and_keep_preorder(monkeypatch):
+    import app.services.recommendations as recommendations
+
+    class _FakeEmbeddingService:
+        def embed_text(self, text):  # pragma: no cover - deterministic test double
+            return [0.1, 0.2, 0.3]
+
+    class _FakePineconeService:
+        enabled = True
+
+        def query(self, namespace, vector, top_k, filters):  # pragma: no cover - deterministic test double
+            return [
+                {"id": "product:prod_oos_1", "score": 0.99, "metadata": {"product_id": "prod_oos_1"}},
+                {"id": "product:prod_pre_1", "score": 0.95, "metadata": {"product_id": "prod_pre_1"}},
+                {"id": "product:prod_4", "score": 0.9, "metadata": {"product_id": "prod_4"}},
+            ]
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        monkeypatch.setattr(recommendations, "EmbeddingService", lambda: _FakeEmbeddingService())
+        monkeypatch.setattr(recommendations, "PineconeService", lambda: _FakePineconeService())
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            retrieval_mode=RetrievalMode.semantic,
+            top_k=5,
+        )
+
+        recs = response.recommendation.recommendations
+        rec_ids = {item.product_id for item in recs}
+        assert response.recommendation.strategy == "hybrid_vector_rules"
+        assert "prod_oos_1" not in rec_ids
+        assert "prod_pre_1" in rec_ids
 
 
 def test_demo_customer_uses_sex_fallback_for_filtering(monkeypatch):
@@ -1538,6 +1639,9 @@ def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
         assert payload["uiHints"]["actionDefinitions"]["feature"]
         assert payload["initial_result"]["recommendations"]
         assert payload["last_tool"] == "fashion_merch_action_recommendations"
+        assert payload["inventory_check"] is not None
+        assert payload["inventory_check"]["current_store"]["store_id"] == "1001"
+        assert payload["inventory_check"]["totals"]["not_in_stock_skus"] >= 1
         assert "<style>" in html
         assert "Merchandising Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
@@ -1611,6 +1715,30 @@ def test_inventory_by_store_and_facets_tools(monkeypatch):
         assert facets.store.id == "1001"
         assert facets.rows
         assert facets.total_units_in_stock > 0
+
+
+def test_inventory_check_by_store_tool(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        check = mcp_server.fashion_inventory_check_by_store(category="mens_apparel")
+        assert check.rows
+        assert check.total_skus > 0
+        assert check.total_not_in_stock_skus > 0
+        assert check.total_preorder_skus > 0
+        assert check.total_out_of_stock_skus > 0
+        by_store = {row.store_id: row for row in check.rows}
+        assert "1001" in by_store
+        assert by_store["1001"].preorder_skus >= 1
+        assert by_store["1001"].out_of_stock_skus >= 1
+        assert by_store["1001"].not_in_stock_skus >= 2
+        assert by_store["1001"].not_in_stock_rate_pct > 0
+
+        product_check = mcp_server.fashion_inventory_check_by_store(product_id="prod_pre_1")
+        assert len(product_check.rows) == 1
+        assert product_check.rows[0].store_id == "1001"
+        assert product_check.rows[0].preorder_skus == 1
+        assert product_check.rows[0].out_of_stock_skus == 0
 
 
 def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypatch):

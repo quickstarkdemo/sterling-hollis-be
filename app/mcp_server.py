@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -50,6 +50,8 @@ from app.schemas import (
     IndexProductsResponse,
     InventoryByStoreResponse,
     InventoryByStoreRow,
+    InventoryCheckByStoreResponse,
+    InventoryCheckByStoreRow,
     InventoryFacet,
     InventoryFacetRow,
     InventoryFacetsResponse,
@@ -100,6 +102,12 @@ from app.services.communications import (
 )
 from app.services.indexing import index_products_for_run
 from app.services.index_jobs import enqueue_index_job, get_index_job, list_index_jobs
+from app.services.inventory_status import (
+    sql_is_in_stock,
+    sql_is_not_in_stock,
+    sql_is_out_of_stock,
+    sql_is_preorder,
+)
 from app.services.loader import (
     assert_synthetic_tables_empty,
     current_loaded_counts,
@@ -425,9 +433,163 @@ def _apply_inventory_filters(
     if store_id:
         query = query.where(Product.store_id == store_id)
     if in_stock_only:
-        query = query.where(Product.inventory_qty > 0)
-        query = query.where(func.lower(Product.availability) == "in stock")
+        query = query.where(sql_is_in_stock(Product.availability, Product.inventory_qty))
     return query
+
+
+def _inventory_check_by_store_impl(
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    limit: int = 100,
+) -> InventoryCheckByStoreResponse:
+    effective_limit = max(1, min(limit, 500))
+    with SessionLocal() as db:
+        resolved_store = None
+        if store_id or store_query:
+            resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+
+        in_stock_sku_expr = func.sum(case((sql_is_in_stock(Product.availability, Product.inventory_qty), 1), else_=0))
+        preorder_sku_expr = func.sum(case((sql_is_preorder(Product.availability), 1), else_=0))
+        out_of_stock_sku_expr = func.sum(case((sql_is_out_of_stock(Product.availability), 1), else_=0))
+        not_in_stock_sku_expr = func.sum(case((sql_is_not_in_stock(Product.availability, Product.inventory_qty), 1), else_=0))
+        in_stock_units_expr = func.sum(case((sql_is_in_stock(Product.availability, Product.inventory_qty), Product.inventory_qty), else_=0))
+        preorder_units_expr = func.sum(case((sql_is_preorder(Product.availability), Product.inventory_qty), else_=0))
+
+        query = (
+            select(
+                Product.store_id.label("store_id"),
+                func.count(Product.id).label("sku_count"),
+                in_stock_sku_expr.label("in_stock_skus"),
+                preorder_sku_expr.label("preorder_skus"),
+                out_of_stock_sku_expr.label("out_of_stock_skus"),
+                not_in_stock_sku_expr.label("not_in_stock_skus"),
+                in_stock_units_expr.label("in_stock_units"),
+                preorder_units_expr.label("preorder_units"),
+            )
+            .group_by(Product.store_id)
+            .order_by(not_in_stock_sku_expr.desc(), func.count(Product.id).desc(), Product.store_id.asc())
+        )
+        query = _apply_inventory_filters(
+            query,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            store_id=resolved_store.id if resolved_store else None,
+            in_stock_only=False,
+        )
+
+        grouped_rows = db.execute(query.limit(effective_limit)).all()
+        store_ids = [row.store_id for row in grouped_rows if row.store_id]
+        stores = db.scalars(select(Store).where(Store.id.in_(store_ids))).all() if store_ids else []
+        store_map = {store.id: store for store in stores}
+
+        rows: list[InventoryCheckByStoreRow] = []
+        total_skus = 0
+        total_in_stock_skus = 0
+        total_preorder_skus = 0
+        total_out_of_stock_skus = 0
+        total_not_in_stock_skus = 0
+        total_in_stock_units = 0
+        total_preorder_units = 0
+        for row in grouped_rows:
+            store = store_map.get(row.store_id)
+            sku_count = _int_value(row.sku_count)
+            in_stock_skus = _int_value(row.in_stock_skus)
+            preorder_skus = _int_value(row.preorder_skus)
+            out_of_stock_skus = _int_value(row.out_of_stock_skus)
+            not_in_stock_skus = _int_value(row.not_in_stock_skus)
+            in_stock_units = _int_value(row.in_stock_units)
+            preorder_units = _int_value(row.preorder_units)
+            not_in_stock_rate_pct = round((not_in_stock_skus / sku_count) * 100.0, 2) if sku_count else 0.0
+
+            total_skus += sku_count
+            total_in_stock_skus += in_stock_skus
+            total_preorder_skus += preorder_skus
+            total_out_of_stock_skus += out_of_stock_skus
+            total_not_in_stock_skus += not_in_stock_skus
+            total_in_stock_units += in_stock_units
+            total_preorder_units += preorder_units
+
+            rows.append(
+                InventoryCheckByStoreRow(
+                    store_id=row.store_id,
+                    store_name=store.name if store else row.store_id,
+                    city=store.city if store else "",
+                    state=store.state if store else "",
+                    sku_count=sku_count,
+                    in_stock_skus=in_stock_skus,
+                    preorder_skus=preorder_skus,
+                    out_of_stock_skus=out_of_stock_skus,
+                    not_in_stock_skus=not_in_stock_skus,
+                    not_in_stock_rate_pct=not_in_stock_rate_pct,
+                    in_stock_units=in_stock_units,
+                    preorder_units=preorder_units,
+                )
+            )
+
+        return InventoryCheckByStoreResponse(
+            store=resolved_store,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            rows=rows,
+            total_skus=total_skus,
+            total_in_stock_skus=total_in_stock_skus,
+            total_preorder_skus=total_preorder_skus,
+            total_out_of_stock_skus=total_out_of_stock_skus,
+            total_not_in_stock_skus=total_not_in_stock_skus,
+            total_in_stock_units=total_in_stock_units,
+            total_preorder_units=total_preorder_units,
+        )
+
+
+def _inventory_check_summary_payload(check: InventoryCheckByStoreResponse, current_store_id: str | None) -> dict | None:
+    current_row = None
+    if current_store_id:
+        current_row = next((row for row in check.rows if row.store_id == current_store_id), None)
+    if current_row is None and check.rows:
+        current_row = check.rows[0]
+    if current_row is None:
+        return None
+
+    top_risk_rows = sorted(
+        [row for row in check.rows if row.not_in_stock_skus > 0],
+        key=lambda row: (row.not_in_stock_rate_pct, row.not_in_stock_skus, row.sku_count),
+        reverse=True,
+    )[:5]
+
+    network_rate = round((check.total_not_in_stock_skus / check.total_skus) * 100.0, 2) if check.total_skus else 0.0
+    summary = (
+        f"{current_row.store_name}: {current_row.not_in_stock_skus}/{current_row.sku_count} SKUs not currently in stock "
+        f"({current_row.not_in_stock_rate_pct:.2f}%). Preorder {current_row.preorder_skus}, out of stock {current_row.out_of_stock_skus}. "
+        f"Network risk rate: {network_rate:.2f}%."
+    )
+
+    return {
+        "summary": summary,
+        "current_store": current_row.model_dump(mode="json"),
+        "top_risk_stores": [row.model_dump(mode="json") for row in top_risk_rows],
+        "totals": {
+            "sku_count": check.total_skus,
+            "in_stock_skus": check.total_in_stock_skus,
+            "preorder_skus": check.total_preorder_skus,
+            "out_of_stock_skus": check.total_out_of_stock_skus,
+            "not_in_stock_skus": check.total_not_in_stock_skus,
+            "not_in_stock_rate_pct": network_rate,
+            "in_stock_units": check.total_in_stock_units,
+            "preorder_units": check.total_preorder_units,
+        },
+    }
 
 
 def _resolve_associate_context(
@@ -1127,6 +1289,16 @@ def _merch_workspace_payload(
             handoff_store_id=handoff_store_id or initial_result.store.id,
             current_store_id=initial_result.store.id,
         )
+    inventory_brand = None
+    if effective_brand:
+        inventory_brand = str(effective_brand).split(",", 1)[0].strip() or None
+    inventory_check = _inventory_check_by_store_impl(
+        store_id=initial_result.store.id,
+        brand=inventory_brand,
+        category=effective_category,
+        limit=12,
+    )
+    inventory_check_payload = _inventory_check_summary_payload(inventory_check, current_store_id=initial_result.store.id)
     compare_store_options = _merch_compare_store_options(initial_result.store.id)
     brand_options = _merch_brand_options(initial_result.store.id)
     return {
@@ -1149,6 +1321,7 @@ def _merch_workspace_payload(
         "last_tool": "fashion_merch_action_recommendations",
         "initial_notice": initial_notice,
         "strategy_context": strategy_context,
+        "inventory_check": inventory_check_payload,
         "uiHints": {
             "questionPlaceholder": "Optional context (e.g., wedding occasion, protect margin, next 8 weeks)",
             "emptyState": "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
@@ -1767,12 +1940,13 @@ def fashion_merch_save_strategy_override(
     """Save or clear store-level merchandising overrides for a published strategy packet."""
     _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
     _ensure_feature_enabled(settings.merch_strategy_context_enabled, "Merch strategy context")
+    normalized_core = StrategyCore.model_validate(strategy_core) if isinstance(strategy_core, dict) else strategy_core
     with SessionLocal() as db:
         return save_merch_strategy_override(
             db,
             packet_id=packet_id,
             store_id=store_id,
-            strategy_core=strategy_core,
+            strategy_core=normalized_core,
             tag_intensity=tag_intensity,
             use_packet_defaults=use_packet_defaults,
         )
@@ -2679,6 +2853,34 @@ def fashion_exec_get_campaign_autopilot_draft(draft_id: str) -> ExecutiveCampaig
     """Fetch an existing campaign autopilot draft for workspace or chat review."""
     with SessionLocal() as db:
         return get_campaign_autopilot_draft(db, draft_id)
+
+
+@mcp.tool(
+    name="fashion_inventory_check_by_store",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_inventory_check_by_store(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    limit: int = 100,
+) -> InventoryCheckByStoreResponse:
+    """Return inventory health by store, including in-stock, preorder, and out-of-stock breakdowns."""
+    return _inventory_check_by_store_impl(
+        store_query=store_query,
+        store_id=store_id,
+        product_query=product_query,
+        product_id=product_id,
+        brand=brand,
+        category=category,
+        size=size,
+        limit=limit,
+    )
 
 
 @mcp.tool(
