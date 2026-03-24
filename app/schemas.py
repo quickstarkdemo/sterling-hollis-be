@@ -1020,6 +1020,48 @@ class ExecutiveCampaignAutopilotSendResponse(BaseModel):
     sent_at: datetime | None = None
 
 
+class ExecutiveExportCsvView(str, Enum):
+    store_performance = "store_performance"
+
+
+class ExecutiveExportCsvRequest(BaseModel):
+    view: ExecutiveExportCsvView = ExecutiveExportCsvView.store_performance
+    store_query: str | None = None
+    store_id: str | None = None
+    store_ids: list[str] = Field(default_factory=list)
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    objective: Objective = Objective.revenue
+    top_k_stores: int = Field(default=50, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_store_scope(self) -> "ExecutiveExportCsvRequest":
+        normalized_store_ids = []
+        for value in self.store_ids:
+            token = str(value or "").strip()
+            if token and token not in normalized_store_ids:
+                normalized_store_ids.append(token)
+        self.store_ids = normalized_store_ids
+        if self.store_ids and (self.store_id or self.store_query):
+            raise ValueError("Provide store_ids or store_query/store_id, not both.")
+        return self
+
+
+class ExecutiveExportCsvRow(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class ExecutiveExportCsvResponse(BaseModel):
+    view: ExecutiveExportCsvView
+    filename: str
+    lookback_days: int
+    objective: Objective
+    headers: list[str] = Field(default_factory=list)
+    rows: list[ExecutiveExportCsvRow] = Field(default_factory=list)
+    row_count: int = 0
+    csv_text: str
+    generated_at: datetime
+
+
 class MerchExportCsvRequest(BaseModel):
     view: MerchWorkspaceView = MerchWorkspaceView.actions
     store_query: str | None = None

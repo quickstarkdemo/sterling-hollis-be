@@ -36,6 +36,10 @@ from app.schemas import (
     ExecutiveAutoOptimizeScenario,
     ExecutiveCampaignAutopilotDraftResponse,
     ExecutiveCampaignAutopilotSendResponse,
+    ExecutiveExportCsvRequest,
+    ExecutiveExportCsvResponse,
+    ExecutiveExportCsvRow,
+    ExecutiveExportCsvView,
     ExecutivePublishStrategyPacketRequest,
     ExecutiveEventReadinessRadarResponse,
     ExecutiveOverviewResponse,
@@ -1674,6 +1678,72 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
     )
 
 
+def _exec_export_csv_impl(params: ExecutiveExportCsvRequest) -> ExecutiveExportCsvResponse:
+    generated_at = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        overview = executive_overview(
+            db,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids or None,
+            lookback_days=params.lookback_days,
+            objective=params.objective,
+            top_k_stores=params.top_k_stores,
+        )
+
+    headers = [
+        "data_mode",
+        "view",
+        "store_id",
+        "store_name",
+        "city",
+        "state",
+        "rank",
+        "revenue",
+        "units",
+        "margin_rate",
+        "revenue_share_pct",
+        "revenue_delta_pct",
+        "lookback_days",
+        "objective",
+        "generated_at",
+    ]
+    rows = [
+        {
+            "data_mode": "raw",
+            "view": params.view.value,
+            "store_id": _as_scalar(item.store_id),
+            "store_name": _as_scalar(item.store_name),
+            "city": _as_scalar(item.city),
+            "state": _as_scalar(item.state),
+            "rank": _as_scalar(item.rank),
+            "revenue": _as_scalar(item.revenue),
+            "units": _as_scalar(item.units),
+            "margin_rate": _as_scalar(item.margin_rate),
+            "revenue_share_pct": _as_scalar(item.revenue_share_pct),
+            "revenue_delta_pct": _as_scalar(item.revenue_delta_pct),
+            "lookback_days": _as_scalar(overview.lookback_days),
+            "objective": _as_scalar(overview.objective),
+            "generated_at": overview.generated_at.isoformat(),
+        }
+        for item in overview.stores
+    ]
+    csv_payload = _csv_text(headers, rows)
+    scope_label = "selected" if params.store_ids or params.store_id or params.store_query else "network"
+    filename = f"exec_{scope_label}_{params.view.value}_{generated_at.strftime('%Y%m%d_%H%M%S')}.csv"
+    return ExecutiveExportCsvResponse(
+        view=params.view,
+        filename=filename,
+        lookback_days=overview.lookback_days,
+        objective=overview.objective,
+        headers=headers,
+        rows=[ExecutiveExportCsvRow(values=row) for row in rows],
+        row_count=len(rows),
+        csv_text=csv_payload,
+        generated_at=generated_at,
+    )
+
+
 @mcp.tool(
     name="fashion_render_customer_search_workspace",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
@@ -2710,6 +2780,33 @@ def fashion_exec_send_strategy_packet_email(
             packet_id=packet_id,
             approved=approved,
         )
+
+
+@mcp.tool(
+    name="fashion_exec_export_csv",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_exec_export_csv(
+    view: ExecutiveExportCsvView = ExecutiveExportCsvView.store_performance,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k_stores: int = 50,
+) -> ExecutiveExportCsvResponse:
+    """Export executive store performance rows as deterministic raw CSV text for spreadsheet use."""
+    params = ExecutiveExportCsvRequest(
+        view=view,
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        lookback_days=lookback_days,
+        objective=objective,
+        top_k_stores=top_k_stores,
+    )
+    return _exec_export_csv_impl(params)
 
 
 @mcp.tool(

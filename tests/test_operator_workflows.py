@@ -1830,6 +1830,7 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_merch_save_strategy_override" in tool_names
         assert "fashion_exec_campaign_autopilot_prepare" in tool_names
         assert "fashion_exec_campaign_autopilot_send" in tool_names
+        assert "fashion_exec_export_csv" in tool_names
         assert "fashion_product_margin_sales_opportunities" in tool_names
         assert "fashion_merch_export_csv" in tool_names
         assert "fashion_prepare_customer_email_draft" in tool_names
@@ -2098,6 +2099,33 @@ def test_exec_overview_radar_and_simulator_tools(monkeypatch):
         assert scoped_simulation.store_allocations
         assert all(row.store_id == "1001" for row in branded_radar.rows)
         assert branded_simulation.expected_revenue > 0
+
+
+def test_exec_export_csv_returns_raw_store_performance(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        scoped = mcp_server.fashion_exec_export_csv(
+            store_ids=["1001"],
+            lookback_days=90,
+            objective=Objective.revenue,
+        )
+        network = mcp_server.fashion_exec_export_csv(
+            lookback_days=90,
+            objective=Objective.revenue,
+        )
+
+        assert scoped.view.value == "store_performance"
+        assert scoped.row_count == 1
+        assert scoped.csv_text.splitlines()[0].startswith(
+            "data_mode,view,store_id,store_name,city,state,rank,revenue,units,margin_rate,revenue_share_pct"
+        )
+        scoped_row = scoped.rows[0].values
+        assert scoped_row["data_mode"] == "raw"
+        assert scoped_row["store_id"] == "1001"
+        assert scoped_row["objective"] == "revenue"
+        assert "expected_revenue" not in scoped_row
+        assert network.row_count >= 2
 
 
 def test_exec_campaign_autopilot_prepare_and_send(monkeypatch):

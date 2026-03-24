@@ -84,11 +84,13 @@ const state = {
     notice: "",
     noticeTone: "info",
     isLoading: false,
+    isExporting: false,
     isSending: false,
     isPublishingStrategy: false,
     publishingScenarioId: null,
     isPreparingStrategyEmail: false,
     isSendingStrategyEmail: false,
+    csvText: "",
   },
   runtime: {
     toolOutputApplied: false,
@@ -727,11 +729,84 @@ async function refreshExec(toolName) {
   }
   state.payload.last_result = payload;
   state.payload.last_tool = toolName;
+  state.ui.csvText = "";
   if (toolName === "fashion_exec_campaign_autopilot_prepare" && typeof payload.draft_id === "string") {
     state.runtime.autopilotDraftId = payload.draft_id;
   }
   setNotice(`${toolLabel(toolName)} loaded.`);
   queueModelContextUpdate();
+  render();
+}
+
+async function copyTextToClipboard(text) {
+  const content = String(text || "");
+  if (!content) {
+    return false;
+  }
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(content);
+      return true;
+    } catch {
+      // Fall through to legacy path.
+    }
+  }
+  const scratch = document.createElement("textarea");
+  scratch.value = content;
+  scratch.setAttribute("readonly", "true");
+  scratch.style.position = "fixed";
+  scratch.style.left = "-9999px";
+  document.body.appendChild(scratch);
+  scratch.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  document.body.removeChild(scratch);
+  return copied;
+}
+
+async function exportStorePerformanceCsv() {
+  markUserInteraction();
+  const selectedStoreIds = normalizeStoreIds(state.ui.storeIds);
+  const args = {
+    view: "store_performance",
+    lookback_days: normalizeLookbackDays(state.ui.lookbackDays, state.ui.lookbackPreset),
+    objective: state.ui.objective || "revenue",
+    top_k_stores: selectedStoreIds.length ? Math.min(selectedStoreIds.length, 50) : 50,
+  };
+  if (selectedStoreIds.length) {
+    args.store_ids = selectedStoreIds;
+  }
+
+  state.ui.isExporting = true;
+  setNotice("Building CSV export...");
+  render();
+
+  const result = await callTool("fashion_exec_export_csv", args);
+  state.ui.isExporting = false;
+  if (result.__toolError) {
+    setNotice(result.__toolError, "error");
+    render();
+    return;
+  }
+
+  const payload = parseToolPayload(result);
+  if (!payload || typeof payload.csv_text !== "string") {
+    setNotice("CSV export returned an unexpected payload.", "error");
+    render();
+    return;
+  }
+
+  state.ui.csvText = payload.csv_text;
+  const copied = await copyTextToClipboard(payload.csv_text);
+  if (copied) {
+    setNotice(`Copied CSV (${payload.row_count || 0} rows) to clipboard.`);
+  } else {
+    setNotice("CSV generated. Copy from the text area below.");
+  }
   render();
 }
 
@@ -2538,6 +2613,18 @@ function render() {
         },
         state.ui.isLoading ? "Refreshing..." : "Refresh",
       ),
+      el(
+        "button",
+        {
+          className: "fw-button secondary",
+          type: "button",
+          disabled: state.ui.isExporting ? "true" : null,
+          onClick: () => {
+            void exportStorePerformanceCsv();
+          },
+        },
+        state.ui.isExporting ? "Exporting..." : "Copy CSV",
+      ),
     ),
     el("p", { className: "fw-empty fw-exec-control-hint", text: tabControlHint(activeTabTool) }),
     tabScopedControls.length ? el("div", { className: "fw-grid merch-filters fw-exec-tab-grid" }, ...tabScopedControls) : null,
@@ -2552,6 +2639,21 @@ function render() {
     el("p", { className: "fw-empty", text: activeResult()?.summary || state.payload.uiHints.emptyState }),
   );
 
+  const csvPanel = state.ui.csvText
+    ? el(
+        "section",
+        { className: "fw-panel" },
+        el("h2", { className: "fw-panel-title", text: "CSV Export" }),
+        el("p", { className: "fw-empty", text: "Copy this CSV into Sheets or Excel." }),
+        el("textarea", {
+          className: "fw-textarea fw-csv-text",
+          rows: "10",
+          readonly: "true",
+          value: state.ui.csvText,
+        }),
+      )
+    : null;
+
   container.appendChild(
     el(
       "div",
@@ -2560,6 +2662,7 @@ function render() {
       controlsPanel,
       contextPanel,
       el("section", { className: "fw-panel" }, renderResults()),
+      csvPanel,
     ),
   );
 }
