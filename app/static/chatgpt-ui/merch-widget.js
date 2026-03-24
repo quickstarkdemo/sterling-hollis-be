@@ -3717,11 +3717,7 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
-    const uiChanged = applyUiWidgetState(globals.widgetState, { force: false });
-    if (uiChanged) {
-      queueModelContextUpdate();
-    }
-    if (payloadChanged || uiChanged) {
+    if (payloadChanged) {
       render();
     }
   },
