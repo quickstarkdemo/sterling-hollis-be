@@ -1691,12 +1691,18 @@ def test_merch_export_csv_supports_all_views(monkeypatch):
         assert actions.row_count > 0
         assert actions.csv_text.splitlines()[0].startswith("store_id,store_name,view,compare_store_id,compare_store_name,action,product_id")
         assert actions.view.value == "actions"
+        assert "inventory_product_id" in actions.headers
+        assert any(row.values.get("export_row_type") == "inventory_product_snapshot" for row in actions.rows)
         assert diagnostics.row_count > 0
         assert diagnostics.csv_text.splitlines()[0].startswith("store_id,store_name,view,compare_store_id,compare_store_name,dimension,subject")
         assert diagnostics.view.value == "diagnostics"
+        assert "inventory_product_id" in diagnostics.headers
+        assert any(row.values.get("export_row_type") == "inventory_product_snapshot" for row in diagnostics.rows)
         assert trends.row_count > 0
         assert trends.csv_text.splitlines()[0].startswith("store_id,store_name,view,row_type,compare_store_id,compare_store_name,subject,period_start")
         assert trends.view.value == "trends"
+        assert "inventory_product_id" in trends.headers
+        assert any(row.values.get("export_row_type") == "inventory_product_snapshot" for row in trends.rows)
 
 
 def test_inventory_by_store_and_facets_tools(monkeypatch):

@@ -1527,6 +1527,112 @@ def _exec_workspace_payload(
     }
 
 
+def _normalized_brand_tokens(raw_brand: str | None) -> list[str]:
+    if not raw_brand:
+        return []
+    tokens: list[str] = []
+    for value in str(raw_brand).split(","):
+        token = value.strip().lower()
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _apply_price_band_filter(query, price_band: PriceBand | None):
+    if price_band == PriceBand.under_250:
+        return query.where(Product.price < 250)
+    if price_band == PriceBand.band_250_500:
+        return query.where(Product.price >= 250, Product.price < 500)
+    if price_band == PriceBand.band_500_1000:
+        return query.where(Product.price >= 500, Product.price < 1000)
+    if price_band == PriceBand.band_1000_plus:
+        return query.where(Product.price >= 1000)
+    return query
+
+
+def _merch_inventory_snapshot_rows(
+    db,
+    *,
+    store_id: str,
+    store_name: str,
+    view: MerchWorkspaceView,
+    lookback_days: int,
+    category: str | None,
+    brand: str | None,
+    price_band: PriceBand | None,
+    occasion: str | None,
+) -> list[dict[str, str]]:
+    product_query = select(Product).where(Product.store_id == store_id)
+    if category:
+        product_query = product_query.where(func.lower(Product.category) == category.strip().lower())
+    brand_tokens = _normalized_brand_tokens(brand)
+    if brand_tokens:
+        product_query = product_query.where(func.lower(Product.brand).in_(brand_tokens))
+    product_query = _apply_price_band_filter(product_query, price_band)
+    products = db.scalars(product_query.order_by(func.lower(Product.title), Product.id).limit(500)).all()
+    if not products:
+        return []
+
+    product_ids = [item.id for item in products]
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=max(7, min(int(lookback_days or 90), 730)))
+
+    perf_query = (
+        select(
+            OrderItem.product_id.label("product_id"),
+            func.sum(OrderItem.line_total).label("revenue"),
+            func.sum(OrderItem.quantity).label("units"),
+            func.sum(OrderItem.line_total * Product.margin_pct).label("margin_value"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(
+            Order.store_id == store_id,
+            OrderItem.product_id.in_(product_ids),
+            Order.ordered_at >= since,
+            Order.ordered_at < now,
+        )
+        .group_by(OrderItem.product_id)
+    )
+    if occasion:
+        perf_query = perf_query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    perf_rows = db.execute(perf_query).all()
+    perf_map: dict[str, dict[str, float]] = {}
+    for row in perf_rows:
+        revenue = float(row.revenue or 0.0)
+        units = float(row.units or 0.0)
+        margin_value = float(row.margin_value or 0.0)
+        perf_map[row.product_id] = {
+            "revenue": revenue,
+            "units": units,
+            "margin_rate": (margin_value / revenue) if revenue > 0 else 0.0,
+        }
+
+    rows: list[dict[str, str]] = []
+    for item in products:
+        perf = perf_map.get(item.id, {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0})
+        rows.append(
+            {
+                "store_id": store_id,
+                "store_name": store_name,
+                "view": view.value,
+                "export_row_type": "inventory_product_snapshot",
+                "inventory_product_id": _as_scalar(item.id),
+                "inventory_title": _as_scalar(item.title),
+                "inventory_brand": _as_scalar(item.brand),
+                "inventory_category": _as_scalar(item.category),
+                "inventory_price": _as_scalar(item.price),
+                "inventory_availability": _as_scalar(item.availability),
+                "inventory_stock_state": _stock_state_label(item.availability, item.inventory_qty),
+                "inventory_qty": _as_scalar(item.inventory_qty),
+                "inventory_perf_revenue": _as_scalar(perf.get("revenue", 0.0)),
+                "inventory_perf_units": _as_scalar(perf.get("units", 0.0)),
+                "inventory_perf_margin_rate": _as_scalar(perf.get("margin_rate", 0.0)),
+            }
+        )
+    return rows
+
+
 def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvResponse:
     generated_at = datetime.now(timezone.utc)
     with SessionLocal() as db:
@@ -1754,6 +1860,37 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 for point in result.time_series
             )
             store = result.store
+
+        inventory_export_headers = [
+            "export_row_type",
+            "inventory_product_id",
+            "inventory_title",
+            "inventory_brand",
+            "inventory_category",
+            "inventory_price",
+            "inventory_availability",
+            "inventory_stock_state",
+            "inventory_qty",
+            "inventory_perf_revenue",
+            "inventory_perf_units",
+            "inventory_perf_margin_rate",
+        ]
+        for header in inventory_export_headers:
+            if header not in headers:
+                headers.append(header)
+        rows.extend(
+            _merch_inventory_snapshot_rows(
+                db,
+                store_id=store.id,
+                store_name=store.name,
+                view=params.view,
+                lookback_days=result.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                price_band=params.price_band,
+                occasion=params.occasion,
+            )
+        )
 
     csv_payload = _csv_text(headers, rows)
     filename = f"merch_{store.id}_{params.view.value}_{generated_at.strftime('%Y%m%d_%H%M%S')}.csv"
