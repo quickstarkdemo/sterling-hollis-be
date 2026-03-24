@@ -3530,9 +3530,12 @@ function render() {
         className: "fw-advanced-controls",
         open: state.ui.merchAdvancedOpen ? "true" : null,
         onToggle: (event) => {
-          state.ui.merchAdvancedOpen = event.currentTarget.open;
+          const nextOpen = Boolean(event.currentTarget && event.currentTarget.open);
+          if (nextOpen === Boolean(state.ui.merchAdvancedOpen)) {
+            return;
+          }
+          state.ui.merchAdvancedOpen = nextOpen;
           persistWidgetState();
-          render();
         },
       },
       el("summary", { className: "fw-advanced-summary", text: "Advanced Merch Controls" }),
@@ -3672,7 +3675,10 @@ function render() {
 }
 
 function boot() {
-  applyWorkspacePayload(meta.initialPayload);
+  const seededFromInitialPayload = applyWorkspacePayload(meta.initialPayload);
+  if (seededFromInitialPayload) {
+    state.runtime.toolOutputApplied = true;
+  }
   applyInitialToolOutput(window.openai && window.openai.toolOutput, { force: true });
   queueModelContextUpdate({ force: true, immediate: true });
   render();
