@@ -59,6 +59,8 @@ from app.schemas import (
     InventoryFacet,
     InventoryFacetRow,
     InventoryFacetsResponse,
+    InventoryProductRow,
+    InventoryProductsResponse,
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
     MerchEffectiveStrategyResponse,
@@ -107,6 +109,9 @@ from app.services.communications import (
 from app.services.indexing import index_products_for_run
 from app.services.index_jobs import enqueue_index_job, get_index_job, list_index_jobs
 from app.services.inventory_status import (
+    is_in_stock,
+    is_out_of_stock,
+    is_preorder,
     sql_is_in_stock,
     sql_is_not_in_stock,
     sql_is_out_of_stock,
@@ -560,6 +565,79 @@ def _inventory_check_by_store_impl(
             total_not_in_stock_skus=total_not_in_stock_skus,
             total_in_stock_units=total_in_stock_units,
             total_preorder_units=total_preorder_units,
+        )
+
+
+def _stock_state_label(availability: str | None, inventory_qty: int | None) -> str:
+    if is_in_stock(availability, inventory_qty):
+        return "in_stock"
+    if is_preorder(availability):
+        return "preorder"
+    if is_out_of_stock(availability, inventory_qty):
+        return "out_of_stock"
+    return "not_in_stock"
+
+
+def _inventory_products_impl(
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    limit: int = 80,
+) -> InventoryProductsResponse:
+    effective_limit = max(1, min(limit, 500))
+    with SessionLocal() as db:
+        resolved_store = None
+        if store_id or store_query:
+            resolved_store = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+        query = select(Product)
+        query = _apply_inventory_filters(
+            query,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            store_id=resolved_store.id if resolved_store else None,
+            in_stock_only=False,
+        )
+        products = db.scalars(query.order_by(func.lower(Product.title), Product.id).limit(effective_limit)).all()
+
+        rows: list[InventoryProductRow] = []
+        total_inventory_units = 0
+        for item in products:
+            qty = _int_value(item.inventory_qty)
+            total_inventory_units += qty
+            rows.append(
+                InventoryProductRow(
+                    product_id=item.id,
+                    title=item.title,
+                    brand=item.brand,
+                    category=item.category,
+                    size=item.size,
+                    price=float(item.price) if item.price is not None else None,
+                    availability=item.availability,
+                    stock_state=_stock_state_label(item.availability, item.inventory_qty),
+                    inventory_qty=qty,
+                    link=item.link,
+                    image_url=item.image_link,
+                )
+            )
+
+        return InventoryProductsResponse(
+            store=resolved_store,
+            product_query=product_query,
+            product_id=product_id,
+            brand=brand,
+            category=category,
+            size=size,
+            rows=rows,
+            row_count=len(rows),
+            total_inventory_units=total_inventory_units,
         )
 
 
@@ -1308,6 +1386,12 @@ def _merch_workspace_payload(
         category=effective_category,
         limit=12,
     )
+    inventory_products = _inventory_products_impl(
+        store_id=initial_result.store.id,
+        brand=inventory_brand,
+        category=effective_category,
+        limit=80,
+    )
     inventory_check_payload = _inventory_check_summary_payload(inventory_check, current_store_id=initial_result.store.id)
     compare_store_options = _merch_compare_store_options(initial_result.store.id)
     brand_options = _merch_brand_options(initial_result.store.id)
@@ -1332,6 +1416,7 @@ def _merch_workspace_payload(
         "initial_notice": initial_notice,
         "strategy_context": strategy_context,
         "inventory_check": inventory_check_payload,
+        "inventory_products": inventory_products.model_dump(mode="json"),
         "uiHints": {
             "questionPlaceholder": "Optional context (e.g., wedding occasion, protect margin, next 8 weeks)",
             "emptyState": "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
@@ -3054,6 +3139,34 @@ def fashion_inventory_check_by_store(
 ) -> InventoryCheckByStoreResponse:
     """Return inventory health by store, including in-stock, preorder, and out-of-stock breakdowns."""
     return _inventory_check_by_store_impl(
+        store_query=store_query,
+        store_id=store_id,
+        product_query=product_query,
+        product_id=product_id,
+        brand=brand,
+        category=category,
+        size=size,
+        limit=limit,
+    )
+
+
+@mcp.tool(
+    name="fashion_inventory_products",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_inventory_products(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    product_query: str | None = None,
+    product_id: str | None = None,
+    brand: str | None = None,
+    category: str | None = None,
+    size: str | None = None,
+    limit: int = 80,
+) -> InventoryProductsResponse:
+    """List raw inventory products with availability and quantity for operational review."""
+    return _inventory_products_impl(
         store_query=store_query,
         store_id=store_id,
         product_query=product_query,

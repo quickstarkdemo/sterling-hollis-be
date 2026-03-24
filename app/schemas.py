@@ -1175,3 +1175,29 @@ class InventoryCheckByStoreResponse(BaseModel):
     total_not_in_stock_skus: int = 0
     total_in_stock_units: int = 0
     total_preorder_units: int = 0
+
+
+class InventoryProductRow(BaseModel):
+    product_id: str
+    title: str
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    price: float | None = None
+    availability: str | None = None
+    stock_state: str
+    inventory_qty: int
+    link: str | None = None
+    image_url: str | None = None
+
+
+class InventoryProductsResponse(BaseModel):
+    store: ResolvedStore | None = None
+    product_query: str | None = None
+    product_id: str | None = None
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    rows: list[InventoryProductRow] = Field(default_factory=list)
+    row_count: int = 0
+    total_inventory_units: int = 0

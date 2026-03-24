@@ -7,6 +7,7 @@ const DEFAULT_PAYLOAD = {
   store: null,
   strategy_context: null,
   inventory_check: null,
+  inventory_products: null,
   filters: {
     question: null,
     objective: "margin",
@@ -67,6 +68,7 @@ const state = {
     noticeTone: "info",
     isLoading: false,
     isExporting: false,
+    isInventoryLoading: false,
     isSavingStrategyOverride: false,
     isResettingStrategyOverride: false,
   },
@@ -316,6 +318,25 @@ function normalizeInventoryCheck(raw) {
   };
 }
 
+function normalizeInventoryProducts(raw) {
+  if (!isObject(raw)) {
+    return null;
+  }
+  const rows = Array.isArray(raw.rows) ? clone(raw.rows) : [];
+  if (!rows.length) {
+    return {
+      rows: [],
+      row_count: 0,
+      total_inventory_units: Number(raw.total_inventory_units || 0),
+    };
+  }
+  return {
+    rows,
+    row_count: Number(raw.row_count || rows.length),
+    total_inventory_units: Number(raw.total_inventory_units || 0),
+  };
+}
+
 function normalizeCompareStoreOptions(raw) {
   const defaults = [{ value: "", label: "Auto peer set" }];
   if (!Array.isArray(raw)) {
@@ -411,6 +432,7 @@ function normalizeWorkspacePayload(raw) {
     store: clone(raw.store),
     strategy_context: normalizeStrategyContext(raw.strategy_context),
     inventory_check: normalizeInventoryCheck(raw.inventory_check),
+    inventory_products: normalizeInventoryProducts(raw.inventory_products),
     filters: {
       question: typeof rawFilters.question === "string" ? rawFilters.question : null,
       objective: typeof rawFilters.objective === "string" ? rawFilters.objective : "margin",
@@ -541,8 +563,12 @@ function hydrateUiFromFilters(filters) {
   state.ui.topK = String(filters.top_k || 9);
 }
 
-function applyUiWidgetState(raw) {
+function applyUiWidgetState(raw, options = {}) {
   if (!isObject(raw)) {
+    return false;
+  }
+  const force = options.force === true;
+  if (!force && state.runtime.userInteracted) {
     return false;
   }
   let changed = false;
@@ -610,7 +636,7 @@ function loadWidgetState() {
   if (!window.openai || !isObject(window.openai.widgetState)) {
     return;
   }
-  applyUiWidgetState(window.openai.widgetState);
+  applyUiWidgetState(window.openai.widgetState, { force: true });
 }
 
 function persistWidgetState() {
@@ -1042,6 +1068,7 @@ async function refreshMerch(toolName) {
   persistWidgetState();
   setNotice(`${toolLabel(toolName)} loaded.`);
   render();
+  void refreshInventoryProducts({ silent: true });
 }
 
 async function refreshActiveView() {
@@ -1123,6 +1150,67 @@ async function exportCsv() {
     setNotice("CSV generated. Copy from the text area below.");
   }
   render();
+}
+
+function primaryBrandFilterValue() {
+  const selectedBrands = parseBrandSelections(state.ui.brand);
+  if (!selectedBrands.length) {
+    return null;
+  }
+  return selectedBrands[0];
+}
+
+async function refreshInventoryProducts(options = {}) {
+  if (!state.payload.store?.id) {
+    return;
+  }
+  const silent = options.silent === true;
+  const args = {
+    store_id: state.payload.store.id,
+    limit: 80,
+  };
+  const category = state.ui.category.trim();
+  const brand = primaryBrandFilterValue();
+  if (category) {
+    args.category = category;
+  }
+  if (brand) {
+    args.brand = brand;
+  }
+
+  state.ui.isInventoryLoading = true;
+  if (!silent) {
+    setNotice("Loading inventory products...");
+    render();
+  }
+
+  const result = await callTool("fashion_inventory_products", args);
+  state.ui.isInventoryLoading = false;
+  if (result.__toolError) {
+    if (!silent) {
+      setNotice(result.__toolError, "error");
+      render();
+    }
+    return;
+  }
+
+  const payload = parseToolPayload(result);
+  const normalized = normalizeInventoryProducts(payload);
+  if (!normalized) {
+    if (!silent) {
+      setNotice("Inventory product list returned an unexpected payload.", "error");
+      render();
+    }
+    return;
+  }
+  state.payload.inventory_products = normalized;
+  persistWidgetState();
+  if (!silent) {
+    setNotice(`Inventory list loaded (${normalized.row_count || 0} products).`);
+    render();
+  } else {
+    render();
+  }
 }
 
 function parseBrandSelections(value) {
@@ -1861,6 +1949,69 @@ function renderInventoryCheckCard() {
                 el("span", { className: "fw-chip subtle", text: `in stock ${compactNumber(row.in_stock_skus)}` }),
                 el("span", { className: "fw-chip subtle", text: `preorder ${compactNumber(row.preorder_skus)}` }),
                 el("span", { className: "fw-chip subtle", text: `out ${compactNumber(row.out_of_stock_skus)}` }),
+              ),
+            ),
+          ),
+        )
+      : null,
+  );
+}
+
+function renderInventoryProductsCard() {
+  const inventoryProducts = normalizeInventoryProducts(state.payload.inventory_products);
+  const rows = Array.isArray(inventoryProducts?.rows) ? inventoryProducts.rows : [];
+  const totalUnits = Number(inventoryProducts?.total_inventory_units || 0);
+  return el(
+    "section",
+    { className: "fw-panel" },
+    el(
+      "div",
+      { className: "fw-section-head" },
+      el("h3", { className: "fw-panel-title", text: "Inventory Products" }),
+      el(
+        "div",
+        { className: "fw-toolbar" },
+        el(
+          "button",
+          {
+            className: "fw-button secondary",
+            type: "button",
+            disabled: state.ui.isInventoryLoading ? "true" : null,
+            onClick: () => {
+              void refreshInventoryProducts();
+            },
+          },
+          state.ui.isInventoryLoading ? "Loading..." : "Refresh List",
+        ),
+      ),
+    ),
+    rows.length
+      ? el(
+          "p",
+          {
+            className: "fw-empty fw-inline-meta",
+            text: `Showing ${compactNumber(rows.length)} products · total units ${compactNumber(totalUnits)}.`,
+          },
+        )
+      : el("p", { className: "fw-empty", text: "No inventory products found for the current store/filter scope." }),
+    rows.length
+      ? el(
+          "div",
+          { className: "fw-list" },
+          ...rows.slice(0, 80).map((row) =>
+            el(
+              "article",
+              { className: "fw-result" },
+              el("h4", { className: "fw-panel-title", text: row.title || row.product_id || "Product" }),
+              el("p", { className: "fw-empty", text: `${row.brand || "Unknown brand"} · ${humanizeToken(row.category || "unknown")}` }),
+              el(
+                "div",
+                { className: "fw-chip-row" },
+                el("span", { className: "fw-chip subtle", text: `SKU ${row.product_id || "-"}` }),
+                el("span", { className: "fw-chip subtle", text: `Qty ${compactNumber(row.inventory_qty)}` }),
+                el("span", { className: "fw-chip subtle", text: humanizeToken(row.stock_state || row.availability || "unknown") }),
+                row.size ? el("span", { className: "fw-chip subtle", text: `Size ${row.size}` }) : null,
+                Number.isFinite(Number(row.price)) ? el("span", { className: "fw-chip subtle", text: money(row.price) }) : null,
               ),
             ),
           ),
@@ -3544,6 +3695,7 @@ function render() {
       controlsPanel,
       contextPanel,
       el("section", { className: "fw-panel" }, renderResults()),
+      renderInventoryProductsCard(),
       csvPanel,
     ),
   );
@@ -3555,6 +3707,9 @@ function boot() {
   loadWidgetState();
   queueModelContextUpdate({ force: true, immediate: true });
   render();
+  if (!normalizeInventoryProducts(state.payload.inventory_products) && state.payload.store?.id) {
+    void refreshInventoryProducts({ silent: true });
+  }
 }
 
 window.addEventListener(
@@ -3562,7 +3717,7 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
-    const uiChanged = applyUiWidgetState(globals.widgetState);
+    const uiChanged = applyUiWidgetState(globals.widgetState, { force: false });
     if (uiChanged) {
       queueModelContextUpdate();
     }

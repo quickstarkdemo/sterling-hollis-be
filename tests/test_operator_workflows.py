@@ -1642,6 +1642,8 @@ def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
         assert payload["inventory_check"] is not None
         assert payload["inventory_check"]["current_store"]["store_id"] == "1001"
         assert payload["inventory_check"]["totals"]["not_in_stock_skus"] >= 1
+        assert payload["inventory_products"] is not None
+        assert payload["inventory_products"]["row_count"] >= 1
         assert "<style>" in html
         assert "Merchandising Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
@@ -1713,6 +1715,18 @@ def test_inventory_by_store_and_facets_tools(monkeypatch):
         )
         assert facets.store is not None
         assert facets.store.id == "1001"
+
+        products = mcp_server.fashion_inventory_products(
+            store_id="1001",
+            category="womens_apparel",
+            limit=20,
+        )
+        assert products.store is not None
+        assert products.store.id == "1001"
+        assert products.row_count >= 1
+        assert all(row.category == "womens_apparel" for row in products.rows)
+        assert all(row.product_id for row in products.rows)
+        assert all(row.stock_state in {"in_stock", "preorder", "out_of_stock", "not_in_stock"} for row in products.rows)
         assert facets.rows
         assert facets.total_units_in_stock > 0
 
@@ -1831,6 +1845,7 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_exec_campaign_autopilot_prepare" in tool_names
         assert "fashion_exec_campaign_autopilot_send" in tool_names
         assert "fashion_exec_export_csv" in tool_names
+        assert "fashion_inventory_products" in tool_names
         assert "fashion_product_margin_sales_opportunities" in tool_names
         assert "fashion_merch_export_csv" in tool_names
         assert "fashion_prepare_customer_email_draft" in tool_names
