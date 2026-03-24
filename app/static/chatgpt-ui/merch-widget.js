@@ -3705,16 +3705,6 @@ function boot() {
   applyWorkspacePayload(meta.initialPayload);
   applyInitialToolOutput(window.openai && window.openai.toolOutput, { force: true });
   loadWidgetState();
-  if (root) {
-    root.addEventListener(
-      "pointerdown",
-      () => {
-        markUserInteraction();
-      },
-      { passive: true },
-    );
-    root.addEventListener("keydown", () => markUserInteraction(), { passive: true });
-  }
   queueModelContextUpdate({ force: true, immediate: true });
   render();
   if (!normalizeInventoryProducts(state.payload.inventory_products) && state.payload.store?.id) {
@@ -3727,7 +3717,11 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
-    if (payloadChanged) {
+    const uiChanged = applyUiWidgetState(globals.widgetState, { force: false });
+    if (uiChanged) {
+      queueModelContextUpdate();
+    }
+    if (payloadChanged || uiChanged) {
       render();
     }
   },
@@ -3744,17 +3738,24 @@ window.addEventListener(
     if (!data || typeof data !== "object") {
       return;
     }
+    if (data.method === "openai:tool_result") {
+      const payload = parseToolPayload(data.params);
+      const payloadChanged = applyWorkspacePayload(payload);
+      if (payloadChanged) {
+        queueModelContextUpdate();
+        render();
+      }
+      return;
+    }
     if (data.jsonrpc !== "2.0") {
       return;
     }
     if (data.method !== "ui/notifications/tool-result") {
       return;
     }
-    if (state.runtime.userInteracted) {
-      return;
-    }
     const payloadChanged = applyWorkspacePayload(data.params);
     if (payloadChanged) {
+      queueModelContextUpdate();
       render();
     }
   },
