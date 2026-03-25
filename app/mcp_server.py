@@ -464,6 +464,44 @@ def _exec_event_options() -> list[dict[str, str]]:
     return [{"value": token, "label": token.replace("_", " ").title()} for token in tokens]
 
 
+def _normalize_occasion_token(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    token = re.sub(r"[\s\-]+", "_", raw)
+    token = re.sub(r"[^a-z0-9_]", "", token).strip("_")
+    return token
+
+
+def _normalized_occasion_tokens(
+    *,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    if occasion:
+        for chunk in str(occasion).replace(";", ",").replace("|", ",").split(","):
+            token = _normalize_occasion_token(chunk)
+            if token and token not in seen:
+                seen.add(token)
+                tokens.append(token)
+    for value in occasions or []:
+        token = _normalize_occasion_token(value)
+        if token and token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def _apply_order_occasion_filter(query, *, occasion: str | None = None, occasions: list[str] | None = None):
+    tokens = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
+    if not tokens:
+        return query
+    normalized_occasion_col = func.replace(func.replace(func.lower(func.trim(Order.occasion)), "-", "_"), " ", "_")
+    return query.where(normalized_occasion_col.in_(tokens))
+
+
 def _apply_inventory_filters(
     query,
     *,
@@ -1344,6 +1382,7 @@ def _merch_workspace_payload(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     inventory_scope: InventoryScope = InventoryScope.combined,
     future_window_days: int = 120,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
@@ -1355,6 +1394,8 @@ def _merch_workspace_payload(
     bounded_lookback = max(7, min(lookback_days, 730))
     bounded_top_k = max(1, min(top_k, 50))
     bounded_future_window_days = max(1, min(int(future_window_days or 120), 365))
+    resolved_occasions = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
+    resolved_occasion = resolved_occasions[0] if resolved_occasions else None
     effective_objective = objective
     effective_lookback = bounded_lookback
     effective_brand = brand
@@ -1402,7 +1443,8 @@ def _merch_workspace_payload(
         category=effective_category,
         brand=effective_brand,
         price_band=price_band,
-        occasion=occasion,
+        occasion=resolved_occasion,
+        occasions=resolved_occasions,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
@@ -1414,7 +1456,8 @@ def _merch_workspace_payload(
             category=effective_category,
             brand=effective_brand,
             price_band=price_band,
-            occasion=occasion,
+            occasion=resolved_occasion,
+            occasions=resolved_occasions,
             inventory_scope=inventory_scope,
             future_window_days=bounded_future_window_days,
             limit=200,
@@ -1465,7 +1508,8 @@ def _merch_workspace_payload(
             category=effective_category,
             brand=effective_brand,
             price_band=price_band,
-            occasion=occasion,
+            occasion=resolved_occasion,
+            occasions=resolved_occasions,
             lookback_days=effective_lookback,
             inventory_scope=inventory_scope,
             future_window_days=bounded_future_window_days,
@@ -1486,6 +1530,7 @@ def _merch_workspace_payload(
             "emptyState": "Use Inventory filters to view/export current and potential assortment rows.",
             "categoryOptions": _merch_category_options(),
             "brandOptions": brand_options,
+            "occasionOptions": _exec_event_options(),
             "compareStoreOptions": compare_store_options,
             "features": {
                 "merchStrategyContextEnabled": settings.merch_strategy_context_enabled,
@@ -1625,6 +1670,7 @@ def _merch_inventory_performance_by_product(
     product_ids: list[str],
     lookback_days: int,
     occasion: str | None,
+    occasions: list[str] | None = None,
 ) -> dict[str, dict[str, float]]:
     if not product_ids:
         return {}
@@ -1647,8 +1693,7 @@ def _merch_inventory_performance_by_product(
         )
         .group_by(OrderItem.product_id)
     )
-    if occasion:
-        query = query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    query = _apply_order_occasion_filter(query, occasion=occasion, occasions=occasions)
     rows = db.execute(query).all()
     perf_map: dict[str, dict[str, float]] = {}
     for row in rows:
@@ -1669,6 +1714,7 @@ def _merch_category_perf_map(
     store_id: str,
     lookback_days: int,
     occasion: str | None,
+    occasions: list[str] | None = None,
 ) -> dict[str, float]:
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=max(7, min(int(lookback_days or 90), 730)))
@@ -1682,8 +1728,7 @@ def _merch_category_perf_map(
         .where(Order.store_id == store_id, Order.ordered_at >= since, Order.ordered_at < now)
         .group_by(func.lower(Product.category))
     )
-    if occasion:
-        query = query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    query = _apply_order_occasion_filter(query, occasion=occasion, occasions=occasions)
     rows = db.execute(query).all()
     return {str(row.category or "").strip().lower(): float(row.revenue or 0.0) for row in rows if row.category}
 
@@ -1694,6 +1739,7 @@ def _merch_brand_category_perf_map(
     store_id: str,
     lookback_days: int,
     occasion: str | None,
+    occasions: list[str] | None = None,
 ) -> dict[tuple[str, str], dict[str, float]]:
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=max(7, min(int(lookback_days or 90), 730)))
@@ -1710,8 +1756,7 @@ def _merch_brand_category_perf_map(
         .where(Order.store_id == store_id, Order.ordered_at >= since, Order.ordered_at < now)
         .group_by(func.lower(Product.brand), func.lower(Product.category))
     )
-    if occasion:
-        query = query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    query = _apply_order_occasion_filter(query, occasion=occasion, occasions=occasions)
     rows = db.execute(query).all()
     perf_map: dict[tuple[str, str], dict[str, float]] = {}
     for row in rows:
@@ -1738,11 +1783,13 @@ def _merch_current_inventory_rows(
     brand: str | None,
     price_band: PriceBand | None,
     occasion: str | None,
+    occasions: list[str] | None = None,
     lookback_days: int,
     limit: int,
 ) -> list[MerchInventoryViewRow]:
     category_token = str(category or "").strip().lower()
     brand_tokens = _normalized_brand_tokens(brand)
+    occasion_tokens = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
     query = select(Product).where(Product.store_id == store_id)
     if category_token:
         query = query.where(func.lower(Product.category) == category_token)
@@ -1758,9 +1805,12 @@ def _merch_current_inventory_rows(
         product_ids=[item.id for item in products],
         lookback_days=lookback_days,
         occasion=occasion,
+        occasions=occasion_tokens,
     )
     rows: list[MerchInventoryViewRow] = []
     for item in products:
+        if occasion_tokens and item.id not in perf_by_product:
+            continue
         perf = perf_by_product.get(item.id, {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0})
         rows.append(
             MerchInventoryViewRow(
@@ -1794,6 +1844,7 @@ def _merch_potential_offer_rows(
     brand: str | None,
     price_band: PriceBand | None,
     occasion: str | None,
+    occasions: list[str] | None = None,
     lookback_days: int,
     store_id: str,
     future_window_days: int,
@@ -1801,6 +1852,7 @@ def _merch_potential_offer_rows(
 ) -> list[MerchInventoryViewRow]:
     category_token = str(category or "").strip().lower()
     brand_tokens = _normalized_brand_tokens(brand)
+    occasion_tokens = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
     today = datetime.now(timezone.utc).date()
     latest_available = today + timedelta(days=max(1, min(int(future_window_days or 120), 365)))
 
@@ -1833,13 +1885,14 @@ def _merch_potential_offer_rows(
         store_id=store_id,
         lookback_days=lookback_days,
         occasion=occasion,
+        occasions=occasion_tokens,
     )
     rows: list[MerchInventoryViewRow] = []
     for item in offers:
-        perf = perf_by_brand_category.get(
-            (str(item.brand or "").strip().lower(), str(item.category or "").strip().lower()),
-            {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0},
-        )
+        perf_key = (str(item.brand or "").strip().lower(), str(item.category or "").strip().lower())
+        if occasion_tokens and perf_key not in perf_by_brand_category:
+            continue
+        perf = perf_by_brand_category.get(perf_key, {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0})
         rows.append(
             MerchInventoryViewRow(
                 row_type=MerchInventoryRowType.potential_offer,
@@ -1869,6 +1922,8 @@ def _merch_inventory_view_impl(params: MerchInventoryViewRequest) -> MerchInvent
     with SessionLocal() as db:
         resolved_store = resolve_store(db, store_query=params.store_query, store_id=params.store_id).resolved
         effective_limit = max(1, min(int(params.limit or 200), 2000))
+        occasion_tokens = _normalized_occasion_tokens(occasion=params.occasion, occasions=params.occasions)
+        resolved_occasion = occasion_tokens[0] if occasion_tokens else None
         current_rows: list[MerchInventoryViewRow] = []
         potential_rows: list[MerchInventoryViewRow] = []
         if params.inventory_scope in {InventoryScope.current, InventoryScope.combined}:
@@ -1878,7 +1933,8 @@ def _merch_inventory_view_impl(params: MerchInventoryViewRequest) -> MerchInvent
                 category=params.category,
                 brand=params.brand,
                 price_band=params.price_band,
-                occasion=params.occasion,
+                occasion=resolved_occasion,
+                occasions=occasion_tokens,
                 lookback_days=params.lookback_days,
                 limit=effective_limit,
             )
@@ -1888,7 +1944,8 @@ def _merch_inventory_view_impl(params: MerchInventoryViewRequest) -> MerchInvent
                 category=params.category,
                 brand=params.brand,
                 price_band=params.price_band,
-                occasion=params.occasion,
+                occasion=resolved_occasion,
+                occasions=occasion_tokens,
                 lookback_days=params.lookback_days,
                 store_id=resolved_store.id,
                 future_window_days=params.future_window_days,
@@ -1924,7 +1981,8 @@ def _merch_inventory_view_impl(params: MerchInventoryViewRequest) -> MerchInvent
             category=params.category,
             brand=params.brand,
             price_band=params.price_band,
-            occasion=params.occasion,
+            occasion=resolved_occasion,
+            occasions=occasion_tokens,
             inventory_scope=params.inventory_scope,
             future_window_days=params.future_window_days,
             rows=rows,
@@ -1985,6 +2043,8 @@ def _priority_tier_for_rank(index: int, total: int) -> MerchPriorityTier:
 
 
 def _merch_mix_analysis_impl(params: MerchProductMixRecommendationsRequest) -> MerchProductMixRecommendationsResponse:
+    occasion_tokens = _normalized_occasion_tokens(occasion=params.occasion, occasions=params.occasions)
+    resolved_occasion = occasion_tokens[0] if occasion_tokens else None
     inventory_view = _merch_inventory_view_impl(
         MerchInventoryViewRequest(
             store_query=params.store_query,
@@ -1993,7 +2053,8 @@ def _merch_mix_analysis_impl(params: MerchProductMixRecommendationsRequest) -> M
             category=params.category,
             brand=params.brand,
             price_band=params.price_band,
-            occasion=params.occasion,
+            occasion=resolved_occasion,
+            occasions=occasion_tokens,
             inventory_scope=params.inventory_scope,
             future_window_days=params.future_window_days,
             limit=max(200, params.top_k * 8),
@@ -2205,7 +2266,8 @@ def _merch_mix_analysis_impl(params: MerchProductMixRecommendationsRequest) -> M
         category=params.category,
         brand=params.brand,
         price_band=params.price_band,
-        occasion=params.occasion,
+        occasion=resolved_occasion,
+        occasions=occasion_tokens,
         inventory_scope=params.inventory_scope,
         future_window_days=params.future_window_days,
         rows=limited_rows,
@@ -2223,7 +2285,9 @@ def _merch_inventory_snapshot_rows(
     brand: str | None,
     price_band: PriceBand | None,
     occasion: str | None,
+    occasions: list[str] | None = None,
 ) -> list[dict[str, str]]:
+    occasion_tokens = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
     product_query = select(Product).where(Product.store_id == store_id)
     if category:
         product_query = product_query.where(func.lower(Product.category) == category.strip().lower())
@@ -2256,8 +2320,7 @@ def _merch_inventory_snapshot_rows(
         )
         .group_by(OrderItem.product_id)
     )
-    if occasion:
-        perf_query = perf_query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    perf_query = _apply_order_occasion_filter(perf_query, occasion=occasion, occasions=occasion_tokens)
     perf_rows = db.execute(perf_query).all()
     perf_map: dict[str, dict[str, float]] = {}
     for row in perf_rows:
@@ -2272,6 +2335,8 @@ def _merch_inventory_snapshot_rows(
 
     rows: list[dict[str, str]] = []
     for item in products:
+        if occasion_tokens and item.id not in perf_map:
+            continue
         perf = perf_map.get(item.id, {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0})
         rows.append(
             {
@@ -2298,6 +2363,8 @@ def _merch_inventory_snapshot_rows(
 def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvResponse:
     generated_at = datetime.now(timezone.utc)
     override_map = _merch_override_map(params.recommendation_overrides or [])
+    occasion_tokens = _normalized_occasion_tokens(occasion=params.occasion, occasions=params.occasions)
+    resolved_occasion = occasion_tokens[0] if occasion_tokens else None
     with SessionLocal() as db:
         if params.view == MerchWorkspaceView.actions:
             result = merchandising_action_recommendations(
@@ -2311,7 +2378,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 category=params.category,
                 brand=params.brand,
                 price_band=params.price_band,
-                occasion=params.occasion,
+                occasion=resolved_occasion,
+                occasions=occasion_tokens,
                 compare_mode=params.compare_mode,
                 peer_mode=params.peer_mode,
                 compare_store_id=params.compare_store_id,
@@ -2393,7 +2461,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 category=params.category,
                 brand=params.brand,
                 price_band=params.price_band,
-                occasion=params.occasion,
+                occasion=resolved_occasion,
+                occasions=occasion_tokens,
                 compare_mode=params.compare_mode,
                 peer_mode=params.peer_mode,
                 compare_store_id=params.compare_store_id,
@@ -2461,7 +2530,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 category=params.category,
                 brand=params.brand,
                 price_band=params.price_band,
-                occasion=params.occasion,
+                occasion=resolved_occasion,
+                occasions=occasion_tokens,
                 compare_mode=params.compare_mode,
                 peer_mode=params.peer_mode,
                 compare_store_id=params.compare_store_id,
@@ -2549,7 +2619,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     category=params.category,
                     brand=params.brand,
                     price_band=params.price_band,
-                    occasion=params.occasion,
+                    occasion=resolved_occasion,
+                    occasions=occasion_tokens,
                     inventory_scope=params.inventory_scope,
                     future_window_days=params.future_window_days,
                     limit=300,
@@ -2622,7 +2693,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     category=params.category,
                     brand=params.brand,
                     price_band=params.price_band,
-                    occasion=params.occasion,
+                    occasion=resolved_occasion,
+                    occasions=occasion_tokens,
                     inventory_scope=params.inventory_scope,
                     future_window_days=params.future_window_days,
                     recommendation_overrides=params.recommendation_overrides,
@@ -2712,7 +2784,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     category=params.category,
                     brand=params.brand,
                     price_band=params.price_band,
-                    occasion=params.occasion,
+                    occasion=resolved_occasion,
+                    occasions=occasion_tokens,
                 )
             )
 
@@ -3008,6 +3081,7 @@ def fashion_render_merch_workspace(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     inventory_scope: InventoryScope = InventoryScope.combined,
     future_window_days: int = 120,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
@@ -3031,6 +3105,7 @@ def fashion_render_merch_workspace(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         compare_mode=compare_mode,
@@ -3073,6 +3148,7 @@ def fashion_open_merch_workspace(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     inventory_scope: InventoryScope = InventoryScope.combined,
     future_window_days: int = 120,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
@@ -3107,6 +3183,7 @@ def fashion_open_merch_workspace(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         compare_mode=compare_mode,
@@ -3604,6 +3681,7 @@ def fashion_merch_action_recommendations(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -3622,6 +3700,7 @@ def fashion_merch_action_recommendations(
             brand=brand,
             price_band=price_band,
             occasion=occasion,
+            occasions=occasions,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
@@ -3642,6 +3721,7 @@ def fashion_merch_diagnostics(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -3658,6 +3738,7 @@ def fashion_merch_diagnostics(
             brand=brand,
             price_band=price_band,
             occasion=occasion,
+            occasions=occasions,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
@@ -3678,6 +3759,7 @@ def fashion_merch_trend_summary(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -3694,6 +3776,7 @@ def fashion_merch_trend_summary(
             brand=brand,
             price_band=price_band,
             occasion=occasion,
+            occasions=occasions,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
@@ -3713,6 +3796,7 @@ def fashion_merch_inventory_view(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     inventory_scope: InventoryScope = InventoryScope.combined,
     future_window_days: int = 120,
     limit: int = 200,
@@ -3726,6 +3810,7 @@ def fashion_merch_inventory_view(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         limit=limit,
@@ -3747,6 +3832,7 @@ def fashion_merch_product_mix_recommendations(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     inventory_scope: InventoryScope = InventoryScope.combined,
     future_window_days: int = 120,
     recommendation_overrides: list[MerchRecommendationOverride] | None = None,
@@ -3761,6 +3847,7 @@ def fashion_merch_product_mix_recommendations(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         recommendation_overrides=recommendation_overrides or [],
@@ -4388,6 +4475,7 @@ def fashion_merch_export_csv(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     inventory_scope: InventoryScope = InventoryScope.combined,
     future_window_days: int = 120,
     recommendation_overrides: list[MerchRecommendationOverride] | None = None,
@@ -4409,6 +4497,7 @@ def fashion_merch_export_csv(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         recommendation_overrides=recommendation_overrides or [],

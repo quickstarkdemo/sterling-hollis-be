@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
+import re
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -38,6 +39,7 @@ class MerchQuery:
     brand: str | None
     price_band: PriceBand | None
     occasion: str | None
+    occasions: list[str]
     lookback_days: int
     intent: str
 
@@ -61,6 +63,35 @@ def _normalize(text: str | None) -> str:
     if not text:
         return ""
     return " ".join(text.lower().replace("-", " ").replace(",", " ").split())
+
+
+def _normalize_occasion_token(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    token = re.sub(r"[\s\-]+", "_", raw)
+    token = re.sub(r"[^a-z0-9_]", "", token).strip("_")
+    return token
+
+
+def _normalized_occasion_tokens(
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    if occasion:
+        for chunk in str(occasion).replace(";", ",").replace("|", ",").split(","):
+            token = _normalize_occasion_token(chunk)
+            if token and token not in seen:
+                seen.add(token)
+                tokens.append(token)
+    for value in occasions or []:
+        token = _normalize_occasion_token(value)
+        if token and token not in seen:
+            seen.add(token)
+            tokens.append(token)
+    return tokens
 
 
 def _price_band_bounds(price_band: PriceBand | None) -> tuple[float | None, float | None]:
@@ -93,6 +124,7 @@ def parse_merch_query(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
 ) -> MerchQuery:
     normalized = _normalize(question)
     parsed_objective = objective or Objective.sell_through
@@ -100,7 +132,8 @@ def parse_merch_query(
     parsed_category = category
     parsed_brand = brand
     parsed_price_band = price_band
-    parsed_occasion = occasion
+    parsed_occasions = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
+    parsed_occasion = parsed_occasions[0] if parsed_occasions else None
 
     if objective is None:
         for candidate, terms in _OBJECTIVE_TERMS.items():
@@ -133,10 +166,11 @@ def parse_merch_query(
         elif "over 1000" in normalized or "over $1000" in normalized or "1000 plus" in normalized:
             parsed_price_band = PriceBand.band_1000_plus
 
-    if parsed_occasion is None:
+    if not parsed_occasions and parsed_occasion is None:
         for occasion_term in _OCCASION_TERMS:
             if occasion_term in normalized:
                 parsed_occasion = occasion_term.replace(" ", "_")
+                parsed_occasions = [parsed_occasion]
                 break
 
     resolved_lookback = lookback_days if lookback_days is not None else 90
@@ -165,6 +199,7 @@ def parse_merch_query(
         brand=parsed_brand,
         price_band=parsed_price_band,
         occasion=parsed_occasion,
+        occasions=parsed_occasions,
         lookback_days=max(7, min(resolved_lookback, 730)),
         intent=intent,
     )
@@ -259,7 +294,7 @@ def _base_query(
     category: str | None = None,
     brand: str | None = None,
     price_band: PriceBand | None = None,
-    occasion: str | None = None,
+    occasions: list[str] | None = None,
 ):
     query = (
         select(
@@ -301,8 +336,10 @@ def _base_query(
     brand_values = _brand_filters(brand)
     if brand_values:
         query = query.where(func.lower(Product.brand).in_(brand_values))
-    if occasion:
-        query = query.where(Order.occasion == occasion)
+    normalized_occasions = _normalized_occasion_tokens(occasions=occasions)
+    if normalized_occasions:
+        normalized_occasion_col = func.replace(func.replace(func.lower(func.trim(Order.occasion)), "-", "_"), " ", "_")
+        query = query.where(normalized_occasion_col.in_(normalized_occasions))
     floor, ceiling = _price_band_bounds(price_band)
     if floor is not None:
         query = query.where(Product.price >= floor)
@@ -319,9 +356,9 @@ def _product_metrics(
     category: str | None = None,
     brand: str | None = None,
     price_band: PriceBand | None = None,
-    occasion: str | None = None,
+    occasions: list[str] | None = None,
 ):
-    return session.execute(_base_query(store_ids, since, until, category, brand, price_band, occasion)).all()
+    return session.execute(_base_query(store_ids, since, until, category, brand, price_band, occasions)).all()
 
 
 def _dimension_aggregate_query(
@@ -332,7 +369,7 @@ def _dimension_aggregate_query(
     category: str | None = None,
     brand: str | None = None,
     price_band: PriceBand | None = None,
-    occasion: str | None = None,
+    occasions: list[str] | None = None,
 ):
     if dimension == "brand":
         dim_col = Product.brand.label("subject")
@@ -355,8 +392,10 @@ def _dimension_aggregate_query(
     brand_values = _brand_filters(brand)
     if brand_values:
         query = query.where(func.lower(Product.brand).in_(brand_values))
-    if occasion:
-        query = query.where(Order.occasion == occasion)
+    normalized_occasions = _normalized_occasion_tokens(occasions=occasions)
+    if normalized_occasions:
+        normalized_occasion_col = func.replace(func.replace(func.lower(func.trim(Order.occasion)), "-", "_"), " ", "_")
+        query = query.where(normalized_occasion_col.in_(normalized_occasions))
     floor, ceiling = _price_band_bounds(price_band)
     if floor is not None:
         query = query.where(Product.price >= floor)
@@ -374,10 +413,10 @@ def _dimension_aggregates(
     category: str | None = None,
     brand: str | None = None,
     price_band: PriceBand | None = None,
-    occasion: str | None = None,
+    occasions: list[str] | None = None,
 ):
     return session.execute(
-        _dimension_aggregate_query(store_ids, since, until, dimension, category, brand, price_band, occasion)
+        _dimension_aggregate_query(store_ids, since, until, dimension, category, brand, price_band, occasions)
     ).all()
 
 
@@ -389,7 +428,7 @@ def _sales_events(
     category: str | None = None,
     brand: str | None = None,
     price_band: PriceBand | None = None,
-    occasion: str | None = None,
+    occasions: list[str] | None = None,
 ):
     query = (
         select(
@@ -407,8 +446,10 @@ def _sales_events(
     brand_values = _brand_filters(brand)
     if brand_values:
         query = query.where(func.lower(Product.brand).in_(brand_values))
-    if occasion:
-        query = query.where(Order.occasion == occasion)
+    normalized_occasions = _normalized_occasion_tokens(occasions=occasions)
+    if normalized_occasions:
+        normalized_occasion_col = func.replace(func.replace(func.lower(func.trim(Order.occasion)), "-", "_"), " ", "_")
+        query = query.where(normalized_occasion_col.in_(normalized_occasions))
     floor, ceiling = _price_band_bounds(price_band)
     if floor is not None:
         query = query.where(Product.price >= floor)
@@ -481,6 +522,7 @@ def merchandising_action_recommendations(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -494,6 +536,7 @@ def merchandising_action_recommendations(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
     )
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=parsed.lookback_days)
@@ -509,13 +552,13 @@ def merchandising_action_recommendations(
             compare_store_id=compare_store_id,
         )
 
-    store_rows = _product_metrics(session, [resolved_store.id], since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    store_rows = _product_metrics(session, [resolved_store.id], since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasions)
     peer_rows = (
-        _product_metrics(session, peer_ids, since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+        _product_metrics(session, peer_ids, since, now, parsed.category, parsed.brand, parsed.price_band, parsed.occasions)
         if peer_ids
         else []
     )
-    prior_rows = _product_metrics(session, [resolved_store.id], prior_since, since, parsed.category, parsed.brand, parsed.price_band, parsed.occasion)
+    prior_rows = _product_metrics(session, [resolved_store.id], prior_since, since, parsed.category, parsed.brand, parsed.price_band, parsed.occasions)
 
     peer_baselines = defaultdict(lambda: {"revenue": 0.0, "units": 0.0, "count": 0})
     for row in peer_rows:
@@ -650,6 +693,7 @@ def merchandising_action_recommendations(
         brand=parsed.brand,
         price_band=parsed.price_band,
         occasion=parsed.occasion,
+        occasions=parsed.occasions,
         peer_store_ids=peer_ids,
         compare_store_id=resolved_compare_store_id,
         compare_store_name=resolved_compare_store_name,
@@ -668,6 +712,7 @@ def merchandising_diagnostics(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -681,6 +726,7 @@ def merchandising_diagnostics(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
     )
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=parsed.lookback_days)
@@ -706,7 +752,7 @@ def merchandising_diagnostics(
         parsed.category,
         parsed.brand,
         parsed.price_band,
-        parsed.occasion,
+        parsed.occasions,
     )
     peer_rows = (
         _dimension_aggregates(
@@ -718,7 +764,7 @@ def merchandising_diagnostics(
             parsed.category,
             parsed.brand,
             parsed.price_band,
-            parsed.occasion,
+            parsed.occasions,
         )
         if peer_ids
         else []
@@ -732,7 +778,7 @@ def merchandising_diagnostics(
         parsed.category,
         parsed.brand,
         parsed.price_band,
-        parsed.occasion,
+        parsed.occasions,
     )
 
     peer_divisor = max(len(peer_ids), 1)
@@ -831,6 +877,7 @@ def merchandising_diagnostics(
         brand=parsed.brand,
         price_band=parsed.price_band,
         occasion=parsed.occasion,
+        occasions=parsed.occasions,
         peer_store_ids=peer_ids,
         compare_store_id=resolved_compare_store_id,
         compare_store_name=resolved_compare_store_name,
@@ -849,6 +896,7 @@ def merchandising_trend_summary(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    occasions: list[str] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -862,6 +910,7 @@ def merchandising_trend_summary(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        occasions=occasions,
     )
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=parsed.lookback_days)
@@ -887,7 +936,7 @@ def merchandising_trend_summary(
         parsed.category,
         parsed.brand,
         parsed.price_band,
-        parsed.occasion,
+        parsed.occasions,
     )
     peer_rows = (
         _dimension_aggregates(
@@ -899,7 +948,7 @@ def merchandising_trend_summary(
             parsed.category,
             parsed.brand,
             parsed.price_band,
-            parsed.occasion,
+            parsed.occasions,
         )
         if peer_ids
         else []
@@ -913,7 +962,7 @@ def merchandising_trend_summary(
         parsed.category,
         parsed.brand,
         parsed.price_band,
-        parsed.occasion,
+        parsed.occasions,
     )
 
     peer_divisor = max(len(peer_ids), 1)
@@ -955,7 +1004,7 @@ def merchandising_trend_summary(
         parsed.category,
         parsed.brand,
         parsed.price_band,
-        parsed.occasion,
+        parsed.occasions,
     )
     baseline_events = []
     baseline_divisor = 1.0
@@ -968,7 +1017,7 @@ def merchandising_trend_summary(
             parsed.category,
             parsed.brand,
             parsed.price_band,
-            parsed.occasion,
+            parsed.occasions,
         )
         baseline_divisor = float(max(len(peer_ids), 1))
         baseline_origin = since
@@ -981,7 +1030,7 @@ def merchandising_trend_summary(
             parsed.category,
             parsed.brand,
             parsed.price_band,
-            parsed.occasion,
+            parsed.occasions,
         )
         baseline_origin = prior_since
     else:
@@ -1027,6 +1076,7 @@ def merchandising_trend_summary(
         brand=parsed.brand,
         price_band=parsed.price_band,
         occasion=parsed.occasion,
+        occasions=parsed.occasions,
         peer_store_ids=peer_ids,
         compare_store_id=resolved_compare_store_id,
         compare_store_name=resolved_compare_store_name,

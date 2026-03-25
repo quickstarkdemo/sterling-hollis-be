@@ -537,6 +537,7 @@ class MerchWorkspaceFilters(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     lookback_days: int = 90
     inventory_scope: InventoryScope = InventoryScope.combined
     future_window_days: int = Field(default=120, ge=1, le=365)
@@ -587,6 +588,7 @@ class MerchActionRecommendationsResponse(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     peer_store_ids: list[str]
     compare_store_id: str | None = None
     compare_store_name: str | None = None
@@ -620,6 +622,7 @@ class MerchDiagnosticsResponse(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     peer_store_ids: list[str]
     compare_store_id: str | None = None
     compare_store_name: str | None = None
@@ -653,6 +656,7 @@ class MerchTrendSummaryResponse(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     peer_store_ids: list[str] = Field(default_factory=list)
     compare_store_id: str | None = None
     compare_store_name: str | None = None
@@ -716,6 +720,7 @@ class MerchInventoryViewResponse(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     inventory_scope: InventoryScope
     future_window_days: int
     rows: list[MerchInventoryViewRow] = Field(default_factory=list)
@@ -758,6 +763,7 @@ class MerchProductMixRecommendationsResponse(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     inventory_scope: InventoryScope
     future_window_days: int
     rows: list[MerchProductMixRecommendationRow] = Field(default_factory=list)
@@ -771,6 +777,7 @@ class MerchInventoryViewRequest(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     inventory_scope: InventoryScope = InventoryScope.combined
     future_window_days: int = Field(default=120, ge=1, le=365)
     limit: int = Field(default=200, ge=1, le=2000)
@@ -791,6 +798,7 @@ class MerchProductMixRecommendationsRequest(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     inventory_scope: InventoryScope = InventoryScope.combined
     future_window_days: int = Field(default=120, ge=1, le=365)
     recommendation_overrides: list[MerchRecommendationOverride] = Field(default_factory=list)
@@ -1258,6 +1266,7 @@ class MerchExportCsvRequest(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
     inventory_scope: InventoryScope = InventoryScope.combined
     future_window_days: int = Field(default=120, ge=1, le=365)
     recommendation_overrides: list[MerchRecommendationOverride] = Field(default_factory=list)

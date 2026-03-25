@@ -27,6 +27,7 @@ const DEFAULT_PAYLOAD = {
     brand: null,
     price_band: null,
     occasion: null,
+    occasions: [],
     lookback_days: 90,
     inventory_scope: "combined",
     future_window_days: 120,
@@ -45,6 +46,7 @@ const DEFAULT_PAYLOAD = {
     emptyState: "Use Inventory filters to view/export current and potential assortment rows.",
     categoryOptions: [],
     brandOptions: [],
+    occasionOptions: [],
     compareStoreOptions: [{ value: "", label: "Auto peer set" }],
     features: {
       merchStrategyContextEnabled: false,
@@ -61,7 +63,7 @@ const state = {
     category: "",
     selectedBrands: [],
     priceBand: "",
-    occasion: "",
+    selectedOccasions: [],
     lookbackDays: "90",
     inventoryScope: "combined",
     futureWindowDays: "120",
@@ -184,6 +186,56 @@ function parseBrandCsv(raw) {
   return tokens;
 }
 
+function normalizeOccasionToken(raw) {
+  const token = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/^_+|_+$/g, "");
+  return token;
+}
+
+function parseOccasionValues(rawOccasion, rawOccasions) {
+  const tokens = [];
+  const pushToken = (value) => {
+    const token = String(value || "").trim();
+    if (!token) {
+      return;
+    }
+    tokens.push(token);
+  };
+  if (typeof rawOccasion === "string") {
+    rawOccasion
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .forEach(pushToken);
+  }
+  if (Array.isArray(rawOccasions)) {
+    rawOccasions.forEach(pushToken);
+  }
+  return tokens;
+}
+
+function normalizeOccasionSelections(values, options = []) {
+  const normalizedValues = [];
+  const seen = new Set();
+  const canonicalByToken = new Map();
+  normalizeOptions(options).forEach((option) => {
+    canonicalByToken.set(normalizeOccasionToken(option.value), option.value);
+  });
+  values.forEach((value) => {
+    const token = normalizeOccasionToken(value);
+    if (!token || seen.has(token)) {
+      return;
+    }
+    seen.add(token);
+    normalizedValues.push(canonicalByToken.get(token) || token);
+  });
+  return normalizedValues;
+}
+
 function serializeBrands(values) {
   if (!Array.isArray(values) || !values.length) {
     return "";
@@ -248,6 +300,7 @@ function normalizeWorkspacePayload(rawInput) {
       brand: typeof filters.brand === "string" ? filters.brand : null,
       price_band: typeof filters.price_band === "string" ? filters.price_band : null,
       occasion: typeof filters.occasion === "string" ? filters.occasion : null,
+      occasions: Array.isArray(filters.occasions) ? clone(filters.occasions) : [],
       lookback_days: parsePositiveInt(filters.lookback_days, 90, 7, 730),
       inventory_scope: typeof filters.inventory_scope === "string" ? filters.inventory_scope : "combined",
       future_window_days: parsePositiveInt(filters.future_window_days, 120, 1, 365),
@@ -272,6 +325,7 @@ function normalizeWorkspacePayload(rawInput) {
           : DEFAULT_PAYLOAD.uiHints.emptyState,
       categoryOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.categoryOptions : null),
       brandOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.brandOptions : null),
+      occasionOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.occasionOptions : null),
       compareStoreOptions: normalizeCompareStoreOptions(isObject(raw.uiHints) ? raw.uiHints.compareStoreOptions : null),
       features: {
         merchStrategyContextEnabled: Boolean(raw?.uiHints?.features?.merchStrategyContextEnabled),
@@ -321,7 +375,10 @@ function applyWorkspacePayload(raw) {
   state.ui.category = filters.category || "";
   state.ui.selectedBrands = parseBrandCsv(filters.brand || "");
   state.ui.priceBand = filters.price_band || "";
-  state.ui.occasion = filters.occasion || "";
+  state.ui.selectedOccasions = normalizeOccasionSelections(
+    parseOccasionValues(filters.occasion, filters.occasions),
+    normalized.uiHints.occasionOptions,
+  );
   state.ui.lookbackDays = String(parsePositiveInt(filters.lookback_days, 90, 7, 730));
   state.ui.inventoryScope = filters.inventory_scope || "combined";
   state.ui.futureWindowDays = String(parsePositiveInt(filters.future_window_days, 120, 1, 365));
@@ -432,7 +489,8 @@ function buildInventoryArgs() {
     category: state.ui.category.trim() || undefined,
     brand: serializeBrands(state.ui.selectedBrands) || undefined,
     price_band: state.ui.priceBand || undefined,
-    occasion: state.ui.occasion.trim() || undefined,
+    occasion: state.ui.selectedOccasions[0] || undefined,
+    occasions: state.ui.selectedOccasions.length ? state.ui.selectedOccasions : undefined,
     inventory_scope: state.ui.inventoryScope || "combined",
     future_window_days: parsePositiveInt(state.ui.futureWindowDays, 120, 1, 365),
     limit: 300,
@@ -450,7 +508,8 @@ function buildRecommendationArgs() {
     category: state.ui.category.trim() || undefined,
     brand: serializeBrands(state.ui.selectedBrands) || undefined,
     price_band: state.ui.priceBand || undefined,
-    occasion: state.ui.occasion.trim() || undefined,
+    occasion: state.ui.selectedOccasions[0] || undefined,
+    occasions: state.ui.selectedOccasions.length ? state.ui.selectedOccasions : undefined,
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
     peer_mode: state.ui.peerMode || "state_and_profile",
     compare_store_id: state.ui.compareStoreId || undefined,
@@ -466,7 +525,8 @@ function buildMixArgs() {
     category: state.ui.category.trim() || undefined,
     brand: serializeBrands(state.ui.selectedBrands) || undefined,
     price_band: state.ui.priceBand || undefined,
-    occasion: state.ui.occasion.trim() || undefined,
+    occasion: state.ui.selectedOccasions[0] || undefined,
+    occasions: state.ui.selectedOccasions.length ? state.ui.selectedOccasions : undefined,
     inventory_scope: state.ui.inventoryScope || "combined",
     future_window_days: parsePositiveInt(state.ui.futureWindowDays, 120, 1, 365),
     recommendation_overrides: recommendationOverridesPayload(),
@@ -482,7 +542,8 @@ function buildInsightArgs() {
     category: state.ui.category.trim() || undefined,
     brand: serializeBrands(state.ui.selectedBrands) || undefined,
     price_band: state.ui.priceBand || undefined,
-    occasion: state.ui.occasion.trim() || undefined,
+    occasion: state.ui.selectedOccasions[0] || undefined,
+    occasions: state.ui.selectedOccasions.length ? state.ui.selectedOccasions : undefined,
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
     peer_mode: state.ui.peerMode || "state_and_profile",
     compare_store_id: state.ui.compareStoreId || undefined,
@@ -503,7 +564,8 @@ function buildExportArgs() {
     category: state.ui.category.trim() || undefined,
     brand: serializeBrands(state.ui.selectedBrands) || undefined,
     price_band: state.ui.priceBand || undefined,
-    occasion: state.ui.occasion.trim() || undefined,
+    occasion: state.ui.selectedOccasions[0] || undefined,
+    occasions: state.ui.selectedOccasions.length ? state.ui.selectedOccasions : undefined,
     inventory_scope: state.ui.inventoryScope || "combined",
     future_window_days: parsePositiveInt(state.ui.futureWindowDays, 120, 1, 365),
     recommendation_overrides: recommendationOverridesPayload(),
@@ -746,7 +808,8 @@ async function reloadWorkspaceFromStrategy(noticeText, options = {}) {
     category: state.ui.category.trim() || undefined,
     brand: serializeBrands(state.ui.selectedBrands) || undefined,
     price_band: state.ui.priceBand || undefined,
-    occasion: state.ui.occasion.trim() || undefined,
+    occasion: state.ui.selectedOccasions[0] || undefined,
+    occasions: state.ui.selectedOccasions.length ? state.ui.selectedOccasions : undefined,
     inventory_scope: state.ui.inventoryScope || "combined",
     future_window_days: parsePositiveInt(state.ui.futureWindowDays, 120, 1, 365),
     compare_mode: state.ui.compareMode || "peer_and_prior_period",
@@ -849,7 +912,7 @@ function buildSelectControl(currentValue, options, onChange, extra = {}) {
   return select;
 }
 
-function normalizeBrandSelections(values) {
+function normalizeSelectionValues(values) {
   if (!Array.isArray(values)) {
     return [];
   }
@@ -885,7 +948,7 @@ function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText,
   const normalizedOptions = normalizeOptions(options);
   const canonicalByLower = new Map(normalizedOptions.map((item) => [item.value.toLowerCase(), item.value]));
   const selected = new Set();
-  normalizeBrandSelections(selectedValues).forEach((value) => {
+  normalizeSelectionValues(selectedValues).forEach((value) => {
     const canonical = canonicalByLower.get(value.toLowerCase()) || value;
     selected.add(canonical);
   });
@@ -946,7 +1009,7 @@ function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText,
         className: "fw-button secondary",
         type: "button",
         onClick: () => {
-          const nextValues = normalizeBrandSelections(Array.from(selected));
+          const nextValues = normalizeSelectionValues(Array.from(selected));
           summary.textContent = multiSelectSummary(nextValues, optionsById, labels);
           details.open = false;
           onApply(nextValues);
@@ -963,12 +1026,26 @@ function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText,
 
 function buildBrandsMultiSelect(selectedBrandValuesRaw, options) {
   return buildCheckMultiSelect({
-    selectedValues: normalizeBrandSelections(selectedBrandValuesRaw),
+    selectedValues: normalizeSelectionValues(selectedBrandValuesRaw),
     options,
     labels: { all: "All brands", singular: "brand", plural: "brands" },
     noOptionsText: "No brands available.",
     onApply: (nextValues) => {
-      state.ui.selectedBrands = normalizeBrandSelections(nextValues);
+      state.ui.selectedBrands = normalizeSelectionValues(nextValues);
+      markFiltersDirty();
+      render();
+    },
+  });
+}
+
+function buildOccasionsMultiSelect(selectedOccasionsRaw, options) {
+  return buildCheckMultiSelect({
+    selectedValues: normalizeOccasionSelections(selectedOccasionsRaw, options),
+    options,
+    labels: { all: "All occasions", singular: "occasion", plural: "occasions" },
+    noOptionsText: "No occasions available.",
+    onApply: (nextValues) => {
+      state.ui.selectedOccasions = normalizeOccasionSelections(nextValues, options);
       markFiltersDirty();
       render();
     },
@@ -1110,6 +1187,7 @@ function renderControlsPanel() {
   const compareStoreOptions = state.payload.uiHints.compareStoreOptions;
 
   const brandSelect = buildBrandsMultiSelect(state.ui.selectedBrands, state.payload.uiHints.brandOptions);
+  const occasionSelect = buildOccasionsMultiSelect(state.ui.selectedOccasions, state.payload.uiHints.occasionOptions);
 
   const controls = el(
     "section",
@@ -1142,17 +1220,8 @@ function renderControlsPanel() {
       el(
         "div",
         { className: "fw-field" },
-        el("label", { className: "fw-label", text: "Occasion" }),
-        el("input", {
-          className: "fw-input",
-          type: "text",
-          value: state.ui.occasion,
-          placeholder: "wedding",
-          onInput: (event) => {
-            state.ui.occasion = event.target.value;
-            markFiltersDirty();
-          },
-        }),
+        el("label", { className: "fw-label", text: "Occasion (Multi)" }),
+        occasionSelect,
       ),
       el(
         "div",
