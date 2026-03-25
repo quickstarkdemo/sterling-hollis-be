@@ -63,6 +63,7 @@ const state = {
     lookbackDays: "90",
     objective: "revenue",
     storeIds: [],
+    storeSearch: "",
     selectedEvents: ["wedding", "holiday_party", "workwear"],
     selectedBrands: [],
     discountPct: "10",
@@ -238,6 +239,7 @@ function applyWorkspacePayload(raw) {
   state.ui.lookbackPreset = resolveLookbackPreset(state.ui.lookbackDays);
   state.ui.objective = payload.filters.objective || "revenue";
   state.ui.storeIds = clone(payload.filters.store_ids || []);
+  state.ui.storeSearch = "";
   state.ui.selectedEvents = normalizeTokenSelections(payload.filters.events, { lowerCase: true, normalizeSpaces: true });
   state.ui.selectedBrands = normalizeTokenSelections(payload.filters.brands, { lowerCase: false });
   state.ui.discountPct = String(payload.filters.discount_pct ?? 10);
@@ -2052,6 +2054,33 @@ function selectionCountText(count, singular, plural, emptyText) {
   return `${count} ${count === 1 ? singular : plural} selected.`;
 }
 
+function resolveStoreOptions() {
+  const hintedOptions = normalizeOptions(state.payload.uiHints?.storeOptions);
+  if (hintedOptions.length) {
+    return hintedOptions;
+  }
+  const result = activeResult();
+  const rows = Array.isArray(result?.stores) ? result.stores : [];
+  const options = [];
+  const seen = new Set();
+  rows.forEach((row) => {
+    if (!isObject(row)) {
+      return;
+    }
+    const storeId = String(row.store_id || "").trim();
+    const storeName = String(row.store_name || "").trim();
+    if (!storeId || !storeName || seen.has(storeId)) {
+      return;
+    }
+    seen.add(storeId);
+    const city = String(row.city || "").trim();
+    const stateCode = String(row.state || "").trim();
+    const locationSuffix = city && stateCode ? ` (${city}, ${stateCode})` : "";
+    options.push({ value: storeId, label: `${storeName}${locationSuffix}` });
+  });
+  return options;
+}
+
 function render() {
   teardownCharts();
   const container = clear(root);
@@ -2142,7 +2171,15 @@ function render() {
     { label: "Any", value: "" },
     ...normalizeOptions(state.payload.uiHints?.categoryOptions),
   ];
-  const storeOptions = normalizeOptions(state.payload.uiHints?.storeOptions);
+  const storeOptions = resolveStoreOptions();
+  const storeSearchToken = String(state.ui.storeSearch || "").trim().toLowerCase();
+  const visibleStoreOptions = storeSearchToken
+    ? storeOptions.filter((option) => {
+        const label = String(option.label || "").toLowerCase();
+        const value = String(option.value || "").toLowerCase();
+        return label.includes(storeSearchToken) || value.includes(storeSearchToken);
+      })
+    : storeOptions;
   const eventOptions = normalizeOptions(state.payload.uiHints?.events || DEFAULT_PAYLOAD.uiHints.events, {
     useHumanizedLabel: true,
   }).map((option) => ({
@@ -2522,11 +2559,22 @@ function render() {
       el(
         "div",
         { className: "fw-field fw-exec-store-field" },
+        el("label", { className: "fw-label", text: "Store Search" }),
+        el("input", {
+          className: "fw-input",
+          type: "text",
+          placeholder: "Search stores, city, state, or id",
+          value: state.ui.storeSearch,
+          onInput: (event) => {
+            state.ui.storeSearch = event.target.value;
+            render();
+          },
+        }),
         el("label", { className: "fw-label", text: "Store Scope" }),
-        buildStoreMultiSelect(state.ui.storeIds, storeOptions),
+        buildStoreMultiSelect(state.ui.storeIds, visibleStoreOptions),
         el("p", {
           className: "fw-empty fw-inline-meta",
-          text: selectionCountText(selectedStoreCount, "store", "stores", "No stores selected: defaults to company-wide network."),
+          text: selectionCountText(selectedStoreCount, "store", "stores", "All stores selected"),
         }),
       ),
       el(
