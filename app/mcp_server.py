@@ -823,9 +823,13 @@ def _resolve_retrieval_mode(
     occasion: str | None,
     budget_min: float | None,
     budget_max: float | None,
+    style_constraints: StyleConstraints | None = None,
 ) -> RetrievalMode:
     if retrieval_mode != RetrievalMode.auto:
         return retrieval_mode
+    if style_constraints is not None and not style_constraints.is_empty():
+        if (style_constraints.constraint_source or "").strip().lower() == "chat_image":
+            return RetrievalMode.semantic
     if customer_resolved and (occasion or budget_min is not None or budget_max is not None):
         return RetrievalMode.fast
     return RetrievalMode.semantic
@@ -863,6 +867,7 @@ def _associate_recommendation_impl(
             occasion=occasion,
             budget_min=budget_min,
             budget_max=budget_max,
+            style_constraints=style_constraints,
         )
         req = CustomerRecommendationRequest(
             store_id=resolved_store.id,
@@ -5025,6 +5030,7 @@ def fashion_prepare_customer_email_draft(
         occasion=occasion,
         budget_min=budget_min,
         budget_max=budget_max,
+        style_constraints=style_constraints,
     )
     with SessionLocal() as db:
         return prepare_customer_email_draft(

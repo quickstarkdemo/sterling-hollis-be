@@ -338,11 +338,15 @@ def customer_recommendations(
     db: Session, req: CustomerRecommendationRequest, retrieval_mode: RetrievalMode = RetrievalMode.semantic
 ) -> tuple[list[ProductRecommendation], str, StyleConstraints | None, str | None]:
     if retrieval_mode == RetrievalMode.auto:
-        retrieval_mode = (
-            RetrievalMode.fast
-            if req.customer_id and (req.occasion or req.budget_min is not None or req.budget_max is not None)
-            else RetrievalMode.semantic
-        )
+        normalized_constraints = _normalize_style_constraints(req.style_constraints)
+        if normalized_constraints and normalized_constraints.constraint_source == "chat_image":
+            retrieval_mode = RetrievalMode.semantic
+        else:
+            retrieval_mode = (
+                RetrievalMode.fast
+                if req.customer_id and (req.occasion or req.budget_min is not None or req.budget_max is not None)
+                else RetrievalMode.semantic
+            )
     use_semantic = retrieval_mode == RetrievalMode.semantic
     embedding_service = EmbeddingService() if use_semantic else None
     pinecone = PineconeService() if use_semantic else None

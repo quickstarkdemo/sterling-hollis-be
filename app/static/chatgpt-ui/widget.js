@@ -275,7 +275,8 @@ function applyWorkspacePayload(raw) {
 
 function applyInitialToolOutput(raw, options = {}) {
   const force = options.force === true;
-  if (!force && (state.runtime.toolOutputApplied || state.runtime.userInteracted)) {
+  const isWorkspacePayload = Boolean(normalizeWorkspacePayload(raw));
+  if (!force && !isWorkspacePayload && (state.runtime.toolOutputApplied || state.runtime.userInteracted)) {
     return false;
   }
   const applied = applyWorkspacePayload(raw);
@@ -912,6 +913,9 @@ async function loadRecommendations(selected, options = {}) {
   const styleConstraints = normalizeStyleConstraints(state.ui.styleConstraints);
   if (styleConstraints) {
     args.style_constraints = styleConstraints;
+    if (styleConstraints.constraint_source === "chat_image") {
+      args.retrieval_mode = "semantic";
+    }
   }
 
   state.recommendation.isLoading = true;
@@ -1445,6 +1449,63 @@ function draftResponseFingerprint(response) {
     status,
     product_ids: productIds,
   });
+}
+
+function recommendationMatchesCurrentWorkspace(response) {
+  const normalized = normalizeRecommendationResponse(response);
+  if (!normalized) {
+    return false;
+  }
+  const rows = recommendationRows(normalized);
+  if (!rows.length) {
+    return false;
+  }
+  const responseCustomerId = typeof normalized.customer?.id === "string" ? normalized.customer.id : null;
+  const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+  const selected = selectedCustomer(results);
+  if (!selected) {
+    return false;
+  }
+  if (!responseCustomerId) {
+    return true;
+  }
+  return selected.id === responseCustomerId;
+}
+
+function applyIncomingRecommendationUpdate(incoming, source = "chat") {
+  if (!recommendationMatchesCurrentWorkspace(incoming)) {
+    return false;
+  }
+  const normalized = normalizeRecommendationResponse(incoming);
+  if (!normalized) {
+    return false;
+  }
+  const rows = recommendationRows(normalized);
+  if (!rows.length) {
+    return false;
+  }
+  const results = Array.isArray(state.payload.results) ? state.payload.results : [];
+  const selected = selectedCustomer(results);
+  if (!selected) {
+    return false;
+  }
+  state.recommendation.customerId = selected.id;
+  state.recommendation.response = normalized;
+  state.recommendation.error = "";
+  state.recommendation.inventoryByProduct = {};
+  const appliedConstraints = normalizeStyleConstraints(normalized?.recommendation?.applied_style_constraints);
+  if (appliedConstraints) {
+    state.ui.styleConstraints = appliedConstraints;
+  }
+  state.recommendation.selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds);
+  if (!state.ui.emailTo && selected.email) {
+    state.ui.emailTo = selected.email;
+  }
+  persistWidgetState();
+  if (source === "chat") {
+    setNotice(`Synced ${rows.length} recommendations from chat.`);
+  }
+  return true;
 }
 
 function applyEmailDraftResponse(selected, response) {
@@ -3111,13 +3172,14 @@ window.addEventListener(
   (event) => {
     const globals = (event && event.detail && event.detail.globals) || {};
     const payloadChanged = applyInitialToolOutput(globals.toolOutput);
+    const recommendationChanged = applyIncomingRecommendationUpdate(globals.toolOutput, "chat");
     const incomingDraft = normalizeEmailDraftResponse(globals.toolOutput);
     const draftChanged = applyIncomingDraftUpdate(incomingDraft, "chat");
     const uiChanged = applyUiWidgetState(globals.widgetState);
     if (uiChanged) {
       queueModelContextUpdate();
     }
-    if (payloadChanged || draftChanged || uiChanged) {
+    if (payloadChanged || recommendationChanged || draftChanged || uiChanged) {
       render();
     }
   },
@@ -3141,9 +3203,10 @@ window.addEventListener(
       return;
     }
     const payloadChanged = applyWorkspacePayload(data.params);
+    const recommendationChanged = applyIncomingRecommendationUpdate(data.params, "chat");
     const incomingDraft = normalizeEmailDraftResponse(data.params);
     const draftChanged = applyIncomingDraftUpdate(incomingDraft, "chat");
-    if (payloadChanged || draftChanged) {
+    if (payloadChanged || recommendationChanged || draftChanged) {
       render();
     }
   },

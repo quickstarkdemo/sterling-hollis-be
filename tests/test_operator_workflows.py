@@ -2084,6 +2084,7 @@ def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypat
         assert payload["initial_email_body"] == "Hi Avery,\n\nThis draft started in Canvas."
         assert payload["initial_recommendation_response"]["customer"]["id"] == "cust_000001"
         assert payload["initial_recommendation_response"]["store"]["id"] == "1001"
+        assert payload["initial_recommendation_response"]["retrieval_mode"] == "semantic"
         assert payload["initial_recommendation_response"]["recommendation"]["recommendations"]
         assert payload["initial_selected_product_ids"]
 
@@ -2306,6 +2307,26 @@ def test_fast_mode_skips_embedding(monkeypatch):
         assert response.recommendation.strategy == "sql_rules_fast_path"
         assert response.recommendation.recommendations
         assert response.recommendation.recommendations[0].image_url
+
+
+def test_image_guidance_forces_semantic_mode_even_with_budget(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            budget_max=900,
+            retrieval_mode=RetrievalMode.auto,
+            style_constraints=StyleConstraints(
+                constraint_source="chat_image",
+                target_categories=["mens_apparel"],
+                style_keywords=["luxury", "evening"],
+            ),
+        )
+
+        assert response.retrieval_mode == RetrievalMode.semantic
+        assert response.recommendation.recommendations
 
 
 def test_prepare_customer_sms_defaults_to_customer_home_store(monkeypatch):
