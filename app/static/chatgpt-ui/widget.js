@@ -19,6 +19,8 @@ const state = {
     initial_email_draft_id: null,
     initial_email_subject: null,
     initial_email_body: null,
+    initial_recommendation_response: null,
+    initial_selected_product_ids: [],
     uiHints: {
       searchPlaceholder: "Search by name, email, or phone",
       emptyState: "Type a customer name, email, or phone number and run search.",
@@ -192,6 +194,8 @@ function normalizeWorkspacePayload(raw) {
     initial_email_draft_id: typeof raw.initial_email_draft_id === "string" ? raw.initial_email_draft_id : null,
     initial_email_subject: typeof raw.initial_email_subject === "string" ? raw.initial_email_subject : null,
     initial_email_body: typeof raw.initial_email_body === "string" ? raw.initial_email_body : null,
+    initial_recommendation_response: normalizeRecommendationResponse(raw.initial_recommendation_response),
+    initial_selected_product_ids: normalizeProductIds(raw.initial_selected_product_ids),
     uiHints: {
       searchPlaceholder:
         raw.uiHints && typeof raw.uiHints.searchPlaceholder === "string"
@@ -222,6 +226,35 @@ function applyWorkspacePayload(raw) {
   }
   if (payload.initial_style_constraints) {
     state.ui.styleConstraints = payload.initial_style_constraints;
+  }
+  if (payload.initial_recommendation_response) {
+    const seededRecommendation = normalizeRecommendationResponse(payload.initial_recommendation_response);
+    if (seededRecommendation) {
+      const rows = recommendationRows(seededRecommendation);
+      const seededCustomerId =
+        typeof seededRecommendation.customer?.id === "string" && seededRecommendation.customer.id.trim()
+          ? seededRecommendation.customer.id.trim()
+          : typeof payload.selected_customer_id === "string" && payload.selected_customer_id.trim()
+            ? payload.selected_customer_id.trim()
+            : null;
+      if (seededCustomerId) {
+        state.recommendation.customerId = seededCustomerId;
+      }
+      state.recommendation.response = seededRecommendation;
+      state.recommendation.error = "";
+      state.recommendation.inventoryByProduct = {};
+      const appliedConstraints = normalizeStyleConstraints(seededRecommendation?.recommendation?.applied_style_constraints);
+      if (appliedConstraints) {
+        state.ui.styleConstraints = appliedConstraints;
+      }
+      const seededSelection = payload.initial_selected_product_ids?.length
+        ? payload.initial_selected_product_ids
+        : state.recommendation.selectedProductIds;
+      state.recommendation.selectedProductIds = syncSelectedProducts(rows, seededSelection);
+      if (!state.ui.emailTo && typeof seededRecommendation.customer?.email === "string") {
+        state.ui.emailTo = seededRecommendation.customer.email;
+      }
+    }
   }
   if (payload.initial_notice) {
     setNotice(payload.initial_notice);

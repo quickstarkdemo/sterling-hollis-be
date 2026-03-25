@@ -1632,6 +1632,12 @@ def test_apply_execution_tags_uses_latest_published_packet(monkeypatch):
 def test_render_customer_search_workspace_returns_template_and_payload(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
+        seeded_recommendation = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            top_k=3,
+            retrieval_mode=RetrievalMode.semantic,
+        )
         result = mcp_server.fashion_render_customer_search_workspace(
             query="avery.parker.1@example-fashion.test",
             limit=10,
@@ -1646,6 +1652,8 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
             initial_email_draft_id="msg_demo_draft_001",
             initial_email_subject="A few picks from your stylist",
             initial_email_body="Hi Avery,\n\nHere are a few tailored options.",
+            initial_recommendation_response=seeded_recommendation,
+            initial_selected_product_ids=["prod_a", "prod_b", "prod_a"],
         )
         html = mcp_server.customer_search_widget_resource()
         template_uri = result.meta["openai/outputTemplate"]
@@ -1665,6 +1673,9 @@ def test_render_customer_search_workspace_returns_template_and_payload(monkeypat
         assert result.structuredContent["payload"]["initial_email_draft_id"] == "msg_demo_draft_001"
         assert result.structuredContent["payload"]["initial_email_subject"] == "A few picks from your stylist"
         assert result.structuredContent["payload"]["initial_email_body"] == "Hi Avery,\n\nHere are a few tailored options."
+        assert result.structuredContent["payload"]["initial_recommendation_response"]["customer"]["id"] == "cust_000001"
+        assert result.structuredContent["payload"]["initial_recommendation_response"]["store"]["id"] == "1001"
+        assert result.structuredContent["payload"]["initial_selected_product_ids"] == ["prod_a", "prod_b"]
         assert "<style>" in html
         assert "Customer Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
@@ -2071,6 +2082,36 @@ def test_open_customer_workspace_orchestrates_resolution_and_hydration(monkeypat
         assert payload["initial_email_draft_id"] == "msg_canvas_001"
         assert payload["initial_email_subject"] == "Draft from Canvas"
         assert payload["initial_email_body"] == "Hi Avery,\n\nThis draft started in Canvas."
+        assert payload["initial_recommendation_response"]["customer"]["id"] == "cust_000001"
+        assert payload["initial_recommendation_response"]["store"]["id"] == "1001"
+        assert payload["initial_recommendation_response"]["recommendation"]["recommendations"]
+        assert payload["initial_selected_product_ids"]
+
+
+def test_open_customer_workspace_with_email_draft_prepares_and_hydrates_workspace(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_open_customer_workspace_with_email_draft(
+            customer_query="avery.parker.1@example-fashion.test",
+            style_constraints=StyleConstraints(
+                constraint_source="chat_image",
+                target_categories=["mens_apparel"],
+                target_genders=["male"],
+                style_keywords=["tailored", "luxury"],
+            ),
+            top_k=4,
+            retrieval_mode=RetrievalMode.semantic,
+        )
+
+        payload = result.structuredContent["payload"]
+        assert result.structuredContent["kind"] == "customer_search_workspace"
+        assert payload["selected_customer_id"] == "cust_000001"
+        assert payload["initial_email_draft_id"]
+        assert payload["initial_email_subject"]
+        assert payload["initial_email_body"]
+        assert payload["initial_recommendation_response"]["customer"]["id"] == "cust_000001"
+        assert payload["initial_recommendation_response"]["recommendation"]["recommendations"]
+        assert payload["initial_selected_product_ids"]
 
 
 def test_open_customer_workspace_keeps_candidates_when_query_is_ambiguous(monkeypatch):
@@ -2118,6 +2159,7 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         tool_names = set(mcp_server.mcp._tool_manager._tools.keys())
         assert "fashion_render_customer_search_workspace" in tool_names
         assert "fashion_open_customer_workspace" in tool_names
+        assert "fashion_open_customer_workspace_with_email_draft" in tool_names
         assert "fashion_render_merch_workspace" in tool_names
         assert "fashion_open_merch_workspace" in tool_names
         assert "fashion_render_exec_workspace" in tool_names

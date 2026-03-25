@@ -1355,11 +1355,23 @@ def _customer_search_workspace_payload(
     initial_email_draft_id: str | None = None,
     initial_email_subject: str | None = None,
     initial_email_body: str | None = None,
+    initial_recommendation_response: StoreAssociateRecommendationResponse | None = None,
+    initial_selected_product_ids: list[str] | None = None,
 ) -> dict:
     normalized_query = (query or "").strip()
     initial_constraints_payload = (
         initial_style_constraints.model_dump(mode="json") if initial_style_constraints is not None else None
     )
+    initial_recommendation_payload = (
+        initial_recommendation_response.model_dump(mode="json")
+        if initial_recommendation_response is not None
+        else None
+    )
+    normalized_initial_product_ids: list[str] = []
+    for value in initial_selected_product_ids or []:
+        token = str(value or "").strip()
+        if token and token not in normalized_initial_product_ids:
+            normalized_initial_product_ids.append(token)
     if not normalized_query:
         seeded_results: list[dict] = []
         seeded_resolved: dict | None = None
@@ -1379,6 +1391,8 @@ def _customer_search_workspace_payload(
             "initial_email_draft_id": initial_email_draft_id,
             "initial_email_subject": initial_email_subject,
             "initial_email_body": initial_email_body,
+            "initial_recommendation_response": initial_recommendation_payload,
+            "initial_selected_product_ids": normalized_initial_product_ids,
             "uiHints": {
                 "searchPlaceholder": "Search by name, email, or phone",
                 "emptyState": "Type a customer name, email, or phone number and run search.",
@@ -1402,6 +1416,8 @@ def _customer_search_workspace_payload(
         "initial_email_draft_id": initial_email_draft_id,
         "initial_email_subject": initial_email_subject,
         "initial_email_body": initial_email_body,
+        "initial_recommendation_response": initial_recommendation_payload,
+        "initial_selected_product_ids": normalized_initial_product_ids,
         "uiHints": {
             "searchPlaceholder": "Search by name, email, or phone",
             "emptyState": "No customers matched the current query.",
@@ -4215,11 +4231,13 @@ def fashion_render_customer_search_workspace(
     initial_email_draft_id: str | None = None,
     initial_email_subject: str | None = None,
     initial_email_body: str | None = None,
+    initial_recommendation_response: StoreAssociateRecommendationResponse | None = None,
+    initial_selected_product_ids: list[str] | None = None,
 ) -> CallToolResult:
     """Render the customer workspace inside ChatGPT.
 
     Optional hydration fields (`selected_customer_id`, `initial_style_constraints`,
-    `initial_notice`, and initial email draft fields) can seed the UI state from
+    `initial_notice`, initial recommendation fields, and initial email draft fields) can seed the UI state from
     prior model/tool context.
     """
     effective_limit = max(1, min(limit, 25))
@@ -4232,6 +4250,8 @@ def fashion_render_customer_search_workspace(
         initial_email_draft_id=initial_email_draft_id,
         initial_email_subject=initial_email_subject,
         initial_email_body=initial_email_body,
+        initial_recommendation_response=initial_recommendation_response,
+        initial_selected_product_ids=initial_selected_product_ids,
     )
     structured_payload = {"kind": "customer_search_workspace", "payload": workspace_payload}
     summary = (
@@ -4267,6 +4287,12 @@ def fashion_open_customer_workspace(
     initial_email_draft_id: str | None = None,
     initial_email_subject: str | None = None,
     initial_email_body: str | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 6,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    seed_recommendations: bool = True,
     limit: int = 10,
 ) -> CallToolResult:
     """Resolve customer query and open a hydrated customer workspace in one call.
@@ -4275,12 +4301,15 @@ def fashion_open_customer_workspace(
     is uploaded in chat, extract cues and pass them as `style_constraints`.
     For chat-first email flows, pass `initial_email_draft_id` (and optional
     `initial_email_subject`/`initial_email_body`) to hydrate draft context.
+    By default this also seeds recommendation rows so the opened workspace aligns
+    with the chat-visible recommendation list.
     """
     normalized_query = customer_query.strip()
     if not normalized_query:
         raise ValueError("customer_query is required.")
 
     effective_limit = max(1, min(limit, 25))
+    effective_top_k = max(1, min(top_k, 12))
     lookup = fashion_lookup_customer(normalized_query, limit=effective_limit)
 
     selected_customer_id: str | None = None
@@ -4288,6 +4317,23 @@ def fashion_open_customer_workspace(
         selected_customer_id = lookup.resolved.id
     elif len(lookup.candidates) == 1:
         selected_customer_id = lookup.candidates[0].id
+
+    initial_recommendation_response: StoreAssociateRecommendationResponse | None = None
+    initial_selected_product_ids: list[str] = []
+    if selected_customer_id and seed_recommendations:
+        initial_recommendation_response = _associate_recommendation_impl(
+            customer_id=selected_customer_id,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=effective_top_k,
+            retrieval_mode=retrieval_mode,
+            style_constraints=style_constraints,
+        )
+        for row in initial_recommendation_response.recommendation.recommendations[:3]:
+            product_id = str(row.product_id or "").strip()
+            if product_id and product_id not in initial_selected_product_ids:
+                initial_selected_product_ids.append(product_id)
 
     notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
     if notice is None and style_constraints is not None and not style_constraints.is_empty():
@@ -4305,6 +4351,115 @@ def fashion_open_customer_workspace(
         initial_email_draft_id=initial_email_draft_id,
         initial_email_subject=initial_email_subject,
         initial_email_body=initial_email_body,
+        initial_recommendation_response=initial_recommendation_response,
+        initial_selected_product_ids=initial_selected_product_ids,
+    )
+
+
+@mcp.tool(
+    name="fashion_open_customer_workspace_with_email_draft",
+    annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True),
+    meta=_render_tool_meta(
+        _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI,
+        invoking="Preparing draft and opening customer workspace...",
+        invoked="Customer workspace ready with draft.",
+    ),
+    structured_output=False,
+)
+def fashion_open_customer_workspace_with_email_draft(
+    customer_query: str,
+    style_constraints: StyleConstraints | None = None,
+    occasion: str | None = None,
+    budget_min: float | None = None,
+    budget_max: float | None = None,
+    top_k: int = 6,
+    retrieval_mode: RetrievalMode = RetrievalMode.auto,
+    selected_product_ids: list[str] | None = None,
+    to_email: str | None = None,
+    subject: str | None = None,
+    initial_notice: str | None = None,
+    limit: int = 10,
+) -> CallToolResult:
+    """Prepare a customer email draft, then open a hydrated workspace with aligned recommendations and draft content."""
+    normalized_query = customer_query.strip()
+    if not normalized_query:
+        raise ValueError("customer_query is required.")
+
+    effective_limit = max(1, min(limit, 25))
+    effective_top_k = max(1, min(top_k, 12))
+    lookup = fashion_lookup_customer(normalized_query, limit=effective_limit)
+    selected_customer_id: str | None = None
+    if lookup.mode == "resolved" and lookup.resolved is not None:
+        selected_customer_id = lookup.resolved.id
+    elif len(lookup.candidates) == 1:
+        selected_customer_id = lookup.candidates[0].id
+
+    if not selected_customer_id:
+        notice = (
+            initial_notice.strip()
+            if initial_notice and initial_notice.strip()
+            else "Multiple customer matches found. Select one customer before preparing an email draft."
+        )
+        return fashion_render_customer_search_workspace(
+            query=normalized_query,
+            limit=effective_limit,
+            selected_customer_id=None,
+            initial_style_constraints=style_constraints,
+            initial_notice=notice,
+        )
+
+    recommendation = _associate_recommendation_impl(
+        customer_id=selected_customer_id,
+        occasion=occasion,
+        budget_min=budget_min,
+        budget_max=budget_max,
+        top_k=effective_top_k,
+        retrieval_mode=retrieval_mode,
+        style_constraints=style_constraints,
+    )
+
+    normalized_selected_product_ids: list[str] = []
+    for value in selected_product_ids or []:
+        token = str(value or "").strip()
+        if token and token not in normalized_selected_product_ids:
+            normalized_selected_product_ids.append(token)
+    if not normalized_selected_product_ids:
+        for row in recommendation.recommendation.recommendations[:3]:
+            token = str(row.product_id or "").strip()
+            if token and token not in normalized_selected_product_ids:
+                normalized_selected_product_ids.append(token)
+
+    with SessionLocal() as db:
+        draft = prepare_customer_email_draft(
+            db,
+            store_id=recommendation.store.id,
+            customer_id=selected_customer_id,
+            occasion=occasion,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            top_k=effective_top_k,
+            retrieval_mode=retrieval_mode,
+            selected_product_ids=normalized_selected_product_ids,
+            to_email=to_email,
+            subject=subject,
+            style_constraints=style_constraints,
+        )
+
+    notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
+    if notice is None:
+        notice = f"Prepared draft {draft.message.id} from current recommendations."
+
+    return fashion_render_customer_search_workspace(
+        query=None,
+        limit=effective_limit,
+        selected_customer_id=selected_customer_id,
+        initial_style_constraints=style_constraints,
+        initial_notice=notice,
+        initial_email_draft_id=draft.message.id,
+        initial_email_subject=draft.subject,
+        initial_email_body=draft.message.body_text,
+        initial_recommendation_response=recommendation,
+        initial_selected_product_ids=normalized_selected_product_ids,
     )
 
 
