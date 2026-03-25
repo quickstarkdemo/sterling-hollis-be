@@ -855,6 +855,18 @@ body {
   gap: 10px;
 }
 
+.fw-rec-bulk-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.fw-rec-bulk-left .fw-merch-segmented {
+  max-width: 100%;
+}
+
 .fw-rec-bulk-row .fw-empty {
   margin: 0;
 }
@@ -1660,6 +1672,21 @@ body {
   .fw-send-row {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .fw-rec-bulk-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .fw-rec-bulk-left {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .fw-rec-bulk-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .fw-exec-global-row {

@@ -3504,37 +3504,6 @@ function render() {
             "aria-labelledby": "fw-customer-tab-recommendations",
           },
           el("h2", { className: "fw-panel-title", text: "Product Recommendations" }),
-          el(
-            "div",
-            { className: "fw-merch-segmented", role: "group", "aria-label": "Product scope" },
-            ...[
-              { value: "available", label: "Available" },
-              { value: "future", label: "Future Offerings" },
-              { value: "combined", label: "Combined" },
-            ].map((option) =>
-              el(
-                "button",
-                {
-                  className: `fw-merch-segmented-btn ${recommendationScope === option.value ? "active" : ""}`,
-                  type: "button",
-                  onClick: () => {
-                    const nextScope = normalizeRecommendationScope(option.value);
-                    if (nextScope === state.ui.recommendationScope) {
-                      return;
-                    }
-                    markUserInteraction();
-                    state.ui.recommendationScope = nextScope;
-                    persistWidgetState();
-                    if (nextScope !== "available") {
-                      void loadFutureProducts(selected, { quiet: true });
-                    }
-                    render();
-                  },
-                },
-                option.label,
-              ),
-            ),
-          ),
           response && (strategyPacketId || strategyTagIntensity || activeOccasion)
             ? el(
                 "div",
@@ -3570,7 +3539,7 @@ function render() {
         showFutureProducts && futureState.error
           ? el("p", { className: "fw-empty", text: futureState.error })
           : null,
-        showAvailableProducts && response
+        response
           ? el(
               "div",
                 { className: "fw-draft-grid" },
@@ -3680,53 +3649,86 @@ function render() {
         showAvailableProducts && state.recommendation.error
           ? el("p", { className: "fw-empty", text: state.recommendation.error })
           : null,
-        visibleSelectableIds.length
-          ? el(
+        el(
+          "div",
+          { className: "fw-rec-bulk-row" },
+          el(
+            "div",
+            { className: "fw-rec-bulk-left" },
+            el(
               "div",
-              { className: "fw-rec-bulk-row" },
-              el("p", { className: "fw-empty", text: `${selectedVisibleCount} selected in view` }),
-              el(
-                "div",
-                { className: "fw-rec-bulk-actions" },
+              { className: "fw-merch-segmented", role: "group", "aria-label": "Product scope" },
+              ...[
+                { value: "available", label: "Available" },
+                { value: "future", label: "Future Offerings" },
+                { value: "combined", label: "Combined" },
+              ].map((option) =>
                 el(
                   "button",
                   {
-                    className: "fw-text-button",
+                    className: `fw-merch-segmented-btn ${recommendationScope === option.value ? "active" : ""}`,
                     type: "button",
-                    disabled: allProductsSelected ? "true" : null,
                     onClick: () => {
+                      const nextScope = normalizeRecommendationScope(option.value);
+                      if (nextScope === state.ui.recommendationScope) {
+                        return;
+                      }
                       markUserInteraction();
-                      state.recommendation.selectedProductIds = normalizeProductIds([
-                        ...state.recommendation.selectedProductIds,
-                        ...visibleSelectableIds,
-                      ]);
+                      state.ui.recommendationScope = nextScope;
                       persistWidgetState();
+                      if (nextScope !== "available") {
+                        void loadFutureProducts(selected, { quiet: true });
+                      }
                       render();
                     },
                   },
-                  "Select all",
-                ),
-                el(
-                  "button",
-                  {
-                    className: "fw-text-button",
-                    type: "button",
-                    disabled: !selectedVisibleCount ? "true" : null,
-                    onClick: () => {
-                      markUserInteraction();
-                      const visibleSet = new Set(visibleSelectableIds);
-                      state.recommendation.selectedProductIds = normalizeProductIds(
-                        state.recommendation.selectedProductIds,
-                      ).filter((id) => !visibleSet.has(id));
-                      persistWidgetState();
-                      render();
-                    },
-                  },
-                  "Deselect",
+                  option.label,
                 ),
               ),
-            )
-          : null,
+            ),
+            el("p", { className: "fw-empty", text: `${selectedVisibleCount} selected in view` }),
+          ),
+          el(
+            "div",
+            { className: "fw-rec-bulk-actions" },
+            el(
+              "button",
+              {
+                className: "fw-text-button",
+                type: "button",
+                disabled: !visibleSelectableIds.length || allProductsSelected ? "true" : null,
+                onClick: () => {
+                  markUserInteraction();
+                  state.recommendation.selectedProductIds = normalizeProductIds([
+                    ...state.recommendation.selectedProductIds,
+                    ...visibleSelectableIds,
+                  ]);
+                  persistWidgetState();
+                  render();
+                },
+              },
+              "Select all",
+            ),
+            el(
+              "button",
+              {
+                className: "fw-text-button",
+                type: "button",
+                disabled: !selectedVisibleCount ? "true" : null,
+                onClick: () => {
+                  markUserInteraction();
+                  const visibleSet = new Set(visibleSelectableIds);
+                  state.recommendation.selectedProductIds = normalizeProductIds(
+                    state.recommendation.selectedProductIds,
+                  ).filter((id) => !visibleSet.has(id));
+                  persistWidgetState();
+                  render();
+                },
+              },
+              "Deselect",
+            ),
+          ),
+        ),
         ...(visibleCards.length
           ? visibleCards
           : [
