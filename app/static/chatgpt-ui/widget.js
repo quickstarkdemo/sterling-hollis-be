@@ -32,6 +32,7 @@ const state = {
     query: "",
     selectedCustomerId: null,
     customerTab: "recommendations",
+    recommendationScope: "combined",
     resultsExpanded: false,
     occasion: "",
     budgetMax: "",
@@ -109,6 +110,14 @@ function parsePositiveInt(value, fallback, min, max) {
   }
   const rounded = Math.round(parsed);
   return Math.max(min, Math.min(max, rounded));
+}
+
+function normalizeRecommendationScope(value) {
+  const token = String(value || "").trim().toLowerCase();
+  if (token === "available" || token === "future" || token === "combined") {
+    return token;
+  }
+  return "combined";
 }
 
 function emptyFutureProductsState() {
@@ -354,6 +363,13 @@ function applyUiWidgetState(raw) {
       changed = true;
     }
   }
+  if (raw.recommendationScope !== undefined) {
+    const nextScope = normalizeRecommendationScope(raw.recommendationScope);
+    if (nextScope !== state.ui.recommendationScope) {
+      state.ui.recommendationScope = nextScope;
+      changed = true;
+    }
+  }
   if (typeof raw.occasion === "string" && raw.occasion !== state.ui.occasion) {
     state.ui.occasion = raw.occasion;
     changed = true;
@@ -429,6 +445,9 @@ function loadWidgetState() {
   if (typeof widgetState.customerTab === "string") {
     state.ui.customerTab = widgetState.customerTab === "value" ? "value" : "recommendations";
   }
+  if (widgetState.recommendationScope !== undefined) {
+    state.ui.recommendationScope = normalizeRecommendationScope(widgetState.recommendationScope);
+  }
   if (typeof widgetState.occasion === "string") {
     state.ui.occasion = widgetState.occasion;
   }
@@ -474,6 +493,7 @@ function persistWidgetState() {
       query: state.ui.query,
       selectedCustomerId: state.ui.selectedCustomerId,
       customerTab: state.ui.customerTab,
+      recommendationScope: state.ui.recommendationScope,
       occasion: state.ui.occasion,
       budgetMax: state.ui.budgetMax,
       emailTo: state.ui.emailTo,
@@ -504,6 +524,7 @@ function buildModelContextPayload() {
   return {
     workspace: "customer_search",
     customer_workspace_tab: state.ui.customerTab === "value" ? "value" : "recommendations",
+    recommendation_scope: normalizeRecommendationScope(state.ui.recommendationScope),
     selected_customer_id: selected?.id || null,
     selected_customer_name: selected?.full_name || null,
     occasion: state.ui.occasion.trim() || null,
@@ -1349,6 +1370,28 @@ function normalizeInventoryCheckResponse(raw) {
   return null;
 }
 
+function recommendationImageElement(src, altText) {
+  const fallbackSrc = `${meta.assetBaseUrl}/demo/editorial-fallback.svg`;
+  const preferredSrc = String(src || "").trim() || fallbackSrc;
+  return el("img", {
+    className: "fw-rec-image",
+    src: preferredSrc,
+    alt: altText || "Product image",
+    loading: "lazy",
+    onError: (event) => {
+      const target = event?.currentTarget;
+      if (!target || !(target instanceof HTMLImageElement)) {
+        return;
+      }
+      if (target.dataset.fallbackApplied === "true") {
+        return;
+      }
+      target.dataset.fallbackApplied = "true";
+      target.src = fallbackSrc;
+    },
+  });
+}
+
 function normalizeOccasionToken(value) {
   return String(value || "")
     .trim()
@@ -1362,7 +1405,8 @@ function futureProductsContextKey(selected) {
   const customerId = String(selected?.id || "").trim();
   const storeId = String(selected?.home_store_id || "").trim();
   const occasion = normalizeOccasionToken(state.ui.occasion);
-  return `${customerId}|${storeId}|${occasion}`;
+  const scope = normalizeRecommendationScope(state.ui.recommendationScope);
+  return `${customerId}|${storeId}|${occasion}|${scope}`;
 }
 
 function normalizeMerchInventoryViewResponse(raw) {
@@ -1545,46 +1589,94 @@ async function loadFutureProducts(selected, options = {}) {
   render();
 }
 
-function inventoryCheckState(productId) {
-  if (!productId) {
+function inventoryCheckState(checkKey) {
+  if (!checkKey) {
     return null;
   }
-  return isObject(state.recommendation.inventoryByProduct?.[productId]) ? state.recommendation.inventoryByProduct[productId] : null;
+  return isObject(state.recommendation.inventoryByProduct?.[checkKey]) ? state.recommendation.inventoryByProduct[checkKey] : null;
 }
 
-function inventoryCheckSummaryLine(response) {
+function inventoryCheckKey(item) {
+  const productId = recommendationProductId(item);
+  if (productId) {
+    return `product:${productId}`;
+  }
+  const offerId = String(item?.offer_id || "").trim();
+  if (offerId) {
+    return `offer:${offerId}`;
+  }
+  const fallback = String(item?.title || "").trim().toLowerCase();
+  if (fallback) {
+    return `title:${fallback}`;
+  }
+  return null;
+}
+
+function inventoryCheckArgs(item) {
+  const productId = recommendationProductId(item);
+  if (productId) {
+    return { product_id: productId, limit: 8 };
+  }
+  const args = { limit: 8 };
+  const brand = String(item?.brand || "").trim();
+  const category = String(item?.category || "").trim();
+  const size = String(item?.size || "").trim();
+  if (brand) {
+    args.brand = brand;
+  }
+  if (category) {
+    args.category = category;
+  }
+  if (size) {
+    args.size = size;
+  }
+  if (brand || category || size) {
+    return args;
+  }
+  return null;
+}
+
+function inventoryCheckSummaryLine(response, options = {}) {
   if (!isObject(response) || !Array.isArray(response.rows) || !response.rows.length) {
     return "";
   }
-  const rows = response.rows;
-  const inStockStores = rows.filter((row) => Number(row.in_stock_skus || 0) > 0).length;
-  const top = rows.slice(0, 3).map((row) => {
+  const excludeStoreId = String(options.excludeStoreId || "").trim();
+  const scopeRows = excludeStoreId
+    ? response.rows.filter((row) => String(row?.store_id || "").trim() !== excludeStoreId)
+    : response.rows;
+  if (!scopeRows.length) {
+    return "No other stores found for this item.";
+  }
+  const inStockStores = scopeRows.filter((row) => Number(row.in_stock_skus || 0) > 0).length;
+  const top = scopeRows.slice(0, 3).map((row) => {
     const name = typeof row.store_name === "string" ? row.store_name : String(row.store_id || "store");
     const inStock = compactNumber(row.in_stock_skus || 0);
     const preorder = compactNumber(row.preorder_skus || 0);
     const risk = compactNumber(row.not_in_stock_rate_pct || 0);
     return `${name} (in stock ${inStock}, preorder ${preorder}, risk ${risk}%)`;
   });
-  return `In stock in ${inStockStores}/${rows.length} stores. Top: ${top.join(" • ")}.`;
+  const prefix = excludeStoreId ? "Other stores" : "Stores";
+  return `${prefix} in stock ${inStockStores}/${scopeRows.length}. Top: ${top.join(" • ")}.`;
 }
 
 async function checkInventoryByStore(item) {
-  const productId = recommendationProductId(item);
-  if (!productId) {
+  const checkKey = inventoryCheckKey(item);
+  const args = inventoryCheckArgs(item);
+  if (!checkKey || !args) {
     return;
   }
   markUserInteraction();
   state.recommendation.inventoryByProduct = {
     ...state.recommendation.inventoryByProduct,
-    [productId]: { isLoading: true, error: "", response: null },
+    [checkKey]: { isLoading: true, error: "", response: null },
   };
   render();
 
-  const result = await callTool("fashion_inventory_check_by_store", { product_id: productId, limit: 8 });
+  const result = await callTool("fashion_inventory_check_by_store", args);
   if (result.__toolError) {
     state.recommendation.inventoryByProduct = {
       ...state.recommendation.inventoryByProduct,
-      [productId]: { isLoading: false, error: result.__toolError, response: null },
+      [checkKey]: { isLoading: false, error: result.__toolError, response: null },
     };
     render();
     return;
@@ -1594,7 +1686,7 @@ async function checkInventoryByStore(item) {
   if (!response) {
     state.recommendation.inventoryByProduct = {
       ...state.recommendation.inventoryByProduct,
-      [productId]: { isLoading: false, error: "Inventory check returned an unexpected payload.", response: null },
+      [checkKey]: { isLoading: false, error: "Inventory check returned an unexpected payload.", response: null },
     };
     render();
     return;
@@ -1602,9 +1694,9 @@ async function checkInventoryByStore(item) {
 
   state.recommendation.inventoryByProduct = {
     ...state.recommendation.inventoryByProduct,
-    [productId]: { isLoading: false, error: "", response },
+    [checkKey]: { isLoading: false, error: "", response },
   };
-  setNotice(`Checked inventory by store for ${item?.title || productId}.`);
+  setNotice(`Checked other-store availability for ${item?.title || "item"}.`);
   render();
 }
 

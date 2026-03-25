@@ -162,6 +162,7 @@ from app.services.loader import (
 )
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.customer_value import customer_value_summary
+from app.services.demo_assets import demo_image_url
 from app.services.executive import (
     apply_execution_tags_for_store,
     auto_optimize_strategy,
@@ -3097,7 +3098,7 @@ def _merch_current_inventory_rows(
                 available_on=None,
                 offer_status=None,
                 link=item.link,
-                image_url=item.image_link,
+                image_url=demo_image_url(item.category, item.id, variant_hint=item.brand),
                 perf_revenue=float(perf.get("revenue", 0.0)),
                 perf_units=float(perf.get("units", 0.0)),
                 perf_margin_rate=float(perf.get("margin_rate", 0.0)),
@@ -3158,6 +3159,10 @@ def _merch_potential_offer_rows(
     )
     rows: list[MerchInventoryViewRow] = []
     for item in offers:
+        metadata = item.metadata_json if isinstance(item.metadata_json, dict) else {}
+        source_product_id_token = str(metadata.get("source_product_id") or "").strip()
+        source_product_id = source_product_id_token or None
+        stable_image_key = source_product_id or item.id
         perf_key = (str(item.brand or "").strip().lower(), str(item.category or "").strip().lower())
         if occasion_tokens and perf_key not in perf_by_brand_category:
             continue
@@ -3165,7 +3170,7 @@ def _merch_potential_offer_rows(
         rows.append(
             MerchInventoryViewRow(
                 row_type=MerchInventoryRowType.potential_offer,
-                product_id=None,
+                product_id=source_product_id,
                 offer_id=item.id,
                 title=item.title,
                 brand=item.brand,
@@ -3178,7 +3183,7 @@ def _merch_potential_offer_rows(
                 available_on=item.available_on.isoformat() if item.available_on else None,
                 offer_status=item.status,
                 link=item.link,
-                image_url=item.image_link,
+                image_url=demo_image_url(item.category, stable_image_key, variant_hint=item.brand),
                 perf_revenue=float(perf.get("revenue", 0.0)),
                 perf_units=float(perf.get("units", 0.0)),
                 perf_margin_rate=float(perf.get("margin_rate", 0.0)),
