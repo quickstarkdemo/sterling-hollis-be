@@ -849,6 +849,132 @@ function buildSelectControl(currentValue, options, onChange, extra = {}) {
   return select;
 }
 
+function normalizeBrandSelections(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const tokens = [];
+  const seen = new Set();
+  values.forEach((item) => {
+    const token = String(item || "").trim();
+    if (!token) {
+      return;
+    }
+    const key = token.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    tokens.push(token);
+  });
+  return tokens;
+}
+
+function multiSelectSummary(selectedValues, optionsById, labels) {
+  if (!Array.isArray(selectedValues) || !selectedValues.length) {
+    return labels.all;
+  }
+  if (selectedValues.length === 1) {
+    const label = optionsById.get(selectedValues[0]);
+    return label || `1 ${labels.singular} selected`;
+  }
+  return `${selectedValues.length} ${labels.plural} selected`;
+}
+
+function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText, onApply }) {
+  const normalizedOptions = normalizeOptions(options);
+  const canonicalByLower = new Map(normalizedOptions.map((item) => [item.value.toLowerCase(), item.value]));
+  const selected = new Set();
+  normalizeBrandSelections(selectedValues).forEach((value) => {
+    const canonical = canonicalByLower.get(value.toLowerCase()) || value;
+    selected.add(canonical);
+  });
+
+  const details = el("details", { className: "fw-multi-select" });
+  const optionsById = new Map(normalizedOptions.map((item) => [item.value, item.label]));
+  const summary = el("summary", {
+    className: "fw-input fw-multi-select-summary",
+    text: multiSelectSummary(Array.from(selected), optionsById, labels),
+  });
+  const list = el("div", { className: "fw-multi-select-list" });
+
+  if (!normalizedOptions.length) {
+    list.appendChild(el("p", { className: "fw-empty", text: noOptionsText }));
+  } else {
+    normalizedOptions.forEach((option) => {
+      const checkbox = el("input", {
+        type: "checkbox",
+        checked: selected.has(option.value) ? "true" : null,
+      });
+      const label = el(
+        "label",
+        { className: "fw-multi-select-option" },
+        checkbox,
+        el("span", { text: option.label }),
+      );
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          selected.add(option.value);
+        } else {
+          selected.delete(option.value);
+        }
+      });
+      list.appendChild(label);
+    });
+  }
+
+  const actions = el(
+    "div",
+    { className: "fw-multi-select-actions" },
+    el(
+      "button",
+      {
+        className: "fw-text-button",
+        type: "button",
+        onClick: () => {
+          selected.clear();
+          list.querySelectorAll("input[type='checkbox']").forEach((node) => {
+            node.checked = false;
+          });
+        },
+      },
+      "Clear",
+    ),
+    el(
+      "button",
+      {
+        className: "fw-button secondary",
+        type: "button",
+        onClick: () => {
+          const nextValues = normalizeBrandSelections(Array.from(selected));
+          summary.textContent = multiSelectSummary(nextValues, optionsById, labels);
+          details.open = false;
+          onApply(nextValues);
+        },
+      },
+      "Apply",
+    ),
+  );
+
+  details.appendChild(summary);
+  details.appendChild(el("div", { className: "fw-multi-select-panel" }, list, actions));
+  return details;
+}
+
+function buildBrandsMultiSelect(selectedBrandValuesRaw, options) {
+  return buildCheckMultiSelect({
+    selectedValues: normalizeBrandSelections(selectedBrandValuesRaw),
+    options,
+    labels: { all: "All brands", singular: "brand", plural: "brands" },
+    noOptionsText: "No brands available.",
+    onApply: (nextValues) => {
+      state.ui.selectedBrands = normalizeBrandSelections(nextValues);
+      markFiltersDirty();
+      render();
+    },
+  });
+}
+
 function renderStrategyPanel() {
   const context = isObject(state.payload.strategy_context) ? state.payload.strategy_context : null;
   const strategyEnabled = Boolean(state.payload?.uiHints?.features?.merchStrategyContextEnabled);
@@ -983,25 +1109,7 @@ function renderControlsPanel() {
   const categoryOptions = [{ value: "", label: "Any" }, ...state.payload.uiHints.categoryOptions];
   const compareStoreOptions = state.payload.uiHints.compareStoreOptions;
 
-  const brandSelect = el(
-    "select",
-    {
-      className: "fw-input",
-      multiple: "true",
-      size: "5",
-      onChange: (event) => {
-        state.ui.selectedBrands = Array.from(event.target.selectedOptions).map((item) => item.value);
-        markFiltersDirty();
-      },
-    },
-    ...state.payload.uiHints.brandOptions.map((option) => {
-      const node = el("option", { value: option.value, text: option.label });
-      if (state.ui.selectedBrands.some((item) => item.toLowerCase() === option.value.toLowerCase())) {
-        node.selected = true;
-      }
-      return node;
-    }),
-  );
+  const brandSelect = buildBrandsMultiSelect(state.ui.selectedBrands, state.payload.uiHints.brandOptions);
 
   const controls = el(
     "section",

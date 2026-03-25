@@ -301,14 +301,34 @@ body {
 }
 
 .fw-grid.merch-filters {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  align-items: end;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 }
 
+.fw-merch-clean-filters .fw-field {
+  min-width: 0;
+}
+
+.fw-merch-clean-filters .fw-input,
+.fw-merch-clean-filters .fw-select,
+.fw-merch-clean-filters .fw-multi-select,
+.fw-merch-clean-filters .fw-multi-select-summary {
+  width: 100%;
+  min-width: 0;
+}
+
+.fw-merch-clean-filters .fw-input,
 .fw-merch-clean-filters .fw-select,
 .fw-merch-clean-filters .fw-multi-select-summary {
-  min-height: 36px;
-  padding-top: 6px;
-  padding-bottom: 6px;
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.fw-merch-clean-filters .fw-label {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
 }
 
 .fw-strategy-store-field {

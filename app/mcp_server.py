@@ -988,6 +988,7 @@ def fashion_generate_synthetic(
     products: int = 6000,
     customers: int = 12000,
     orders: int = 80000,
+    supplier_product_offers: int = 1200,
     profile_overrides: dict[str, float] | None = None,
 ) -> SyntheticGenerateResponse:
     """Generate a new synthetic retail dataset and persist CSV artifacts for a run."""
@@ -999,6 +1000,7 @@ def fashion_generate_synthetic(
             "products": products,
             "customers": customers,
             "orders": orders,
+            "supplier_product_offers": supplier_product_offers,
         },
         profile_overrides=profile_overrides or {},
     )
@@ -1013,7 +1015,8 @@ def fashion_load_synthetic(
     """Load generated CSV artifacts for a run into Postgres in parent-to-child order."""
     params = SyntheticLoadRequest(
         run_id=run_id,
-        entities=entities or ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics"],
+        entities=entities
+        or ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics", "supplier_product_offers"],
     )
     return _load_synthetic_impl(params)
 
