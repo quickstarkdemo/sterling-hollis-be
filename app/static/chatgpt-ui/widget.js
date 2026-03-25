@@ -1613,14 +1613,14 @@ function inventoryCheckKey(item) {
 }
 
 function inventoryCheckArgs(item) {
-  const productId = recommendationProductId(item);
-  if (productId) {
-    return { product_id: productId, limit: 8 };
-  }
-  const args = { limit: 8 };
+  const args = { limit: 100 };
+  const productQuery = String(item?.title || "").trim();
   const brand = String(item?.brand || "").trim();
   const category = String(item?.category || "").trim();
   const size = String(item?.size || "").trim();
+  if (productQuery) {
+    args.product_query = productQuery;
+  }
   if (brand) {
     args.brand = brand;
   }
@@ -1630,8 +1630,12 @@ function inventoryCheckArgs(item) {
   if (size) {
     args.size = size;
   }
-  if (brand || category || size) {
+  if (productQuery || brand || category || size) {
     return args;
+  }
+  const productId = recommendationProductId(item);
+  if (productId) {
+    return { product_id: productId, limit: 100 };
   }
   return null;
 }
@@ -1645,10 +1649,21 @@ function inventoryCheckSummaryLine(response, options = {}) {
     ? response.rows.filter((row) => String(row?.store_id || "").trim() !== excludeStoreId)
     : response.rows;
   if (!scopeRows.length) {
-    return "No other stores found for this item.";
+    return "No matching inventory rows found in other stores for this item.";
   }
   const inStockStores = scopeRows.filter((row) => Number(row.in_stock_skus || 0) > 0).length;
-  const top = scopeRows.slice(0, 3).map((row) => {
+  const rankedRows = [...scopeRows].sort((a, b) => {
+    const inStockDelta = Number(b?.in_stock_skus || 0) - Number(a?.in_stock_skus || 0);
+    if (inStockDelta !== 0) {
+      return inStockDelta;
+    }
+    const preorderDelta = Number(b?.preorder_skus || 0) - Number(a?.preorder_skus || 0);
+    if (preorderDelta !== 0) {
+      return preorderDelta;
+    }
+    return Number(a?.not_in_stock_rate_pct || 0) - Number(b?.not_in_stock_rate_pct || 0);
+  });
+  const top = rankedRows.slice(0, 3).map((row) => {
     const name = typeof row.store_name === "string" ? row.store_name : String(row.store_id || "store");
     const inStock = compactNumber(row.in_stock_skus || 0);
     const preorder = compactNumber(row.preorder_skus || 0);
