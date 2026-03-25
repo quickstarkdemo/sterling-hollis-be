@@ -6,6 +6,8 @@ const MODEL_CONTEXT_UPDATE_DEBOUNCE_MS = 600;
 const DRAFT_POLL_INTERVAL_MS = 3500;
 const CUSTOMER_VALUE_LOOKBACK_OPTIONS = ["90", "180", "365"];
 const CUSTOMER_VALUE_FORECAST_OPTIONS = ["4", "8", "12"];
+const FUTURE_PRODUCTS_LIMIT = 8;
+const FUTURE_PRODUCTS_WINDOW_DAYS = 180;
 
 const state = {
   payload: {
@@ -53,6 +55,14 @@ const state = {
     isUpdatingEmailDraft: false,
     selectedProductIds: [],
     inventoryByProduct: {},
+    futureProducts: {
+      contextKey: "",
+      isLoading: false,
+      loaded: false,
+      error: "",
+      rows: [],
+      summary: "",
+    },
     seedAttemptedCustomerId: null,
     seedAttemptedDraftCustomerId: null,
   },
@@ -99,6 +109,17 @@ function parsePositiveInt(value, fallback, min, max) {
   }
   const rounded = Math.round(parsed);
   return Math.max(min, Math.min(max, rounded));
+}
+
+function emptyFutureProductsState() {
+  return {
+    contextKey: "",
+    isLoading: false,
+    loaded: false,
+    error: "",
+    rows: [],
+    summary: "",
+  };
 }
 
 function registerAnalyticsChartCleanup(cleanup) {
@@ -779,6 +800,7 @@ function clearRecommendationState() {
   state.recommendation.isUpdatingEmailDraft = false;
   state.recommendation.selectedProductIds = [];
   state.recommendation.inventoryByProduct = {};
+  state.recommendation.futureProducts = emptyFutureProductsState();
   state.recommendation.seedAttemptedCustomerId = null;
   state.recommendation.seedAttemptedDraftCustomerId = null;
   state.runtime.draftHydrationRequestedForId = null;
@@ -967,6 +989,7 @@ async function loadRecommendations(selected, options = {}) {
   state.recommendation.isLoading = true;
   state.recommendation.error = "";
   state.recommendation.inventoryByProduct = {};
+  state.recommendation.futureProducts = emptyFutureProductsState();
   setNotice(autoSeed ? "Loading starter recommendations..." : "Loading recommendations...");
   persistWidgetState();
   render();
@@ -977,6 +1000,7 @@ async function loadRecommendations(selected, options = {}) {
     state.recommendation.error = result.__toolError;
     state.recommendation.response = null;
     state.recommendation.inventoryByProduct = {};
+    state.recommendation.futureProducts = emptyFutureProductsState();
     setNotice(result.__toolError, "error");
     render();
     return;
@@ -988,6 +1012,7 @@ async function loadRecommendations(selected, options = {}) {
     state.recommendation.error = "Recommendation tool returned an unexpected payload.";
     state.recommendation.response = null;
     state.recommendation.inventoryByProduct = {};
+    state.recommendation.futureProducts = emptyFutureProductsState();
     setNotice(state.recommendation.error, "error");
     render();
     return;
@@ -1010,6 +1035,7 @@ async function loadRecommendations(selected, options = {}) {
       : `Loaded ${rows.length} recommendations for ${selected.full_name || selected.id}.`,
   );
   render();
+  void loadFutureProducts(selected, { quiet: true });
 }
 
 async function clearStyleGuidance(selected) {
@@ -1323,6 +1349,202 @@ function normalizeInventoryCheckResponse(raw) {
   return null;
 }
 
+function normalizeOccasionToken(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/^_+|_+$/g, "");
+}
+
+function futureProductsContextKey(selected) {
+  const customerId = String(selected?.id || "").trim();
+  const storeId = String(selected?.home_store_id || "").trim();
+  const occasion = normalizeOccasionToken(state.ui.occasion);
+  return `${customerId}|${storeId}|${occasion}`;
+}
+
+function normalizeMerchInventoryViewResponse(raw) {
+  if (isObject(raw?.structuredContent)) {
+    return normalizeMerchInventoryViewResponse(raw.structuredContent);
+  }
+  if (isObject(raw?.result)) {
+    return normalizeMerchInventoryViewResponse(raw.result);
+  }
+  if (!isObject(raw)) {
+    return null;
+  }
+  if (Array.isArray(raw.rows) && isObject(raw.store)) {
+    return raw;
+  }
+  const parsed = parseJsonContentPayload(raw);
+  if (parsed) {
+    return normalizeMerchInventoryViewResponse(parsed);
+  }
+  return null;
+}
+
+function isPotentialOfferRow(row) {
+  if (!isObject(row)) {
+    return false;
+  }
+  const rowType = String(row.row_type || "").trim().toLowerCase();
+  return rowType === "potential_offer" || Boolean(String(row.offer_id || "").trim());
+}
+
+function sortPotentialOfferRows(rows) {
+  const statusOrder = {
+    potential: 0,
+    committed: 1,
+    launched: 2,
+  };
+  const parseDateScore = (value) => {
+    const token = String(value || "").trim();
+    if (!token) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    const parsed = Date.parse(`${token}T00:00:00Z`);
+    return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+  };
+  return [...rows].sort((a, b) => {
+    const dateDelta = parseDateScore(a.available_on) - parseDateScore(b.available_on);
+    if (dateDelta !== 0) {
+      return dateDelta;
+    }
+    const aStatus = String(a.offer_status || "").trim().toLowerCase();
+    const bStatus = String(b.offer_status || "").trim().toLowerCase();
+    const statusDelta = (statusOrder[aStatus] ?? 99) - (statusOrder[bStatus] ?? 99);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+}
+
+function dedupePotentialOfferRows(rows) {
+  const uniqueRows = [];
+  const seen = new Set();
+  rows.forEach((row) => {
+    if (!isObject(row)) {
+      return;
+    }
+    const offerId = String(row.offer_id || "").trim();
+    const fallbackKey = [
+      String(row.title || "").trim().toLowerCase(),
+      String(row.brand || "").trim().toLowerCase(),
+      String(row.category || "").trim().toLowerCase(),
+      String(row.available_on || "").trim(),
+      String(row.price || "").trim(),
+    ].join("|");
+    const key = offerId || fallbackKey;
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    uniqueRows.push(row);
+  });
+  return uniqueRows;
+}
+
+async function loadFutureProducts(selected, options = {}) {
+  const quiet = options.quiet === true;
+  const storeId = String(selected?.home_store_id || "").trim();
+  if (!selected || !storeId) {
+    state.recommendation.futureProducts = {
+      contextKey: "",
+      isLoading: false,
+      loaded: false,
+      error: "Future products require a customer home store.",
+      rows: [],
+      summary: "",
+    };
+    if (!quiet) {
+      setNotice("Future products require a customer home store.", "error");
+    }
+    render();
+    return;
+  }
+
+  const contextKey = futureProductsContextKey(selected);
+  state.recommendation.futureProducts = {
+    contextKey,
+    isLoading: true,
+    loaded: false,
+    error: "",
+    rows: [],
+    summary: "",
+  };
+  if (!quiet) {
+    setNotice("Loading future product offers...");
+  }
+  render();
+
+  const args = {
+    store_id: storeId,
+    inventory_scope: "potential",
+    future_window_days: FUTURE_PRODUCTS_WINDOW_DAYS,
+    limit: FUTURE_PRODUCTS_LIMIT * 3,
+  };
+  const occasion = String(state.ui.occasion || "").trim();
+  if (occasion) {
+    args.occasion = occasion;
+  }
+
+  const result = await callTool("fashion_merch_inventory_view", args);
+  if (state.recommendation.futureProducts.contextKey !== contextKey) {
+    return;
+  }
+  if (result.__toolError) {
+    state.recommendation.futureProducts = {
+      contextKey,
+      isLoading: false,
+      loaded: true,
+      error: result.__toolError,
+      rows: [],
+      summary: "",
+    };
+    if (!quiet) {
+      setNotice(result.__toolError, "error");
+    }
+    render();
+    return;
+  }
+
+  const payload = normalizeMerchInventoryViewResponse(result);
+  if (!payload) {
+    state.recommendation.futureProducts = {
+      contextKey,
+      isLoading: false,
+      loaded: true,
+      error: "Future products returned an unexpected payload.",
+      rows: [],
+      summary: "",
+    };
+    if (!quiet) {
+      setNotice("Future products returned an unexpected payload.", "error");
+    }
+    render();
+    return;
+  }
+
+  const potentialRows = sortPotentialOfferRows(
+    dedupePotentialOfferRows((Array.isArray(payload.rows) ? payload.rows : []).filter(isPotentialOfferRow)),
+  ).slice(0, FUTURE_PRODUCTS_LIMIT);
+  state.recommendation.futureProducts = {
+    contextKey,
+    isLoading: false,
+    loaded: true,
+    error: "",
+    rows: potentialRows,
+    summary: typeof payload.summary === "string" ? payload.summary : "",
+  };
+  if (!quiet) {
+    setNotice(`Loaded ${potentialRows.length} future product offers.`);
+  }
+  render();
+}
+
 function inventoryCheckState(productId) {
   if (!productId) {
     return null;
@@ -1539,6 +1761,7 @@ function applyIncomingRecommendationUpdate(incoming, source = "chat") {
   state.recommendation.response = normalized;
   state.recommendation.error = "";
   state.recommendation.inventoryByProduct = {};
+  state.recommendation.futureProducts = emptyFutureProductsState();
   const appliedConstraints = normalizeStyleConstraints(normalized?.recommendation?.applied_style_constraints);
   if (appliedConstraints) {
     state.ui.styleConstraints = appliedConstraints;
@@ -1983,6 +2206,30 @@ function queueSeedRecommendations(selected) {
   }, 0);
 }
 
+function queueSeedFutureProducts(selected) {
+  if (!selected || !selected.id) {
+    return;
+  }
+  const response = state.recommendation.customerId === selected.id ? state.recommendation.response : null;
+  if (!response || !recommendationRows(response).length) {
+    return;
+  }
+  const contextKey = futureProductsContextKey(selected);
+  if (
+    state.recommendation.futureProducts.contextKey === contextKey &&
+    (state.recommendation.futureProducts.isLoading || state.recommendation.futureProducts.loaded)
+  ) {
+    return;
+  }
+  window.setTimeout(() => {
+    const activeSelected = selectedCustomer(Array.isArray(state.payload.results) ? state.payload.results : []);
+    if (!activeSelected || activeSelected.id !== selected.id) {
+      return;
+    }
+    void loadFutureProducts(activeSelected, { quiet: true });
+  }, 0);
+}
+
 function queueSeedEmailDraft(selected) {
   if (!selected || !selected.id) {
     return;
@@ -2067,7 +2314,7 @@ function queueHydrateInitialEmailDraft(selected) {
   }, 0);
 }
 
-function styleConstraintChips(constraints, source, stage) {
+function styleConstraintChips(constraints, source) {
   const normalized = normalizeStyleConstraints(constraints);
   if (!normalized) {
     return [];
@@ -2080,9 +2327,6 @@ function styleConstraintChips(constraints, source, stage) {
       { className: "fw-chip", text: effectiveSource === "chat_image" ? "From uploaded image" : "Image guidance" },
     ),
   );
-  if (stage) {
-    chips.push(el("span", { className: "fw-chip subtle", text: stage.replace(/_/g, " ") }));
-  }
   normalized.target_categories.slice(0, 2).forEach((value) => {
     chips.push(el("span", { className: "fw-chip subtle", text: `category: ${humanizeToken(value)}` }));
   });
@@ -2223,6 +2467,96 @@ function recommendationCards(response) {
       ),
     );
   });
+}
+
+function renderFutureProductCard(item) {
+  const availabilityDate = item.available_on ? formatDateLabel(item.available_on, true) : "TBD";
+  const offerStatus = item.offer_status ? humanizeToken(item.offer_status) : "potential";
+  const perfUnits = Number(item.perf_units || 0);
+  const perfRevenue = Number(item.perf_revenue || 0);
+  const performanceText =
+    perfUnits > 0 || perfRevenue > 0
+      ? `Store signal: ${compactNumber(perfUnits)} units and ${formatCurrencyCompact(perfRevenue)} revenue in lookback window.`
+      : "New supplier offer with no local sell-through history yet.";
+
+  return el(
+    "article",
+    { className: "fw-rec-card merch" },
+    el(
+      "div",
+      { className: "fw-rec-layout" },
+      el(
+        "div",
+        { className: "fw-rec-image-wrap" },
+        el("img", {
+          className: "fw-rec-image",
+          src: item.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`,
+          alt: item.title || item.offer_id || "Future product image",
+          loading: "lazy",
+        }),
+      ),
+      el(
+        "div",
+        { className: "fw-rec-content" },
+        el("h3", { className: "fw-rec-title", text: item.title || item.offer_id || "Future product" }),
+        el("p", { className: "fw-rec-brand", text: item.brand || "Unknown brand" }),
+        el("p", { className: "fw-rec-reason-inline", text: performanceText }),
+        item.link
+          ? el(
+              "a",
+              {
+                className: "fw-link",
+                href: item.link,
+                target: "_blank",
+                rel: "noreferrer",
+              },
+              "Open supplier listing",
+            )
+          : null,
+      ),
+      el(
+        "div",
+        { className: "fw-rec-side" },
+        el("p", { className: "fw-rec-price", text: money(item.price) }),
+        el(
+          "div",
+          { className: "fw-chip-row fw-chip-row-right" },
+          item.category ? el("span", { className: "fw-chip subtle", text: item.category }) : null,
+          el("span", { className: "fw-chip subtle fw-chip-stock-risk", text: offerStatus }),
+          el("span", { className: "fw-chip subtle", text: `available ${availabilityDate}` }),
+        ),
+      ),
+    ),
+  );
+}
+
+function renderFutureProductsSection(selected) {
+  if (!selected) {
+    return null;
+  }
+  const futureState = state.recommendation.futureProducts;
+  const occasion = String(state.ui.occasion || "").trim();
+  const rows = Array.isArray(futureState.rows) ? futureState.rows : [];
+  const loadingFutureProducts = futureState.isLoading || !futureState.loaded;
+  const helperText = occasion
+    ? `Upcoming supplier offers for ${selected.home_store_name || selected.home_store_id || "this store"} filtered by occasion "${occasion}".`
+    : `Upcoming supplier offers for ${selected.home_store_name || selected.home_store_id || "this store"} in the next ${FUTURE_PRODUCTS_WINDOW_DAYS} days.`;
+
+  return el(
+    "section",
+    { className: "fw-merch-groups" },
+    el("h3", { className: "fw-panel-title", text: "Future Products" }),
+    el("p", { className: "fw-empty fw-inline-meta", text: helperText }),
+    futureState.summary ? el("p", { className: "fw-empty fw-inline-meta", text: futureState.summary }) : null,
+    loadingFutureProducts
+      ? el("p", { className: "fw-empty", text: "Loading future product offers..." })
+      : null,
+    futureState.error ? el("p", { className: "fw-empty", text: futureState.error }) : null,
+    !loadingFutureProducts && !futureState.error && !rows.length
+      ? el("p", { className: "fw-empty", text: "No future product offers matched the current filters." })
+      : null,
+    ...(loadingFutureProducts || futureState.error ? [] : rows.map((item) => renderFutureProductCard(item))),
+  );
 }
 
 function renderCustomerValuePanel(selected) {
@@ -2964,21 +3298,24 @@ function render() {
         }
         const selectedProductCount = selectedProductIds.length;
         const allProductsSelected = rows.length > 0 && selectedProductCount === rows.length;
-        const strategy = response?.recommendation?.strategy;
         const responseConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
         const displayConstraints = responseConstraints || activeStyleConstraints;
         const constraintSource =
           response?.recommendation?.constraint_source ||
           (displayConstraints ? displayConstraints.constraint_source : null);
-        const constraintStage = response?.recommendation?.constraint_stage;
+        const strategyPacketId = response?.recommendation?.strategy_packet_id;
         const strategyTagIntensity = response?.recommendation?.strategy_tag_intensity;
-        const retrievalModeRaw = response?.retrieval_mode;
-        const retrievalMode =
-          typeof retrievalModeRaw === "string"
-            ? retrievalModeRaw
-            : typeof retrievalModeRaw?.value === "string"
-              ? retrievalModeRaw.value
-              : null;
+        const activeOccasion = String(state.ui.occasion || "").trim();
+        const occasionMatchCount = rows.filter((item) =>
+          Array.isArray(item.reasons)
+            ? item.reasons.some((reason) => String(reason || "").toLowerCase().includes("occasion"))
+            : false,
+        ).length;
+        const occasionSummaryText = activeOccasion
+          ? occasionMatchCount > 0
+            ? `${occasionMatchCount}/${rows.length || 0} recommendations directly matched "${activeOccasion}" occasion cues.`
+            : `No direct "${activeOccasion}" occasion matches were found, so fallback recommendations were used.`
+          : "";
         const preorderCount = rows.filter((item) => recommendationIsPreorder(item)).length;
         const inStockCount = rows.filter((item) => recommendationIsInStock(item)).length;
         const storeName =
@@ -3005,28 +3342,29 @@ function render() {
             "aria-labelledby": "fw-customer-tab-recommendations",
           },
           el("h2", { className: "fw-panel-title", text: "Product Recommendations" }),
-          response
+          response && (strategyPacketId || strategyTagIntensity || activeOccasion)
             ? el(
                 "div",
                 { className: "fw-chip-row" },
-                strategy ? el("span", { className: "fw-chip", text: strategy }) : null,
-                retrievalMode ? el("span", { className: "fw-chip subtle", text: retrievalMode }) : null,
-                response?.recommendation?.strategy_packet_id
-                  ? el("span", { className: "fw-chip subtle", text: `Strategy ${response.recommendation.strategy_packet_id}` })
+                strategyPacketId
+                  ? el("span", { className: "fw-chip subtle", text: `Strategy ${strategyPacketId}` })
                   : null,
                 strategyTagIntensity
                   ? el("span", { className: "fw-chip subtle", text: `Intensity ${humanizeToken(strategyTagIntensity)}` })
                   : null,
+                activeOccasion ? el("span", { className: "fw-chip subtle", text: `Occasion ${activeOccasion}` }) : null,
               )
             : null,
           displayConstraints
             ? el(
                 "div",
                 { className: "fw-chip-row" },
-                ...styleConstraintChips(displayConstraints, constraintSource, constraintStage),
+                ...styleConstraintChips(displayConstraints, constraintSource),
               )
             : null,
           el("p", { className: "fw-empty fw-inline-meta", text: stockSummaryText }),
+          occasionSummaryText ? el("p", { className: "fw-empty fw-inline-meta", text: occasionSummaryText }) : null,
+          response ? renderFutureProductsSection(selected) : null,
           response
             ? el(
                 "div",
@@ -3211,6 +3549,7 @@ function render() {
   if (selected) {
     queueSeedCustomerValue(selected);
     queueSeedRecommendations(selected);
+    queueSeedFutureProducts(selected);
     queueHydrateInitialEmailDraft(selected);
     queueSeedEmailDraft(selected);
     ensureDraftPolling(selected);

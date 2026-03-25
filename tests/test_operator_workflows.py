@@ -650,6 +650,26 @@ def test_recommendations_respect_customer_sex_and_preferences(monkeypatch):
         assert all((product.gender or "").lower() not in {"women", "female", "girls"} for product in products)
 
 
+def test_recommendations_surface_occasion_match_reasons(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_store_associate_recommend(
+            store_id="1001",
+            customer_id="cust_000001",
+            occasion="workwear",
+            retrieval_mode=RetrievalMode.fast,
+            top_k=6,
+        )
+
+        recs = response.recommendation.recommendations
+        assert recs
+        assert any(
+            any("matched workwear occasion" in reason.lower() for reason in item.reasons)
+            for item in recs
+        )
+
+
 def test_recommendations_exclude_out_of_stock_and_keep_preorder(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)

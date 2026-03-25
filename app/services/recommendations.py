@@ -72,6 +72,21 @@ def _normalize_product_gender(value: str | None) -> str | None:
     return None
 
 
+def _normalize_occasion_token(value: str | None) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return ""
+    return token.replace(" ", "_").replace("-", "_")
+
+
+def _occasion_category_set(occasion: str | None) -> set[str]:
+    token = _normalize_occasion_token(occasion)
+    if not token:
+        return set()
+    categories = OCCASION_TO_CATEGORY.get(token, [])
+    return {_normalize_category_token(value) for value in categories if str(value or "").strip()}
+
+
 def _normalize_style_constraints(raw: StyleConstraints | None) -> StyleConstraints | None:
     if raw is None:
         return None
@@ -258,13 +273,18 @@ def _rule_rerank(
     preferred_categories: set[str],
     customer_sex: str | None,
     style_constraints: StyleConstraints | None,
+    occasion_categories: set[str] | None = None,
 ) -> tuple[float, list[str]]:
     score = float(base_score)
     reasons: list[str] = []
 
-    if req.occasion and product.category in OCCASION_TO_CATEGORY.get(req.occasion, []):
-        score += 0.18
-        reasons.append(f"matched {req.occasion} occasion")
+    normalized_category = _normalize_category_token(product.category)
+    if occasion_categories:
+        if normalized_category in occasion_categories:
+            score += 0.35
+            reasons.append(f"matched {req.occasion} occasion")
+        else:
+            score -= 0.22
 
     price = float(product.price)
     if req.budget_min is not None and price < req.budget_min:
@@ -291,7 +311,6 @@ def _rule_rerank(
         reasons.append("aligned with category preferences")
 
     if style_constraints and style_constraints.target_categories:
-        normalized_category = _normalize_category_token(product.category)
         if normalized_category in set(style_constraints.target_categories):
             score += 0.09
             reasons.append("matched uploaded image category cues")
@@ -355,6 +374,7 @@ def customer_recommendations(
     preferred_categories: set[str] = set()
     customer_sex: str | None = None
     normalized_style_constraints = _normalize_style_constraints(req.style_constraints)
+    occasion_categories = _occasion_category_set(req.occasion)
     applied_style_constraints: StyleConstraints | None = None
     constraint_stage: str | None = None
     if req.customer_id:
@@ -399,6 +419,12 @@ def customer_recommendations(
         products, applied_style_constraints, constraint_stage = _apply_style_constraints_with_relaxation(
             products, normalized_style_constraints
         )
+        if occasion_categories:
+            occasion_filtered = [
+                product for product in products if _normalize_category_token(product.category) in occasion_categories
+            ]
+            if occasion_filtered:
+                products = occasion_filtered
         product_map = {p.id: p for p in products}
         ranked = []
         for pid in ids:
@@ -413,6 +439,7 @@ def customer_recommendations(
                 preferred_categories,
                 customer_sex,
                 applied_style_constraints,
+                occasion_categories=occasion_categories,
             )
             ranked.append((score, p, reasons))
 
@@ -443,8 +470,8 @@ def customer_recommendations(
     strategy = "sql_rules_fast_path"
     def _sql_candidate_products(include_occasion_filter: bool) -> list[Product]:
         query = select(Product).where(Product.store_id == req.store_id)
-        if include_occasion_filter and req.occasion and req.occasion in OCCASION_TO_CATEGORY:
-            query = query.where(Product.category.in_(OCCASION_TO_CATEGORY[req.occasion]))
+        if include_occasion_filter and occasion_categories:
+            query = query.where(Product.category.in_(sorted(occasion_categories)))
         if req.budget_max is not None:
             query = query.where(Product.price <= req.budget_max)
         if req.budget_min is not None:
@@ -474,6 +501,7 @@ def customer_recommendations(
             preferred_categories,
             customer_sex,
             applied_style_constraints,
+            occasion_categories=occasion_categories,
         )
         ranked.append((score, p, reasons))
 
