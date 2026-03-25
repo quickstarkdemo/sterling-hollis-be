@@ -82,6 +82,7 @@ class GenerationVolumes:
     products: int = 6000
     customers: int = 12000
     orders: int = 80000
+    supplier_product_offers: int = 1200
 
 
 @dataclass
@@ -647,6 +648,66 @@ def generate_orders_and_items(
     return orders, items
 
 
+def generate_supplier_product_offers(
+    rng: random.Random,
+    run_id: str,
+    products: list[dict],
+    count: int,
+    now: datetime,
+) -> list[dict]:
+    if count <= 0 or not products:
+        return []
+
+    offers: list[dict] = []
+    status_options = [("potential", 0.58), ("committed", 0.31), ("launched", 0.11)]
+    title_prefixes = ["Capsule", "Limited", "Runway", "Edition", "Studio", "Preview", "Collection"]
+    for idx in range(count):
+        source = products[idx % len(products)]
+        status = _weighted_choice(rng, status_options)
+        if status == "launched":
+            day_offset = rng.randint(-28, 30)
+        elif status == "committed":
+            day_offset = rng.randint(14, 110)
+        else:
+            day_offset = rng.randint(45, 210)
+        available_on = (now.date() + timedelta(days=day_offset)).isoformat()
+        source_price = float(source.get("price") or 0.0)
+        price_multiplier = rng.uniform(0.82, 1.27)
+        offer_price = max(49.0, round(source_price * price_multiplier, 2))
+        category_key = str(source.get("category") or "womens_apparel")
+        category_label = str(CATEGORY_TAXONOMY.get(category_key, {}).get("label") or category_key.replace("_", " ").title())
+        prefix = rng.choice(title_prefixes)
+        style_code = f"{rng.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{rng.randint(100, 999)}"
+        offer_id = f"offer_{idx + 1:06d}"
+        offers.append(
+            {
+                "id": offer_id,
+                "seed_run_id": run_id,
+                "brand": source.get("brand") or "Unknown Brand",
+                "title": f"{source.get('brand')} {prefix} {category_label} {style_code}",
+                "category": category_key,
+                "price": f"{offer_price:.2f}",
+                "size": source.get("size") or rng.choice(KNOWN_SIZES),
+                "season": source.get("season") or rng.choice(KNOWN_SEASONS),
+                "available_on": available_on,
+                "status": status,
+                "link": f"https://fashion.example/supplier-offers/{offer_id}",
+                "image_link": f"https://fashion.example/images/supplier/{offer_id}.jpg",
+                "metadata_json": _json(
+                    {
+                        "source_product_id": source.get("id"),
+                        "source_category": category_key,
+                        "source_brand": source.get("brand"),
+                        "generated_for_demo": True,
+                    }
+                ),
+                "created_at": _iso(now),
+                "updated_at": _iso(now),
+            }
+        )
+    return offers
+
+
 def build_store_daily_metrics(run_id: str, orders: list[dict], items: list[dict], products: list[dict]) -> list[dict]:
     product_lookup = {p["id"]: p for p in products}
     order_lookup = {o["id"]: o for o in orders}
@@ -722,6 +783,7 @@ def materialize_synthetic_csvs(
     orders: list[dict],
     order_items: list[dict],
     store_daily_metrics: list[dict],
+    supplier_product_offers: list[dict],
     analyst_store_category_v1: list[dict],
     raw_snapshot: dict,
     config: dict,
@@ -736,6 +798,7 @@ def materialize_synthetic_csvs(
         "orders": _write_csv(output_dir / "orders.csv", orders),
         "order_items": _write_csv(output_dir / "order_items.csv", order_items),
         "store_daily_metrics": _write_csv(output_dir / "store_daily_metrics.csv", store_daily_metrics),
+        "supplier_product_offers": _write_csv(output_dir / "supplier_product_offers.csv", supplier_product_offers),
         "analyst_store_category_v1": _write_csv(output_dir / ANALYST_STORE_CATEGORY_V1_FILE, analyst_store_category_v1),
     }
 
@@ -787,6 +850,13 @@ def generate_synthetic_dataset(
         now,
     )
     metrics = build_store_daily_metrics(run_id, orders, order_items, products)
+    supplier_product_offers = generate_supplier_product_offers(
+        rng,
+        run_id,
+        products,
+        max(0, int(volumes.supplier_product_offers)),
+        now,
+    )
     analyst_store_category_v1 = generate_analyst_store_category_v1_rows(
         run_id=run_id,
         seed=seed,
@@ -809,6 +879,7 @@ def generate_synthetic_dataset(
         orders=orders,
         order_items=order_items,
         store_daily_metrics=metrics,
+        supplier_product_offers=supplier_product_offers,
         analyst_store_category_v1=analyst_store_category_v1,
         raw_snapshot=raw_snapshot,
         config={

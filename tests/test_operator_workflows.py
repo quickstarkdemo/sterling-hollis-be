@@ -11,7 +11,17 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Customer, CustomerCommunication, ExecutiveStrategyPacket, Order, OrderItem, Product, Store, SyntheticRun
+from app.models import (
+    Customer,
+    CustomerCommunication,
+    ExecutiveStrategyPacket,
+    Order,
+    OrderItem,
+    Product,
+    Store,
+    SupplierProductOffer,
+    SyntheticRun,
+)
 from app.schemas import (
     CompareMode,
     CustomerRecommendationRequest,
@@ -360,6 +370,55 @@ def _seed_data(session):
         ),
     ]
     session.add_all(products)
+    session.add_all(
+        [
+            SupplierProductOffer(
+                id="offer_1",
+                seed_run_id="run_test",
+                brand="Valentino",
+                title="Valentino Capsule Evening Dress",
+                category="womens_apparel",
+                price=Decimal("890.00"),
+                size="M",
+                season="summer",
+                available_on=(now + timedelta(days=40)).date(),
+                status="potential",
+                link="https://fashion.example/supplier-offers/offer_1",
+                image_link="https://fashion.example/images/supplier/offer_1.jpg",
+                metadata_json={"source_product_id": "prod_1"},
+            ),
+            SupplierProductOffer(
+                id="offer_2",
+                seed_run_id="run_test",
+                brand="Brunello Cucinelli",
+                title="Brunello Cucinelli Preview Trouser",
+                category="mens_apparel",
+                price=Decimal("760.00"),
+                size="M",
+                season="fall",
+                available_on=(now + timedelta(days=75)).date(),
+                status="committed",
+                link="https://fashion.example/supplier-offers/offer_2",
+                image_link="https://fashion.example/images/supplier/offer_2.jpg",
+                metadata_json={"source_product_id": "prod_4"},
+            ),
+            SupplierProductOffer(
+                id="offer_3",
+                seed_run_id="run_test",
+                brand="Jimmy Choo",
+                title="Jimmy Choo Future Pump",
+                category="shoes",
+                price=Decimal("610.00"),
+                size="8",
+                season="all-season",
+                available_on=(now + timedelta(days=20)).date(),
+                status="launched",
+                link="https://fashion.example/supplier-offers/offer_3",
+                image_link="https://fashion.example/images/supplier/offer_3.jpg",
+                metadata_json={"source_product_id": "prod_2"},
+            ),
+        ]
+    )
 
     order_current = Order(
         id="order_1",
@@ -1634,11 +1693,13 @@ def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
         assert payload["store"]["id"] == "1001"
         assert payload["filters"]["objective"] == "margin"
         assert payload["filters"]["peer_mode"] == "profile_type"
+        assert payload["filters"]["inventory_scope"] == "combined"
+        assert payload["filters"]["future_window_days"] == 120
         assert payload["uiHints"]["categoryOptions"]
         assert payload["uiHints"]["compareStoreOptions"]
         assert payload["uiHints"]["actionDefinitions"]["feature"]
-        assert payload["initial_result"]["recommendations"]
-        assert payload["last_tool"] == "fashion_merch_action_recommendations"
+        assert payload["initial_result"]["rows"]
+        assert payload["last_tool"] == "fashion_merch_inventory_view"
         assert payload["inventory_check"] is not None
         assert payload["inventory_check"]["current_store"]["store_id"] == "1001"
         assert payload["inventory_check"]["totals"]["not_in_stock_skus"] >= 1
@@ -1703,6 +1764,122 @@ def test_merch_export_csv_supports_all_views(monkeypatch):
         assert trends.view.value == "trends"
         assert "inventory_product_id" in trends.headers
         assert any(row.values.get("export_row_type") == "inventory_product_snapshot" for row in trends.rows)
+
+
+def test_merch_inventory_view_supports_combined_scope_and_filters(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        response = mcp_server.fashion_merch_inventory_view(
+            store_id="1001",
+            category="womens_apparel",
+            brand="Valentino",
+            inventory_scope="combined",
+            future_window_days=120,
+            lookback_days=90,
+            limit=100,
+        )
+
+        assert response.store.id == "1001"
+        assert response.inventory_scope.value == "combined"
+        assert response.rows
+        assert any(row.row_type.value == "current_inventory" for row in response.rows)
+        assert any(row.row_type.value == "potential_offer" for row in response.rows)
+        assert all((row.category or "").lower() == "womens_apparel" for row in response.rows)
+        assert all((row.brand or "").lower() == "valentino" for row in response.rows)
+        assert response.current_rows >= 1
+        assert response.potential_rows >= 1
+
+
+def test_merch_mix_recommendations_are_deterministic_and_include_actions(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        baseline_actions = mcp_server.fashion_merch_action_recommendations(store_id="1001", top_k=6)
+        assert baseline_actions.recommendations
+        override_target = baseline_actions.recommendations[0].product_id
+        overrides = [
+            {
+                "product_id": override_target,
+                "final_action": "drop",
+                "priority_tier": "low",
+                "override_note": "demo override",
+            }
+        ]
+
+        first = mcp_server.fashion_merch_product_mix_recommendations(
+            store_id="1001",
+            top_k=8,
+            inventory_scope="combined",
+            recommendation_overrides=overrides,
+        )
+        second = mcp_server.fashion_merch_product_mix_recommendations(
+            store_id="1001",
+            top_k=8,
+            inventory_scope="combined",
+            recommendation_overrides=overrides,
+        )
+
+        assert first.summary
+        assert first.rows
+        assert [row.model_dump(mode="json") for row in first.rows] == [row.model_dump(mode="json") for row in second.rows]
+        actions = {row.action.value for row in first.rows}
+        assert actions.issubset({"add", "hold", "reduce", "swap"})
+        assert "add" in actions or "swap" in actions
+
+
+def test_merch_export_view_only_matches_active_inventory_view_and_applies_overrides(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        inventory_view = mcp_server.fashion_merch_inventory_view(
+            store_id="1001",
+            inventory_scope="combined",
+            future_window_days=120,
+            lookback_days=90,
+            limit=200,
+        )
+        inventory_export = mcp_server.fashion_merch_export_csv(
+            view="inventory",
+            export_mode="view_only",
+            store_id="1001",
+            inventory_scope="combined",
+            future_window_days=120,
+            lookback_days=90,
+            top_k=9,
+        )
+
+        assert inventory_export.view.value == "inventory"
+        assert inventory_export.row_count == len(inventory_view.rows)
+        assert "export_row_type" not in inventory_export.headers
+        assert all(row.values.get("view") == "inventory" for row in inventory_export.rows)
+
+        baseline_actions = mcp_server.fashion_merch_action_recommendations(store_id="1001", top_k=6)
+        assert baseline_actions.recommendations
+        target_product = baseline_actions.recommendations[0].product_id
+        actions_export = mcp_server.fashion_merch_export_csv(
+            view="actions",
+            export_mode="view_only",
+            store_id="1001",
+            top_k=6,
+            recommendation_overrides=[
+                {
+                    "product_id": target_product,
+                    "final_action": "drop",
+                    "priority_tier": "low",
+                    "override_note": "demo flow override",
+                }
+            ],
+        )
+
+        assert "final_action" in actions_export.headers
+        assert "final_priority_tier" in actions_export.headers
+        assert not any(row.values.get("export_row_type") == "inventory_product_snapshot" for row in actions_export.rows)
+        target_rows = [row for row in actions_export.rows if row.values.get("product_id") == target_product]
+        assert target_rows
+        assert target_rows[0].values.get("final_action") == "drop"
+        assert target_rows[0].values.get("final_priority_tier") == "low"
+        assert target_rows[0].values.get("override_note") == "demo flow override"
 
 
 def test_inventory_by_store_and_facets_tools(monkeypatch):
@@ -1854,6 +2031,8 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_inventory_products" in tool_names
         assert "fashion_product_margin_sales_opportunities" in tool_names
         assert "fashion_merch_export_csv" in tool_names
+        assert "fashion_merch_inventory_view" in tool_names
+        assert "fashion_merch_product_mix_recommendations" in tool_names
         assert "fashion_prepare_customer_email_draft" in tool_names
         assert "fashion_update_customer_email_draft" in tool_names
         assert "fashion_get_customer_email_draft" in tool_names

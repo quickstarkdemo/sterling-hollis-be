@@ -12,11 +12,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, desc, func, or_, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Order, OrderItem, Product, ProductEmbedding, Store, SyntheticRun
+from app.models import Order, OrderItem, Product, ProductEmbedding, Store, SupplierProductOffer, SyntheticRun
 from app.schemas import (
     CompareMode,
     CustomerCommunicationDraftResponse,
@@ -53,6 +53,7 @@ from app.schemas import (
     IndexJobResponse,
     IndexProductsRequest,
     IndexProductsResponse,
+    InventoryScope,
     InventoryByStoreResponse,
     InventoryByStoreRow,
     InventoryCheckByStoreResponse,
@@ -65,9 +66,21 @@ from app.schemas import (
     MerchActionRecommendationsResponse,
     MerchDiagnosticsResponse,
     MerchEffectiveStrategyResponse,
+    MerchExportMode,
     MerchExportCsvRequest,
     MerchExportCsvResponse,
     MerchExportCsvRow,
+    MerchInventoryViewRequest,
+    MerchInventoryViewResponse,
+    MerchInventoryViewRow,
+    MerchInventoryRowType,
+    MerchMixAction,
+    MerchProductMixRecommendationRow,
+    MerchProductMixRecommendationsRequest,
+    MerchProductMixRecommendationsResponse,
+    MerchRecommendationOverride,
+    MerchFinalAction,
+    MerchPriorityTier,
     MerchTrendSummaryResponse,
     MerchWorkspaceFilters,
     MerchWorkspaceView,
@@ -265,6 +278,13 @@ def _as_scalar(value) -> str:
         text = f"{value:.6f}".rstrip("0").rstrip(".")
         return text if text else "0"
     return str(value)
+
+
+def _humanize_token(value: str | None) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return "-"
+    return token.replace("_", " ").replace("-", " ").title()
 
 
 def _csv_text(headers: list[str], rows: list[dict[str, str]]) -> str:
@@ -879,6 +899,7 @@ def _load_synthetic_impl(params: SyntheticLoadRequest) -> SyntheticLoadResponse:
         reset_synthetic_tables(db)
         assert_synthetic_tables_empty(db)
         ordered_entities = ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics"]
+        ordered_entities.append("supplier_product_offers")
         requested = set(params.entities)
         entities = [entity for entity in ordered_entities if entity in requested]
 
@@ -1320,6 +1341,8 @@ def _merch_workspace_payload(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -1328,6 +1351,7 @@ def _merch_workspace_payload(
 ) -> dict:
     bounded_lookback = max(7, min(lookback_days, 730))
     bounded_top_k = max(1, min(top_k, 50))
+    bounded_future_window_days = max(1, min(int(future_window_days or 120), 365))
     effective_objective = objective
     effective_lookback = bounded_lookback
     effective_brand = brand
@@ -1365,7 +1389,7 @@ def _merch_workspace_payload(
         if not effective_category and source_core.category:
             effective_category = source_core.category
 
-    initial_result = fashion_merch_action_recommendations(
+    initial_actions = fashion_merch_action_recommendations(
         store_query=store_query,
         store_id=effective_store_id,
         question=question,
@@ -1380,6 +1404,19 @@ def _merch_workspace_payload(
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
     )
+    initial_inventory = _merch_inventory_view_impl(
+        MerchInventoryViewRequest(
+            store_id=initial_actions.store.id,
+            lookback_days=effective_lookback,
+            category=effective_category,
+            brand=effective_brand,
+            price_band=price_band,
+            occasion=occasion,
+            inventory_scope=inventory_scope,
+            future_window_days=bounded_future_window_days,
+            limit=200,
+        )
+    )
     if settings.merch_strategy_context_enabled and strategy_packet_id:
         with SessionLocal() as db:
             if packet is None:
@@ -1389,36 +1426,36 @@ def _merch_workspace_payload(
             if effective_strategy is None:
                 effective_strategy = get_effective_merch_strategy(
                     db,
-                    store_id=initial_result.store.id,
+                    store_id=initial_actions.store.id,
                     strategy_packet_id=packet.packet_id,
                 )
         strategy_context = _strategy_context_payload(
             packet,
             effective_strategy,
             scope_store_options=scope_store_options,
-            handoff_store_id=handoff_store_id or initial_result.store.id,
-            current_store_id=initial_result.store.id,
+            handoff_store_id=handoff_store_id or initial_actions.store.id,
+            current_store_id=initial_actions.store.id,
         )
     inventory_brand = None
     if effective_brand:
         inventory_brand = str(effective_brand).split(",", 1)[0].strip() or None
     inventory_check = _inventory_check_by_store_impl(
-        store_id=initial_result.store.id,
+        store_id=initial_actions.store.id,
         brand=inventory_brand,
         category=effective_category,
         limit=12,
     )
     inventory_products = _inventory_products_impl(
-        store_id=initial_result.store.id,
+        store_id=initial_actions.store.id,
         brand=inventory_brand,
         category=effective_category,
         limit=80,
     )
-    inventory_check_payload = _inventory_check_summary_payload(inventory_check, current_store_id=initial_result.store.id)
-    compare_store_options = _merch_compare_store_options(initial_result.store.id)
-    brand_options = _merch_brand_options(initial_result.store.id)
+    inventory_check_payload = _inventory_check_summary_payload(inventory_check, current_store_id=initial_actions.store.id)
+    compare_store_options = _merch_compare_store_options(initial_actions.store.id)
+    brand_options = _merch_brand_options(initial_actions.store.id)
     return {
-        "store": initial_result.store.model_dump(mode="json"),
+        "store": initial_actions.store.model_dump(mode="json"),
         "filters": MerchWorkspaceFilters(
             question=question,
             objective=effective_objective,
@@ -1427,21 +1464,23 @@ def _merch_workspace_payload(
             price_band=price_band,
             occasion=occasion,
             lookback_days=effective_lookback,
+            inventory_scope=inventory_scope,
+            future_window_days=bounded_future_window_days,
             compare_mode=compare_mode,
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
             top_k=bounded_top_k,
         ).model_dump(mode="json"),
-        "initial_result": initial_result.model_dump(mode="json"),
+        "initial_result": initial_inventory.model_dump(mode="json"),
         "last_result": None,
-        "last_tool": "fashion_merch_action_recommendations",
+        "last_tool": "fashion_merch_inventory_view",
         "initial_notice": initial_notice,
         "strategy_context": strategy_context,
         "inventory_check": inventory_check_payload,
         "inventory_products": inventory_products.model_dump(mode="json"),
         "uiHints": {
             "questionPlaceholder": "Optional context (e.g., wedding occasion, protect margin, next 8 weeks)",
-            "emptyState": "Run Prioritize, Diagnostics, or Trends to populate this workspace.",
+            "emptyState": "Use Inventory filters to view/export current and potential assortment rows.",
             "categoryOptions": _merch_category_options(),
             "brandOptions": brand_options,
             "compareStoreOptions": compare_store_options,
@@ -1560,16 +1599,614 @@ def _normalized_brand_tokens(raw_brand: str | None) -> list[str]:
     return tokens
 
 
-def _apply_price_band_filter(query, price_band: PriceBand | None):
+def _apply_price_band_filter_column(query, price_column, price_band: PriceBand | None):
     if price_band == PriceBand.under_250:
-        return query.where(Product.price < 250)
+        return query.where(price_column < 250)
     if price_band == PriceBand.band_250_500:
-        return query.where(Product.price >= 250, Product.price < 500)
+        return query.where(price_column >= 250, price_column < 500)
     if price_band == PriceBand.band_500_1000:
-        return query.where(Product.price >= 500, Product.price < 1000)
+        return query.where(price_column >= 500, price_column < 1000)
     if price_band == PriceBand.band_1000_plus:
-        return query.where(Product.price >= 1000)
+        return query.where(price_column >= 1000)
     return query
+
+
+def _apply_price_band_filter(query, price_band: PriceBand | None):
+    return _apply_price_band_filter_column(query, Product.price, price_band)
+
+
+def _merch_inventory_performance_by_product(
+    db,
+    *,
+    store_id: str,
+    product_ids: list[str],
+    lookback_days: int,
+    occasion: str | None,
+) -> dict[str, dict[str, float]]:
+    if not product_ids:
+        return {}
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=max(7, min(int(lookback_days or 90), 730)))
+    query = (
+        select(
+            OrderItem.product_id.label("product_id"),
+            func.sum(OrderItem.line_total).label("revenue"),
+            func.sum(OrderItem.quantity).label("units"),
+            func.sum(OrderItem.line_total * Product.margin_pct).label("margin_value"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(
+            Order.store_id == store_id,
+            OrderItem.product_id.in_(product_ids),
+            Order.ordered_at >= since,
+            Order.ordered_at < now,
+        )
+        .group_by(OrderItem.product_id)
+    )
+    if occasion:
+        query = query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    rows = db.execute(query).all()
+    perf_map: dict[str, dict[str, float]] = {}
+    for row in rows:
+        revenue = float(row.revenue or 0.0)
+        units = float(row.units or 0.0)
+        margin_value = float(row.margin_value or 0.0)
+        perf_map[row.product_id] = {
+            "revenue": revenue,
+            "units": units,
+            "margin_rate": (margin_value / revenue) if revenue > 0 else 0.0,
+        }
+    return perf_map
+
+
+def _merch_category_perf_map(
+    db,
+    *,
+    store_id: str,
+    lookback_days: int,
+    occasion: str | None,
+) -> dict[str, float]:
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=max(7, min(int(lookback_days or 90), 730)))
+    query = (
+        select(
+            func.lower(Product.category).label("category"),
+            func.sum(OrderItem.line_total).label("revenue"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(Order.store_id == store_id, Order.ordered_at >= since, Order.ordered_at < now)
+        .group_by(func.lower(Product.category))
+    )
+    if occasion:
+        query = query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    rows = db.execute(query).all()
+    return {str(row.category or "").strip().lower(): float(row.revenue or 0.0) for row in rows if row.category}
+
+
+def _merch_brand_category_perf_map(
+    db,
+    *,
+    store_id: str,
+    lookback_days: int,
+    occasion: str | None,
+) -> dict[tuple[str, str], dict[str, float]]:
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=max(7, min(int(lookback_days or 90), 730)))
+    query = (
+        select(
+            func.lower(Product.brand).label("brand"),
+            func.lower(Product.category).label("category"),
+            func.sum(OrderItem.line_total).label("revenue"),
+            func.sum(OrderItem.quantity).label("units"),
+            func.sum(OrderItem.line_total * Product.margin_pct).label("margin_value"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(Order.store_id == store_id, Order.ordered_at >= since, Order.ordered_at < now)
+        .group_by(func.lower(Product.brand), func.lower(Product.category))
+    )
+    if occasion:
+        query = query.where(func.lower(Order.occasion) == occasion.strip().lower())
+    rows = db.execute(query).all()
+    perf_map: dict[tuple[str, str], dict[str, float]] = {}
+    for row in rows:
+        brand_token = str(row.brand or "").strip().lower()
+        category_token = str(row.category or "").strip().lower()
+        if not brand_token or not category_token:
+            continue
+        revenue = float(row.revenue or 0.0)
+        units = float(row.units or 0.0)
+        margin_value = float(row.margin_value or 0.0)
+        perf_map[(brand_token, category_token)] = {
+            "revenue": revenue,
+            "units": units,
+            "margin_rate": (margin_value / revenue) if revenue > 0 else 0.0,
+        }
+    return perf_map
+
+
+def _merch_current_inventory_rows(
+    db,
+    *,
+    store_id: str,
+    category: str | None,
+    brand: str | None,
+    price_band: PriceBand | None,
+    occasion: str | None,
+    lookback_days: int,
+    limit: int,
+) -> list[MerchInventoryViewRow]:
+    category_token = str(category or "").strip().lower()
+    brand_tokens = _normalized_brand_tokens(brand)
+    query = select(Product).where(Product.store_id == store_id)
+    if category_token:
+        query = query.where(func.lower(Product.category) == category_token)
+    if brand_tokens:
+        query = query.where(func.lower(Product.brand).in_(brand_tokens))
+    query = _apply_price_band_filter(query, price_band)
+    products = db.scalars(query.order_by(func.lower(Product.title), Product.id).limit(limit)).all()
+    if not products:
+        return []
+    perf_by_product = _merch_inventory_performance_by_product(
+        db,
+        store_id=store_id,
+        product_ids=[item.id for item in products],
+        lookback_days=lookback_days,
+        occasion=occasion,
+    )
+    rows: list[MerchInventoryViewRow] = []
+    for item in products:
+        perf = perf_by_product.get(item.id, {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0})
+        rows.append(
+            MerchInventoryViewRow(
+                row_type=MerchInventoryRowType.current_inventory,
+                product_id=item.id,
+                offer_id=None,
+                title=item.title,
+                brand=item.brand,
+                category=item.category,
+                size=item.size,
+                price=float(item.price) if item.price is not None else None,
+                availability=item.availability,
+                stock_state=_stock_state_label(item.availability, item.inventory_qty),
+                inventory_qty=_int_value(item.inventory_qty),
+                available_on=None,
+                offer_status=None,
+                link=item.link,
+                image_url=item.image_link,
+                perf_revenue=float(perf.get("revenue", 0.0)),
+                perf_units=float(perf.get("units", 0.0)),
+                perf_margin_rate=float(perf.get("margin_rate", 0.0)),
+            )
+        )
+    return rows
+
+
+def _merch_potential_offer_rows(
+    db,
+    *,
+    category: str | None,
+    brand: str | None,
+    price_band: PriceBand | None,
+    occasion: str | None,
+    lookback_days: int,
+    store_id: str,
+    future_window_days: int,
+    limit: int,
+) -> list[MerchInventoryViewRow]:
+    category_token = str(category or "").strip().lower()
+    brand_tokens = _normalized_brand_tokens(brand)
+    today = datetime.now(timezone.utc).date()
+    latest_available = today + timedelta(days=max(1, min(int(future_window_days or 120), 365)))
+
+    query = select(SupplierProductOffer)
+    if category_token:
+        query = query.where(func.lower(SupplierProductOffer.category) == category_token)
+    if brand_tokens:
+        query = query.where(func.lower(SupplierProductOffer.brand).in_(brand_tokens))
+    query = _apply_price_band_filter_column(query, SupplierProductOffer.price, price_band)
+    query = query.where(
+        and_(
+            or_(SupplierProductOffer.available_on.is_(None), SupplierProductOffer.available_on >= today),
+            or_(SupplierProductOffer.available_on.is_(None), SupplierProductOffer.available_on <= latest_available),
+        )
+    )
+    offers = db.scalars(
+        query.order_by(
+            case((SupplierProductOffer.available_on.is_(None), 1), else_=0).asc(),
+            SupplierProductOffer.available_on.asc(),
+            func.lower(SupplierProductOffer.brand).asc(),
+            func.lower(SupplierProductOffer.title).asc(),
+            SupplierProductOffer.id.asc(),
+        ).limit(limit)
+    ).all()
+    if not offers:
+        return []
+
+    perf_by_brand_category = _merch_brand_category_perf_map(
+        db,
+        store_id=store_id,
+        lookback_days=lookback_days,
+        occasion=occasion,
+    )
+    rows: list[MerchInventoryViewRow] = []
+    for item in offers:
+        perf = perf_by_brand_category.get(
+            (str(item.brand or "").strip().lower(), str(item.category or "").strip().lower()),
+            {"revenue": 0.0, "units": 0.0, "margin_rate": 0.0},
+        )
+        rows.append(
+            MerchInventoryViewRow(
+                row_type=MerchInventoryRowType.potential_offer,
+                product_id=None,
+                offer_id=item.id,
+                title=item.title,
+                brand=item.brand,
+                category=item.category,
+                size=item.size,
+                price=float(item.price) if item.price is not None else None,
+                availability=None,
+                stock_state=None,
+                inventory_qty=0,
+                available_on=item.available_on.isoformat() if item.available_on else None,
+                offer_status=item.status,
+                link=item.link,
+                image_url=item.image_link,
+                perf_revenue=float(perf.get("revenue", 0.0)),
+                perf_units=float(perf.get("units", 0.0)),
+                perf_margin_rate=float(perf.get("margin_rate", 0.0)),
+            )
+        )
+    return rows
+
+
+def _merch_inventory_view_impl(params: MerchInventoryViewRequest) -> MerchInventoryViewResponse:
+    with SessionLocal() as db:
+        resolved_store = resolve_store(db, store_query=params.store_query, store_id=params.store_id).resolved
+        effective_limit = max(1, min(int(params.limit or 200), 2000))
+        current_rows: list[MerchInventoryViewRow] = []
+        potential_rows: list[MerchInventoryViewRow] = []
+        if params.inventory_scope in {InventoryScope.current, InventoryScope.combined}:
+            current_rows = _merch_current_inventory_rows(
+                db,
+                store_id=resolved_store.id,
+                category=params.category,
+                brand=params.brand,
+                price_band=params.price_band,
+                occasion=params.occasion,
+                lookback_days=params.lookback_days,
+                limit=effective_limit,
+            )
+        if params.inventory_scope in {InventoryScope.potential, InventoryScope.combined}:
+            potential_rows = _merch_potential_offer_rows(
+                db,
+                category=params.category,
+                brand=params.brand,
+                price_band=params.price_band,
+                occasion=params.occasion,
+                lookback_days=params.lookback_days,
+                store_id=resolved_store.id,
+                future_window_days=params.future_window_days,
+                limit=effective_limit,
+            )
+
+        if params.inventory_scope == InventoryScope.current:
+            rows = list(current_rows[:effective_limit])
+        elif params.inventory_scope == InventoryScope.potential:
+            rows = list(potential_rows[:effective_limit])
+        else:
+            rows = []
+            max_length = max(len(current_rows), len(potential_rows))
+            for index in range(max_length):
+                if index < len(current_rows):
+                    rows.append(current_rows[index])
+                if len(rows) >= effective_limit:
+                    break
+                if index < len(potential_rows):
+                    rows.append(potential_rows[index])
+                if len(rows) >= effective_limit:
+                    break
+        current_count = sum(1 for row in rows if row.row_type == MerchInventoryRowType.current_inventory)
+        potential_count = sum(1 for row in rows if row.row_type == MerchInventoryRowType.potential_offer)
+        summary = (
+            f"{resolved_store.name}: {len(rows)} inventory rows (current {current_count}, potential {potential_count}) "
+            f"for scope {params.inventory_scope.value} in the next {params.future_window_days} days."
+        )
+        return MerchInventoryViewResponse(
+            summary=summary,
+            store=resolved_store,
+            lookback_days=params.lookback_days,
+            category=params.category,
+            brand=params.brand,
+            price_band=params.price_band,
+            occasion=params.occasion,
+            inventory_scope=params.inventory_scope,
+            future_window_days=params.future_window_days,
+            rows=rows,
+            total_rows=len(rows),
+            current_rows=current_count,
+            potential_rows=potential_count,
+        )
+
+
+def _merch_price_band_token(price: float | None) -> str:
+    if price is None:
+        return "unknown"
+    if price < 250:
+        return "under_250"
+    if price < 500:
+        return "250_500"
+    if price < 1000:
+        return "500_1000"
+    return "1000_plus"
+
+
+def _merch_price_fit_score(offer_price: float | None, category_prices: list[float]) -> float:
+    if offer_price is None or not category_prices:
+        return 0.5
+    sorted_prices = sorted(category_prices)
+    median = sorted_prices[len(sorted_prices) // 2]
+    if median <= 0:
+        return 0.5
+    delta = abs(offer_price - median) / median
+    if delta <= 0.2:
+        return 1.0
+    if delta <= 0.4:
+        return 0.7
+    if delta <= 0.6:
+        return 0.45
+    return 0.25
+
+
+def _merch_override_map(overrides: list[MerchRecommendationOverride]) -> dict[str, MerchRecommendationOverride]:
+    mapped: dict[str, MerchRecommendationOverride] = {}
+    for item in overrides or []:
+        product_id = str(item.product_id or "").strip()
+        if not product_id:
+            continue
+        mapped[product_id] = item
+    return mapped
+
+
+def _priority_tier_for_rank(index: int, total: int) -> MerchPriorityTier:
+    if total <= 0:
+        return MerchPriorityTier.medium
+    percentile = (index + 1) / total
+    if percentile <= 0.34:
+        return MerchPriorityTier.high
+    if percentile <= 0.67:
+        return MerchPriorityTier.medium
+    return MerchPriorityTier.low
+
+
+def _merch_mix_analysis_impl(params: MerchProductMixRecommendationsRequest) -> MerchProductMixRecommendationsResponse:
+    inventory_view = _merch_inventory_view_impl(
+        MerchInventoryViewRequest(
+            store_query=params.store_query,
+            store_id=params.store_id,
+            lookback_days=params.lookback_days,
+            category=params.category,
+            brand=params.brand,
+            price_band=params.price_band,
+            occasion=params.occasion,
+            inventory_scope=params.inventory_scope,
+            future_window_days=params.future_window_days,
+            limit=max(200, params.top_k * 8),
+        )
+    )
+    override_map = _merch_override_map(params.recommendation_overrides)
+    current_rows = [row for row in inventory_view.rows if row.row_type == MerchInventoryRowType.current_inventory]
+    offer_rows = [row for row in inventory_view.rows if row.row_type == MerchInventoryRowType.potential_offer]
+
+    category_revenue: dict[str, float] = {}
+    for row in current_rows:
+        category_token = str(row.category or "").strip().lower()
+        category_revenue[category_token] = category_revenue.get(category_token, 0.0) + float(row.perf_revenue or 0.0)
+    total_category_revenue = sum(category_revenue.values()) or 1.0
+    current_brands = {str(row.brand or "").strip().lower() for row in current_rows if row.brand}
+    prices_by_category: dict[str, list[float]] = {}
+    for row in current_rows:
+        category_token = str(row.category or "").strip().lower()
+        if row.price is None:
+            continue
+        prices_by_category.setdefault(category_token, []).append(float(row.price))
+
+    add_candidates: list[tuple[float, MerchInventoryViewRow]] = []
+    for row in offer_rows:
+        category_token = str(row.category or "").strip().lower()
+        category_share = category_revenue.get(category_token, 0.0) / total_category_revenue
+        trend_gap = max(0.0, min(1.0, 1.0 - category_share))
+        brand_token = str(row.brand or "").strip().lower()
+        brand_whitespace = 1.0 if brand_token and brand_token not in current_brands else 0.35
+        price_fit = _merch_price_fit_score(row.price, prices_by_category.get(category_token, []))
+        fit_score = round((trend_gap * 0.45 + brand_whitespace * 0.35 + price_fit * 0.20) * 100.0, 2)
+        add_candidates.append((fit_score, row))
+    add_candidates.sort(
+        key=lambda item: (
+            -item[0],
+            (item[1].available_on or "9999-12-31"),
+            str(item[1].brand or "").lower(),
+            str(item[1].title or "").lower(),
+            str(item[1].offer_id or ""),
+        )
+    )
+
+    reduce_candidates = sorted(
+        current_rows,
+        key=lambda row: (
+            float(row.perf_revenue or 0.0),
+            float(row.perf_units or 0.0),
+            float(row.perf_margin_rate or 0.0),
+            float(row.inventory_qty or 0.0),
+            str(row.title or "").lower(),
+            str(row.product_id or ""),
+        ),
+    )
+    hold_candidates = sorted(
+        current_rows,
+        key=lambda row: (
+            -float(row.perf_revenue or 0.0),
+            -float(row.perf_margin_rate or 0.0),
+            -float(row.perf_units or 0.0),
+            str(row.title or "").lower(),
+            str(row.product_id or ""),
+        ),
+    )
+
+    mix_rows: list[MerchProductMixRecommendationRow] = []
+    used_offer_ids: set[str] = set()
+    used_current_ids: set[str] = set()
+
+    max_swaps = max(1, min(params.top_k // 3, len(add_candidates), len(reduce_candidates))) if add_candidates and reduce_candidates else 0
+    for idx in range(max_swaps):
+        fit_score, offer = add_candidates[idx]
+        replacement = reduce_candidates[idx]
+        offer_id = str(offer.offer_id or "")
+        current_id = str(replacement.product_id or "")
+        if offer_id:
+            used_offer_ids.add(offer_id)
+        if current_id:
+            used_current_ids.add(current_id)
+        expected_impact = round((fit_score * 0.45) - (float(replacement.perf_revenue or 0.0) * 0.02), 2)
+        mix_rows.append(
+            MerchProductMixRecommendationRow(
+                action=MerchMixAction.swap,
+                fit_score=fit_score,
+                expected_mix_impact=expected_impact,
+                rationale=(
+                    f"Swap out slower current item '{replacement.title}' for near-term offer '{offer.title}' "
+                    "to close category/brand whitespace while protecting price-band fit."
+                ),
+                brand=offer.brand,
+                category=offer.category,
+                current_product_id=replacement.product_id,
+                current_title=replacement.title,
+                current_revenue=float(replacement.perf_revenue or 0.0),
+                current_units=float(replacement.perf_units or 0.0),
+                offer_id=offer.offer_id,
+                offer_title=offer.title,
+                offer_status=offer.offer_status,
+                available_on=offer.available_on,
+                offer_price=offer.price,
+            )
+        )
+
+    for fit_score, offer in add_candidates:
+        offer_id = str(offer.offer_id or "")
+        if offer_id and offer_id in used_offer_ids:
+            continue
+        expected_impact = round(fit_score * 0.52, 2)
+        mix_rows.append(
+            MerchProductMixRecommendationRow(
+                action=MerchMixAction.add,
+                fit_score=fit_score,
+                expected_mix_impact=expected_impact,
+                rationale=(
+                    f"Add potential offer '{offer.title}' for {_humanize_token(offer.category)}. "
+                    "Fit score reflects category trend gap, brand whitespace, and price-band alignment."
+                ),
+                brand=offer.brand,
+                category=offer.category,
+                offer_id=offer.offer_id,
+                offer_title=offer.title,
+                offer_status=offer.offer_status,
+                available_on=offer.available_on,
+                offer_price=offer.price,
+            )
+        )
+
+    for row in reduce_candidates:
+        product_id = str(row.product_id or "")
+        if product_id and product_id in used_current_ids:
+            continue
+        override = override_map.get(product_id)
+        force_reduce = override is not None and override.final_action in {MerchFinalAction.deprioritize, MerchFinalAction.drop}
+        weak_perf = float(row.perf_revenue or 0.0) <= 0.0 or float(row.perf_units or 0.0) <= 1.0
+        if not force_reduce and not weak_perf:
+            continue
+        fit_score = round(max(10.0, 100.0 - (float(row.perf_revenue or 0.0) * 0.05)), 2)
+        expected_impact = round(max(0.0, (float(row.inventory_qty or 0.0) * 0.8) - float(row.perf_revenue or 0.0) * 0.01), 2)
+        rationale = (
+            f"Reduce '{row.title}' due to inventory pressure vs. demand."
+            if not force_reduce
+            else f"Reduce '{row.title}' to honor manual override ({override.final_action.value})."
+        )
+        mix_rows.append(
+            MerchProductMixRecommendationRow(
+                action=MerchMixAction.reduce,
+                fit_score=fit_score,
+                expected_mix_impact=expected_impact,
+                rationale=rationale,
+                brand=row.brand,
+                category=row.category,
+                current_product_id=row.product_id,
+                current_title=row.title,
+                current_revenue=float(row.perf_revenue or 0.0),
+                current_units=float(row.perf_units or 0.0),
+            )
+        )
+
+    for index, row in enumerate(hold_candidates):
+        product_id = str(row.product_id or "")
+        override = override_map.get(product_id)
+        if override and override.final_action in {MerchFinalAction.feature, MerchFinalAction.promote}:
+            keep = True
+        else:
+            keep = float(row.perf_revenue or 0.0) > 0 and float(row.perf_margin_rate or 0.0) >= 0.4
+        if not keep:
+            continue
+        fit_score = round(min(99.0, 45.0 + float(row.perf_margin_rate or 0.0) * 55.0), 2)
+        expected_impact = round(float(row.perf_revenue or 0.0) * 0.015, 2)
+        rationale = (
+            f"Hold '{row.title}' as a strong core performer."
+            if override is None
+            else f"Hold '{row.title}' to align with manual override ({override.final_action.value})."
+        )
+        mix_rows.append(
+            MerchProductMixRecommendationRow(
+                action=MerchMixAction.hold,
+                fit_score=fit_score,
+                expected_mix_impact=expected_impact,
+                rationale=rationale,
+                brand=row.brand,
+                category=row.category,
+                current_product_id=row.product_id,
+                current_title=row.title,
+                current_revenue=float(row.perf_revenue or 0.0),
+                current_units=float(row.perf_units or 0.0),
+            )
+        )
+        if index >= params.top_k * 2:
+            break
+
+    mix_rows.sort(
+        key=lambda item: (
+            {"swap": 0, "add": 1, "hold": 2, "reduce": 3}.get(item.action.value, 9),
+            -float(item.fit_score or 0.0),
+            -(float(item.expected_mix_impact or 0.0)),
+            str(item.offer_title or item.current_title or "").lower(),
+        )
+    )
+    limited_rows = mix_rows[: max(1, min(params.top_k, 100))]
+    summary = (
+        f"{inventory_view.store.name}: generated {len(limited_rows)} mix recommendations "
+        f"from scope {params.inventory_scope.value} using {len(override_map)} manual overrides."
+    )
+    return MerchProductMixRecommendationsResponse(
+        summary=summary,
+        store=inventory_view.store,
+        lookback_days=params.lookback_days,
+        top_k=params.top_k,
+        category=params.category,
+        brand=params.brand,
+        price_band=params.price_band,
+        occasion=params.occasion,
+        inventory_scope=params.inventory_scope,
+        future_window_days=params.future_window_days,
+        rows=limited_rows,
+    )
 
 
 def _merch_inventory_snapshot_rows(
@@ -1657,6 +2294,7 @@ def _merch_inventory_snapshot_rows(
 
 def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvResponse:
     generated_at = datetime.now(timezone.utc)
+    override_map = _merch_override_map(params.recommendation_overrides or [])
     with SessionLocal() as db:
         if params.view == MerchWorkspaceView.actions:
             result = merchandising_action_recommendations(
@@ -1695,12 +2333,23 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 "compare_mode",
                 "peer_mode",
                 "lookback_days",
+                "model_priority_tier",
+                "final_action",
+                "final_priority_tier",
+                "override_note",
                 "rationale",
                 "link",
                 "image_url",
             ]
-            rows = [
-                {
+            rows = []
+            total_recommendations = max(1, len(result.recommendations))
+            for index, item in enumerate(result.recommendations):
+                model_priority_tier = _priority_tier_for_rank(index, total_recommendations)
+                override = override_map.get(item.product_id)
+                final_action = override.final_action.value if override else item.action.value
+                final_priority = override.priority_tier.value if override else model_priority_tier.value
+                rows.append(
+                    {
                     "store_id": result.store.id,
                     "store_name": result.store.name,
                     "view": MerchWorkspaceView.actions.value,
@@ -1720,13 +2369,17 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                     "compare_mode": _as_scalar(result.compare_mode),
                     "peer_mode": _as_scalar(result.peer_mode),
                     "lookback_days": _as_scalar(result.lookback_days),
+                    "model_priority_tier": model_priority_tier.value,
+                    "final_action": final_action,
+                    "final_priority_tier": final_priority,
+                    "override_note": _as_scalar(override.override_note if override else None),
                     "rationale": _as_scalar(item.rationale),
                     "link": _as_scalar(item.link),
                     "image_url": _as_scalar(item.image_url),
                 }
-                for item in result.recommendations
-            ]
+                )
             store = result.store
+            lookback_for_snapshot = result.lookback_days
         elif params.view == MerchWorkspaceView.diagnostics:
             result = merchandising_diagnostics(
                 db,
@@ -1794,7 +2447,8 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 for item in result.insights
             ]
             store = result.store
-        else:
+            lookback_for_snapshot = result.lookback_days
+        elif params.view == MerchWorkspaceView.trends:
             result = merchandising_trend_summary(
                 db,
                 store_query=params.store_query,
@@ -1882,37 +2536,182 @@ def _merch_export_csv_impl(params: MerchExportCsvRequest) -> MerchExportCsvRespo
                 for point in result.time_series
             )
             store = result.store
-
-        inventory_export_headers = [
-            "export_row_type",
-            "inventory_product_id",
-            "inventory_title",
-            "inventory_brand",
-            "inventory_category",
-            "inventory_price",
-            "inventory_availability",
-            "inventory_stock_state",
-            "inventory_qty",
-            "inventory_perf_revenue",
-            "inventory_perf_units",
-            "inventory_perf_margin_rate",
-        ]
-        for header in inventory_export_headers:
-            if header not in headers:
-                headers.append(header)
-        rows.extend(
-            _merch_inventory_snapshot_rows(
-                db,
-                store_id=store.id,
-                store_name=store.name,
-                view=params.view,
-                lookback_days=result.lookback_days,
-                category=params.category,
-                brand=params.brand,
-                price_band=params.price_band,
-                occasion=params.occasion,
+            lookback_for_snapshot = result.lookback_days
+        elif params.view == MerchWorkspaceView.inventory:
+            result = _merch_inventory_view_impl(
+                MerchInventoryViewRequest(
+                    store_query=params.store_query,
+                    store_id=params.store_id,
+                    lookback_days=params.lookback_days,
+                    category=params.category,
+                    brand=params.brand,
+                    price_band=params.price_band,
+                    occasion=params.occasion,
+                    inventory_scope=params.inventory_scope,
+                    future_window_days=params.future_window_days,
+                    limit=300,
+                )
             )
-        )
+            headers = [
+                "store_id",
+                "store_name",
+                "view",
+                "row_type",
+                "product_id",
+                "offer_id",
+                "title",
+                "brand",
+                "category",
+                "size",
+                "price",
+                "availability",
+                "stock_state",
+                "inventory_qty",
+                "available_on",
+                "offer_status",
+                "perf_revenue",
+                "perf_units",
+                "perf_margin_rate",
+                "inventory_scope",
+                "future_window_days",
+                "lookback_days",
+                "link",
+                "image_url",
+            ]
+            rows = [
+                {
+                    "store_id": result.store.id,
+                    "store_name": result.store.name,
+                    "view": MerchWorkspaceView.inventory.value,
+                    "row_type": _as_scalar(item.row_type),
+                    "product_id": _as_scalar(item.product_id),
+                    "offer_id": _as_scalar(item.offer_id),
+                    "title": _as_scalar(item.title),
+                    "brand": _as_scalar(item.brand),
+                    "category": _as_scalar(item.category),
+                    "size": _as_scalar(item.size),
+                    "price": _as_scalar(item.price),
+                    "availability": _as_scalar(item.availability),
+                    "stock_state": _as_scalar(item.stock_state),
+                    "inventory_qty": _as_scalar(item.inventory_qty),
+                    "available_on": _as_scalar(item.available_on),
+                    "offer_status": _as_scalar(item.offer_status),
+                    "perf_revenue": _as_scalar(item.perf_revenue),
+                    "perf_units": _as_scalar(item.perf_units),
+                    "perf_margin_rate": _as_scalar(item.perf_margin_rate),
+                    "inventory_scope": _as_scalar(result.inventory_scope),
+                    "future_window_days": _as_scalar(result.future_window_days),
+                    "lookback_days": _as_scalar(result.lookback_days),
+                    "link": _as_scalar(item.link),
+                    "image_url": _as_scalar(item.image_url),
+                }
+                for item in result.rows
+            ]
+            store = result.store
+            lookback_for_snapshot = result.lookback_days
+        else:
+            result = _merch_mix_analysis_impl(
+                MerchProductMixRecommendationsRequest(
+                    store_query=params.store_query,
+                    store_id=params.store_id,
+                    lookback_days=params.lookback_days,
+                    top_k=params.top_k,
+                    category=params.category,
+                    brand=params.brand,
+                    price_band=params.price_band,
+                    occasion=params.occasion,
+                    inventory_scope=params.inventory_scope,
+                    future_window_days=params.future_window_days,
+                    recommendation_overrides=params.recommendation_overrides,
+                )
+            )
+            headers = [
+                "store_id",
+                "store_name",
+                "view",
+                "action",
+                "fit_score",
+                "expected_mix_impact",
+                "brand",
+                "category",
+                "current_product_id",
+                "current_title",
+                "current_revenue",
+                "current_units",
+                "offer_id",
+                "offer_title",
+                "offer_status",
+                "available_on",
+                "offer_price",
+                "inventory_scope",
+                "future_window_days",
+                "lookback_days",
+                "rationale",
+            ]
+            rows = [
+                {
+                    "store_id": result.store.id,
+                    "store_name": result.store.name,
+                    "view": MerchWorkspaceView.mix_analysis.value,
+                    "action": _as_scalar(item.action),
+                    "fit_score": _as_scalar(item.fit_score),
+                    "expected_mix_impact": _as_scalar(item.expected_mix_impact),
+                    "brand": _as_scalar(item.brand),
+                    "category": _as_scalar(item.category),
+                    "current_product_id": _as_scalar(item.current_product_id),
+                    "current_title": _as_scalar(item.current_title),
+                    "current_revenue": _as_scalar(item.current_revenue),
+                    "current_units": _as_scalar(item.current_units),
+                    "offer_id": _as_scalar(item.offer_id),
+                    "offer_title": _as_scalar(item.offer_title),
+                    "offer_status": _as_scalar(item.offer_status),
+                    "available_on": _as_scalar(item.available_on),
+                    "offer_price": _as_scalar(item.offer_price),
+                    "inventory_scope": _as_scalar(result.inventory_scope),
+                    "future_window_days": _as_scalar(result.future_window_days),
+                    "lookback_days": _as_scalar(result.lookback_days),
+                    "rationale": _as_scalar(item.rationale),
+                }
+                for item in result.rows
+            ]
+            store = result.store
+            lookback_for_snapshot = result.lookback_days
+
+        if params.export_mode == MerchExportMode.legacy_combined and params.view in {
+            MerchWorkspaceView.actions,
+            MerchWorkspaceView.diagnostics,
+            MerchWorkspaceView.trends,
+        }:
+            inventory_export_headers = [
+                "export_row_type",
+                "inventory_product_id",
+                "inventory_title",
+                "inventory_brand",
+                "inventory_category",
+                "inventory_price",
+                "inventory_availability",
+                "inventory_stock_state",
+                "inventory_qty",
+                "inventory_perf_revenue",
+                "inventory_perf_units",
+                "inventory_perf_margin_rate",
+            ]
+            for header in inventory_export_headers:
+                if header not in headers:
+                    headers.append(header)
+            rows.extend(
+                _merch_inventory_snapshot_rows(
+                    db,
+                    store_id=store.id,
+                    store_name=store.name,
+                    view=params.view,
+                    lookback_days=lookback_for_snapshot,
+                    category=params.category,
+                    brand=params.brand,
+                    price_band=params.price_band,
+                    occasion=params.occasion,
+                )
+            )
 
     csv_payload = _csv_text(headers, rows)
     filename = f"merch_{store.id}_{params.view.value}_{generated_at.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -2206,6 +3005,8 @@ def fashion_render_merch_workspace(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -2227,6 +3028,8 @@ def fashion_render_merch_workspace(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
@@ -2267,6 +3070,8 @@ def fashion_open_merch_workspace(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -2299,6 +3104,8 @@ def fashion_open_merch_workspace(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
         compare_mode=compare_mode,
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,
@@ -2888,6 +3695,74 @@ def fashion_merch_trend_summary(
             peer_mode=peer_mode,
             compare_store_id=compare_store_id,
         )
+
+
+@mcp.tool(
+    name="fashion_merch_inventory_view",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_merch_inventory_view(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    limit: int = 200,
+) -> MerchInventoryViewResponse:
+    """Return inventory-first rows for merch workflows, including optional potential supplier offers."""
+    params = MerchInventoryViewRequest(
+        store_query=store_query,
+        store_id=store_id,
+        lookback_days=lookback_days,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        limit=limit,
+    )
+    return _merch_inventory_view_impl(params)
+
+
+@mcp.tool(
+    name="fashion_merch_product_mix_recommendations",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_merch_product_mix_recommendations(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    lookback_days: int = 90,
+    top_k: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    recommendation_overrides: list[MerchRecommendationOverride] | None = None,
+) -> MerchProductMixRecommendationsResponse:
+    """Generate deterministic product-mix add/hold/reduce/swap recommendations from active merch filters."""
+    params = MerchProductMixRecommendationsRequest(
+        store_query=store_query,
+        store_id=store_id,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        price_band=price_band,
+        occasion=occasion,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        recommendation_overrides=recommendation_overrides or [],
+    )
+    return _merch_mix_analysis_impl(params)
 
 
 @mcp.tool(
@@ -3499,6 +4374,7 @@ def fashion_inventory_facets(
 )
 def fashion_merch_export_csv(
     view: MerchWorkspaceView = MerchWorkspaceView.actions,
+    export_mode: MerchExportMode = MerchExportMode.legacy_combined,
     store_query: str | None = None,
     store_id: str | None = None,
     question: str | None = None,
@@ -3509,6 +4385,9 @@ def fashion_merch_export_csv(
     brand: str | None = None,
     price_band: PriceBand | None = None,
     occasion: str | None = None,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    recommendation_overrides: list[MerchRecommendationOverride] | None = None,
     compare_mode: CompareMode = CompareMode.peer_and_prior_period,
     peer_mode: PeerMode = PeerMode.state_and_profile,
     compare_store_id: str | None = None,
@@ -3516,6 +4395,7 @@ def fashion_merch_export_csv(
     """Export merch workspace results as deterministic CSV text for copy/paste into spreadsheets."""
     params = MerchExportCsvRequest(
         view=view,
+        export_mode=export_mode,
         store_query=store_query,
         store_id=store_id,
         question=question,
@@ -3526,6 +4406,9 @@ def fashion_merch_export_csv(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        recommendation_overrides=recommendation_overrides or [],
         compare_mode=compare_mode,
         peer_mode=peer_mode,
         compare_store_id=compare_store_id,

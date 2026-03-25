@@ -508,6 +508,30 @@ body {
   gap: 10px;
 }
 
+.fw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.fw-table th,
+.fw-table td {
+  border: 1px solid #d8e2ec;
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+}
+
+.fw-table th {
+  background: #f4f8fc;
+  color: #2d4f68;
+  font-weight: 700;
+}
+
+.fw-table tbody tr:nth-child(even) {
+  background: #fbfdff;
+}
+
 .fw-result {
   width: 100%;
   text-align: left;

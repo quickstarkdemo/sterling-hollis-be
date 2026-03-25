@@ -11,6 +11,7 @@ class SyntheticVolumes(BaseModel):
     products: int = 6000
     customers: int = 12000
     orders: int = 80000
+    supplier_product_offers: int = 1200
 
 
 class SyntheticGenerateRequest(BaseModel):
@@ -31,7 +32,15 @@ class SyntheticGenerateResponse(BaseModel):
 class SyntheticLoadRequest(BaseModel):
     run_id: str
     entities: list[str] = Field(
-        default_factory=lambda: ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics"]
+        default_factory=lambda: [
+            "stores",
+            "customers",
+            "products",
+            "orders",
+            "order_items",
+            "store_daily_metrics",
+            "supplier_product_offers",
+        ]
     )
 
 
@@ -489,6 +498,38 @@ class SmsReviewBootstrapResponse(BaseModel):
     history: list[CustomerCommunicationRecord] = Field(default_factory=list)
 
 
+class InventoryScope(str, Enum):
+    current = "current"
+    potential = "potential"
+    combined = "combined"
+
+
+class SupplierOfferStatus(str, Enum):
+    potential = "potential"
+    committed = "committed"
+    launched = "launched"
+
+
+class MerchFinalAction(str, Enum):
+    feature = "feature"
+    promote = "promote"
+    deprioritize = "deprioritize"
+    drop = "drop"
+
+
+class MerchPriorityTier(str, Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class MerchRecommendationOverride(BaseModel):
+    product_id: str
+    final_action: MerchFinalAction
+    priority_tier: MerchPriorityTier
+    override_note: str | None = None
+
+
 class MerchWorkspaceFilters(BaseModel):
     question: str | None = None
     objective: Objective = Objective.margin
@@ -497,6 +538,8 @@ class MerchWorkspaceFilters(BaseModel):
     price_band: PriceBand | None = None
     occasion: str | None = None
     lookback_days: int = 90
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
     compare_mode: CompareMode = CompareMode.peer_and_prior_period
     peer_mode: PeerMode = PeerMode.state_and_profile
     compare_store_id: str | None = None
@@ -513,6 +556,8 @@ class MerchWorkspaceView(str, Enum):
     actions = "actions"
     diagnostics = "diagnostics"
     trends = "trends"
+    inventory = "inventory"
+    mix_analysis = "mix_analysis"
 
 
 class MerchActionRecommendationItem(BaseModel):
@@ -619,9 +664,142 @@ class MerchTrendSummaryResponse(BaseModel):
 class MerchWorkspaceBootstrapResponse(BaseModel):
     store: ResolvedStore
     filters: MerchWorkspaceFilters
-    initial_result: MerchActionRecommendationsResponse
-    last_result: MerchActionRecommendationsResponse | MerchDiagnosticsResponse | MerchTrendSummaryResponse | None = None
+    initial_result: (
+        MerchActionRecommendationsResponse
+        | MerchDiagnosticsResponse
+        | MerchTrendSummaryResponse
+        | MerchInventoryViewResponse
+        | MerchProductMixRecommendationsResponse
+    )
+    last_result: (
+        MerchActionRecommendationsResponse
+        | MerchDiagnosticsResponse
+        | MerchTrendSummaryResponse
+        | MerchInventoryViewResponse
+        | MerchProductMixRecommendationsResponse
+        | None
+    ) = None
     last_tool: str | None = None
+
+
+class MerchInventoryRowType(str, Enum):
+    current_inventory = "current_inventory"
+    potential_offer = "potential_offer"
+
+
+class MerchInventoryViewRow(BaseModel):
+    row_type: MerchInventoryRowType
+    product_id: str | None = None
+    offer_id: str | None = None
+    title: str
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    price: float | None = None
+    availability: str | None = None
+    stock_state: str | None = None
+    inventory_qty: int = 0
+    available_on: str | None = None
+    offer_status: SupplierOfferStatus | None = None
+    link: str | None = None
+    image_url: str | None = None
+    perf_revenue: float = 0.0
+    perf_units: float = 0.0
+    perf_margin_rate: float = 0.0
+
+
+class MerchInventoryViewResponse(BaseModel):
+    summary: str
+    store: ResolvedStore
+    lookback_days: int
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    inventory_scope: InventoryScope
+    future_window_days: int
+    rows: list[MerchInventoryViewRow] = Field(default_factory=list)
+    total_rows: int = 0
+    current_rows: int = 0
+    potential_rows: int = 0
+
+
+class MerchMixAction(str, Enum):
+    add = "add"
+    hold = "hold"
+    reduce = "reduce"
+    swap = "swap"
+
+
+class MerchProductMixRecommendationRow(BaseModel):
+    action: MerchMixAction
+    fit_score: float
+    expected_mix_impact: float
+    rationale: str
+    brand: str | None = None
+    category: str | None = None
+    current_product_id: str | None = None
+    current_title: str | None = None
+    current_revenue: float | None = None
+    current_units: float | None = None
+    offer_id: str | None = None
+    offer_title: str | None = None
+    offer_status: SupplierOfferStatus | None = None
+    available_on: str | None = None
+    offer_price: float | None = None
+
+
+class MerchProductMixRecommendationsResponse(BaseModel):
+    summary: str
+    store: ResolvedStore
+    lookback_days: int
+    top_k: int
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    inventory_scope: InventoryScope
+    future_window_days: int
+    rows: list[MerchProductMixRecommendationRow] = Field(default_factory=list)
+
+
+class MerchInventoryViewRequest(BaseModel):
+    store_query: str | None = None
+    store_id: str | None = None
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    limit: int = Field(default=200, ge=1, le=2000)
+
+    @model_validator(mode="after")
+    def validate_store_target(self) -> "MerchInventoryViewRequest":
+        if not self.store_query and not self.store_id:
+            raise ValueError("Provide store_query or store_id.")
+        return self
+
+
+class MerchProductMixRecommendationsRequest(BaseModel):
+    store_query: str | None = None
+    store_id: str | None = None
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    top_k: int = Field(default=12, ge=1, le=100)
+    category: str | None = None
+    brand: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    recommendation_overrides: list[MerchRecommendationOverride] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_store_target(self) -> "MerchProductMixRecommendationsRequest":
+        if not self.store_query and not self.store_id:
+            raise ValueError("Provide store_query or store_id.")
+        return self
 
 
 class ExecutiveWorkspaceFilters(BaseModel):
@@ -1062,8 +1240,14 @@ class ExecutiveExportCsvResponse(BaseModel):
     generated_at: datetime
 
 
+class MerchExportMode(str, Enum):
+    legacy_combined = "legacy_combined"
+    view_only = "view_only"
+
+
 class MerchExportCsvRequest(BaseModel):
     view: MerchWorkspaceView = MerchWorkspaceView.actions
+    export_mode: MerchExportMode = MerchExportMode.legacy_combined
     store_query: str | None = None
     store_id: str | None = None
     question: str | None = None
@@ -1074,6 +1258,9 @@ class MerchExportCsvRequest(BaseModel):
     brand: str | None = None
     price_band: PriceBand | None = None
     occasion: str | None = None
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    recommendation_overrides: list[MerchRecommendationOverride] = Field(default_factory=list)
     compare_mode: CompareMode = CompareMode.peer_and_prior_period
     peer_mode: PeerMode = PeerMode.state_and_profile
     compare_store_id: str | None = None
@@ -1082,6 +1269,15 @@ class MerchExportCsvRequest(BaseModel):
     def validate_store_target(self) -> "MerchExportCsvRequest":
         if not self.store_query and not self.store_id:
             raise ValueError("Provide store_query or store_id.")
+        deduped: list[MerchRecommendationOverride] = []
+        seen: set[str] = set()
+        for override in self.recommendation_overrides:
+            key = str(override.product_id or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(override)
+        self.recommendation_overrides = deduped
         return self
 
 

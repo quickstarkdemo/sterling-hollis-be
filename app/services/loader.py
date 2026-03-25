@@ -16,6 +16,7 @@ from app.models import (
     OrderItem,
     Product,
     ProductEmbedding,
+    SupplierProductOffer,
     Store,
     StoreDailyMetric,
     SyntheticRun,
@@ -29,11 +30,12 @@ ENTITY_MODEL_MAP = {
     "orders": Order,
     "order_items": OrderItem,
     "store_daily_metrics": StoreDailyMetric,
+    "supplier_product_offers": SupplierProductOffer,
 }
 
 
-DATETIME_FIELDS = {"joined_at", "ordered_at", "started_at", "completed_at", "embedded_at"}
-DATE_FIELDS = {"metric_date"}
+DATETIME_FIELDS = {"joined_at", "ordered_at", "started_at", "completed_at", "embedded_at", "created_at", "updated_at"}
+DATE_FIELDS = {"metric_date", "available_on"}
 DECIMAL_FIELDS = {
     "price",
     "subtotal",
@@ -106,6 +108,7 @@ def reset_synthetic_tables(db: Session) -> None:
     db.execute(delete(CustomerCommunication))
     db.execute(delete(ProductEmbedding))
     db.execute(delete(StoreDailyMetric))
+    db.execute(delete(SupplierProductOffer))
     db.execute(delete(Product))
     db.execute(delete(Customer))
     db.execute(delete(Store))
@@ -120,6 +123,7 @@ def assert_synthetic_tables_empty(db: Session) -> None:
         "customer_communications": db.scalar(select(func.count()).select_from(CustomerCommunication)) or 0,
         "product_embeddings": db.scalar(select(func.count()).select_from(ProductEmbedding)) or 0,
         "store_daily_metrics": db.scalar(select(func.count()).select_from(StoreDailyMetric)) or 0,
+        "supplier_product_offers": db.scalar(select(func.count()).select_from(SupplierProductOffer)) or 0,
         "products": db.scalar(select(func.count()).select_from(Product)) or 0,
         "customers": db.scalar(select(func.count()).select_from(Customer)) or 0,
         "stores": db.scalar(select(func.count()).select_from(Store)) or 0,
@@ -142,7 +146,7 @@ def load_entity_csv(db: Session, run_id: str, data_dir: Path, entity: str) -> in
     rows = _parse_csv(csv_path)
 
     # Clear previous rows from this run where applicable.
-    if entity in {"stores", "customers", "products", "orders", "store_daily_metrics"}:
+    if entity in {"stores", "customers", "products", "orders", "store_daily_metrics", "supplier_product_offers"}:
         db.execute(delete(model).where(model.seed_run_id == run_id))
     elif entity == "order_items":
         order_ids = [r["id"] for r in _parse_csv(data_dir / run_id / "orders.csv")]
@@ -194,6 +198,9 @@ def current_loaded_counts(db: Session, run_id: str) -> dict[str, int]:
     counts["order_items"] = db.scalar(select(func.count()).select_from(OrderItem).where(OrderItem.order_id.in_(order_ids_subq))) or 0
     counts["store_daily_metrics"] = (
         db.scalar(select(func.count()).select_from(StoreDailyMetric).where(StoreDailyMetric.seed_run_id == run_id)) or 0
+    )
+    counts["supplier_product_offers"] = (
+        db.scalar(select(func.count()).select_from(SupplierProductOffer).where(SupplierProductOffer.seed_run_id == run_id)) or 0
     )
     return counts
 

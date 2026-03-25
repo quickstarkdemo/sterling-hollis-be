@@ -111,6 +111,7 @@ def load_synthetic(req: SyntheticLoadRequest, db: Session = Depends(get_db)):
         "orders",
         "order_items",
         "store_daily_metrics",
+        "supplier_product_offers",
     ]
     requested = set(req.entities)
     entities = [e for e in ordered_entities if e in requested]

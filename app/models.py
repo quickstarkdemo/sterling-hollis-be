@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -110,6 +110,39 @@ class Product(Base):
         CheckConstraint("inventory_qty >= 0", name="ck_products_inventory_non_negative"),
         Index("ix_products_store_availability_category", "store_id", "availability", "category"),
         Index("ix_products_store_brand", "store_id", "brand"),
+    )
+
+
+class SupplierProductOffer(Base):
+    __tablename__ = "supplier_product_offers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seed_run_id: Mapped[str] = mapped_column(ForeignKey("synthetic_runs.id"), nullable=False, index=True)
+    brand: Mapped[str] = mapped_column(String(128), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(128), nullable=False)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    size: Mapped[str | None] = mapped_column(String(64))
+    season: Mapped[str | None] = mapped_column(String(32))
+    available_on: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    link: Mapped[str | None] = mapped_column(String(500))
+    image_link: Mapped[str | None] = mapped_column(String(500))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_supplier_product_offers_brand_category", "brand", "category"),
+        Index("ix_supplier_product_offers_available_on", "available_on"),
+        Index("ix_supplier_product_offers_status", "status"),
     )
 
 
