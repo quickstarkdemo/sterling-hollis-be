@@ -1724,6 +1724,18 @@ def test_open_merch_workspace_orchestrates_store_resolution(monkeypatch):
         assert "Resolved store Dallas Downtown from 'Dallas'." == payload["initial_notice"]
 
 
+def test_open_merch_workspace_defaults_to_all_stores_when_no_store(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_open_merch_workspace()
+        payload = result.structuredContent["payload"]
+
+        assert result.structuredContent["kind"] == "unified_workspace"
+        assert payload["active_view"] == "inventory"
+        assert payload["filters"]["store_ids"] == ["1001", "1002"]
+        assert payload["initial_notice"] == "Opened merchandising workspace across all stores. Use Store Search + Stores selector to focus scope."
+
+
 def test_open_exec_workspace_wraps_to_unified(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)

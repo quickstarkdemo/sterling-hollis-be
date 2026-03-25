@@ -58,6 +58,7 @@ const state = {
     activeView: "executive_overview",
     selectedStoreIds: [],
     activeStoreId: "",
+    storeSearch: "",
     lookbackDays: "90",
     category: "",
     selectedBrands: [],
@@ -245,6 +246,7 @@ function applyWorkspacePayload(rawInput) {
   state.ui.activeView = payload.active_view || TOOL_TO_VIEW[payload.last_tool] || "executive_overview";
   state.ui.selectedStoreIds = normalizeStoreIds(payload.filters.store_ids);
   state.ui.activeStoreId = payload.filters.active_store_id || state.ui.selectedStoreIds[0] || "";
+  state.ui.storeSearch = "";
   state.ui.lookbackDays = String(payload.filters.lookback_days || 90);
   state.ui.category = payload.filters.category || "";
   state.ui.selectedBrands = normalizeTokenSelections(payload.filters.brands, { lowerCase: false });
@@ -818,12 +820,23 @@ function kpi(label, value) {
 
 function renderControlsPanel() {
   const storeOptions = normalizeOptions(state.payload.uiHints.storeOptions);
+  const storeSearchToken = String(state.ui.storeSearch || "").trim().toLowerCase();
+  const visibleStoreOptions = storeSearchToken
+    ? storeOptions.filter((item) => {
+        const label = String(item.label || "").toLowerCase();
+        const value = String(item.value || "").toLowerCase();
+        return label.includes(storeSearchToken) || value.includes(storeSearchToken);
+      })
+    : storeOptions;
   const categoryOptions = [{ value: "", label: "Any" }, ...normalizeOptions(state.payload.uiHints.categoryOptions)];
   const selectedStoreSummary = state.ui.selectedStoreIds.length
     ? `${state.ui.selectedStoreIds.length} stores selected`
     : "All stores selected";
 
-  const activeStoreOptions = [{ value: "", label: "Auto" }, ...storeOptions.filter((item) => state.ui.selectedStoreIds.includes(item.value))];
+  const activeStoreUniverse = state.ui.selectedStoreIds.length
+    ? storeOptions.filter((item) => state.ui.selectedStoreIds.includes(item.value))
+    : storeOptions;
+  const activeStoreOptions = [{ value: "", label: "Auto" }, ...activeStoreUniverse];
 
   return el(
     "section",
@@ -834,7 +847,22 @@ function renderControlsPanel() {
     el(
       "div",
       { className: "fw-grid merch-filters fw-merch-clean-filters" },
-      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Stores" }), buildStoreMultiSelect(state.ui.selectedStoreIds, storeOptions)),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Store Search" }),
+        el("input", {
+          className: "fw-input",
+          type: "text",
+          placeholder: "Search stores, city, state, or id",
+          value: state.ui.storeSearch,
+          onInput: (event) => {
+            state.ui.storeSearch = event.target.value;
+            render();
+          },
+        }),
+      ),
+      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Stores" }), buildStoreMultiSelect(state.ui.selectedStoreIds, visibleStoreOptions)),
       el(
         "div",
         { className: "fw-field" },

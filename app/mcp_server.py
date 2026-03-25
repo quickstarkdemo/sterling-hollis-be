@@ -4547,7 +4547,7 @@ def fashion_open_merch_workspace(
     strategy_packet_id: str | None = None,
     initial_notice: str | None = None,
 ) -> CallToolResult:
-    """Resolve a store query and open a hydrated merchandising workspace in one call."""
+    """Open unified merchandising workspace with optional store focus; defaults to all-store scope when no store is provided."""
     notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
     resolved_store = None
     if store_id:
@@ -4557,16 +4557,15 @@ def fashion_open_merch_workspace(
             notice = f"Opened merchandising workspace for {resolved_store.name}."
     else:
         normalized_query = (store_query or "").strip()
-        if not normalized_query:
-            raise ValueError("Provide store_query or store_id.")
-        resolved_store = fashion_resolve_store(normalized_query).resolved
-        if not notice:
-            notice = f"Resolved store {resolved_store.name} from '{normalized_query}'."
+        if normalized_query:
+            resolved_store = fashion_resolve_store(normalized_query).resolved
+            if not notice:
+                notice = f"Resolved store {resolved_store.name} from '{normalized_query}'."
+        elif not notice:
+            notice = "Opened merchandising workspace across all stores. Use Store Search + Stores selector to focus scope."
 
     return fashion_open_unified_workspace(
-        store_id=resolved_store.id,
-        store_ids=[resolved_store.id],
-        active_store_id=resolved_store.id,
+        active_store_id=resolved_store.id if resolved_store else None,
         initial_view=UnifiedWorkspaceView.inventory,
         question=question,
         objective=objective,
