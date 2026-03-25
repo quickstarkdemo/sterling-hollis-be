@@ -1925,6 +1925,10 @@ def test_merch_inventory_view_supports_combined_scope_and_filters(monkeypatch):
         assert any(row.row_type.value == "potential_offer" for row in response.rows)
         assert all((row.category or "").lower() == "womens_apparel" for row in response.rows)
         assert all((row.brand or "").lower() == "valentino" for row in response.rows)
+        assert all(row.image_url for row in response.rows)
+        potential_rows = [row for row in response.rows if row.row_type.value == "potential_offer"]
+        assert potential_rows
+        assert potential_rows[0].product_id == "prod_1"
         assert response.current_rows >= 1
         assert response.potential_rows >= 1
 

@@ -2302,8 +2302,7 @@ function queueSeedFutureProducts(selected) {
   if (!selected || !selected.id) {
     return;
   }
-  const response = state.recommendation.customerId === selected.id ? state.recommendation.response : null;
-  if (!response || !recommendationRows(response).length) {
+  if (normalizeRecommendationScope(state.ui.recommendationScope) === "available") {
     return;
   }
   const contextKey = futureProductsContextKey(selected);
@@ -2434,17 +2433,21 @@ function styleConstraintChips(constraints, source) {
   return chips;
 }
 
-function recommendationCards(response) {
+function recommendationCards(response, currentStoreId = null) {
   const rows = recommendationRows(response);
   const selectedIds = new Set(normalizeProductIds(state.recommendation.selectedProductIds));
   if (!rows.length) {
-    return [el("p", { className: "fw-empty", text: "No recommendations returned for the selected filters." })];
+    return [];
   }
   return rows.map((item) => {
     const itemId = recommendationProductId(item) || "";
     const isPreorder = recommendationIsPreorder(item);
-    const stockCheck = inventoryCheckState(itemId);
-    const stockSummary = stockCheck?.response ? inventoryCheckSummaryLine(stockCheck.response) : "";
+    const stockCheckKey = inventoryCheckKey(item);
+    const canCheckStores = Boolean(inventoryCheckArgs(item));
+    const stockCheck = inventoryCheckState(stockCheckKey);
+    const stockSummary = stockCheck?.response
+      ? inventoryCheckSummaryLine(stockCheck.response, { excludeStoreId: currentStoreId })
+      : "";
     const executionTags = Array.isArray(item.execution_tags)
       ? item.execution_tags
           .map((tag) => String(tag || "").trim())
@@ -2458,6 +2461,37 @@ function recommendationCards(response) {
           .filter(Boolean)
           .join(" • ")
       : "";
+    const actionNodes = [];
+    if (item.link) {
+      actionNodes.push(
+        el(
+          "a",
+          {
+            className: "fw-link",
+            href: item.link,
+            target: "_blank",
+            rel: "noreferrer",
+          },
+          "Open product",
+        ),
+      );
+    }
+    if (canCheckStores) {
+      actionNodes.push(
+        el(
+          "button",
+          {
+            className: "fw-text-button",
+            type: "button",
+            disabled: stockCheck?.isLoading ? "true" : null,
+            onClick: () => {
+              void checkInventoryByStore(item);
+            },
+          },
+          stockCheck?.isLoading ? "Checking stores..." : "Check other stores",
+        ),
+      );
+    }
     return el(
       "article",
       { className: "fw-rec-card" },
@@ -2479,12 +2513,7 @@ function recommendationCards(response) {
         el(
           "div",
           { className: "fw-rec-image-wrap" },
-          el("img", {
-            className: "fw-rec-image",
-            src: item.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`,
-            alt: item.title || itemId || "Product image",
-            loading: "lazy",
-          }),
+          recommendationImageElement(item.image_url, item.title || itemId || "Product image"),
         ),
         el(
           "div",
@@ -2505,32 +2534,7 @@ function recommendationCards(response) {
                 text: "Preorder item: not currently in stock at this store.",
               })
             : null,
-          item.link
-            ? el(
-                "a",
-                {
-                  className: "fw-link",
-                  href: item.link,
-                  target: "_blank",
-                  rel: "noreferrer",
-                },
-                "Open product",
-              )
-            : null,
-          itemId
-            ? el(
-                "button",
-                {
-                  className: "fw-text-button",
-                  type: "button",
-                  disabled: stockCheck?.isLoading ? "true" : null,
-                  onClick: () => {
-                    void checkInventoryByStore(item);
-                  },
-                },
-                stockCheck?.isLoading ? "Checking stores..." : "Check by store",
-              )
-            : null,
+          actionNodes.length ? el("div", { className: "fw-chip-row" }, ...actionNodes) : null,
           stockCheck?.error ? el("p", { className: "fw-empty fw-inline-meta", text: stockCheck.error }) : null,
           stockSummary ? el("p", { className: "fw-empty fw-inline-meta", text: stockSummary }) : null,
         ),
@@ -2561,31 +2565,82 @@ function recommendationCards(response) {
   });
 }
 
-function renderFutureProductCard(item) {
+function renderFutureProductCard(item, currentStoreId = null) {
   const availabilityDate = item.available_on ? formatDateLabel(item.available_on, true) : "TBD";
   const offerStatus = item.offer_status ? humanizeToken(item.offer_status) : "potential";
   const perfUnits = Number(item.perf_units || 0);
   const perfRevenue = Number(item.perf_revenue || 0);
+  const itemId = recommendationProductId(item) || "";
+  const selectedIds = new Set(normalizeProductIds(state.recommendation.selectedProductIds));
+  const selectable = Boolean(itemId);
+  const stockCheckKey = inventoryCheckKey(item);
+  const canCheckStores = Boolean(inventoryCheckArgs(item));
+  const stockCheck = inventoryCheckState(stockCheckKey);
+  const stockSummary = stockCheck?.response
+    ? inventoryCheckSummaryLine(stockCheck.response, { excludeStoreId: currentStoreId })
+    : "";
   const performanceText =
     perfUnits > 0 || perfRevenue > 0
       ? `Store signal: ${compactNumber(perfUnits)} units and ${formatCurrencyCompact(perfRevenue)} revenue in lookback window.`
       : "New supplier offer with no local sell-through history yet.";
+  const actionNodes = [];
+  if (item.link) {
+    actionNodes.push(
+      el(
+        "a",
+        {
+          className: "fw-link",
+          href: item.link,
+          target: "_blank",
+          rel: "noreferrer",
+        },
+        "Open supplier listing",
+      ),
+    );
+  }
+  if (canCheckStores) {
+    actionNodes.push(
+      el(
+        "button",
+        {
+          className: "fw-text-button",
+          type: "button",
+          disabled: stockCheck?.isLoading ? "true" : null,
+          onClick: () => {
+            void checkInventoryByStore(item);
+          },
+        },
+        stockCheck?.isLoading ? "Checking stores..." : "Check other stores",
+      ),
+    );
+  }
 
   return el(
     "article",
-    { className: "fw-rec-card merch" },
+    { className: "fw-rec-card" },
     el(
       "div",
       { className: "fw-rec-layout" },
       el(
+        "label",
+        { className: "fw-rec-select-inline" },
+        el("input", {
+          type: "checkbox",
+          checked: selectedIds.has(itemId),
+          disabled: selectable ? null : "true",
+          onChange: () => {
+            if (!selectable) {
+              return;
+            }
+            toggleSelectedProduct(itemId);
+            render();
+          },
+        }),
+      ),
+      el(
         "div",
         { className: "fw-rec-image-wrap" },
-        el("img", {
-          className: "fw-rec-image",
-          src: item.image_url || `${meta.assetBaseUrl}/demo/editorial-fallback.svg`,
-          alt: item.title || item.offer_id || "Future product image",
-          loading: "lazy",
-        }),
+        recommendationImageElement(item.image_url, item.title || item.offer_id || "Future product image"),
       ),
       el(
         "div",
@@ -2593,18 +2648,12 @@ function renderFutureProductCard(item) {
         el("h3", { className: "fw-rec-title", text: item.title || item.offer_id || "Future product" }),
         el("p", { className: "fw-rec-brand", text: item.brand || "Unknown brand" }),
         el("p", { className: "fw-rec-reason-inline", text: performanceText }),
-        item.link
-          ? el(
-              "a",
-              {
-                className: "fw-link",
-                href: item.link,
-                target: "_blank",
-                rel: "noreferrer",
-              },
-              "Open supplier listing",
-            )
+        !selectable
+          ? el("p", { className: "fw-empty fw-inline-meta", text: "No live product id mapped for this offer yet." })
           : null,
+        actionNodes.length ? el("div", { className: "fw-chip-row" }, ...actionNodes) : null,
+        stockCheck?.error ? el("p", { className: "fw-empty fw-inline-meta", text: stockCheck.error }) : null,
+        stockSummary ? el("p", { className: "fw-empty fw-inline-meta", text: stockSummary }) : null,
       ),
       el(
         "div",
@@ -2622,7 +2671,7 @@ function renderFutureProductCard(item) {
   );
 }
 
-function renderFutureProductsSection(selected) {
+function renderFutureProductsSection(selected, currentStoreId = null) {
   if (!selected) {
     return null;
   }
@@ -2647,7 +2696,7 @@ function renderFutureProductsSection(selected) {
     !loadingFutureProducts && !futureState.error && !rows.length
       ? el("p", { className: "fw-empty", text: "No future product offers matched the current filters." })
       : null,
-    ...(loadingFutureProducts || futureState.error ? [] : rows.map((item) => renderFutureProductCard(item))),
+    ...(loadingFutureProducts || futureState.error ? [] : rows.map((item) => renderFutureProductCard(item, currentStoreId))),
   );
 }
 
@@ -3378,23 +3427,36 @@ function render() {
 
   const recommendationPanel = selected && customerTab === "recommendations"
     ? (() => {
-        const response =
-          state.recommendation.customerId === selected.id ? state.recommendation.response : null;
-        const rows = recommendationRows(response);
-        const selectedProductIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
-          seedWhenEmpty: false,
-        });
-        if (JSON.stringify(selectedProductIds) !== JSON.stringify(state.recommendation.selectedProductIds)) {
-          state.recommendation.selectedProductIds = selectedProductIds;
-          persistWidgetState();
-        }
-        const selectedProductCount = selectedProductIds.length;
-        const allProductsSelected = rows.length > 0 && selectedProductCount === rows.length;
-        const responseConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
-        const displayConstraints = responseConstraints || activeStyleConstraints;
-        const constraintSource =
-          response?.recommendation?.constraint_source ||
-          (displayConstraints ? displayConstraints.constraint_source : null);
+      const response =
+        state.recommendation.customerId === selected.id ? state.recommendation.response : null;
+      const rows = recommendationRows(response);
+      const recommendationScope = normalizeRecommendationScope(state.ui.recommendationScope);
+      const showAvailableProducts = recommendationScope !== "future";
+      const showFutureProducts = recommendationScope !== "available";
+      const futureState = state.recommendation.futureProducts;
+      const futureRows = Array.isArray(futureState.rows) ? futureState.rows : [];
+      const loadingFutureProducts = showFutureProducts && (futureState.isLoading || !futureState.loaded);
+      const visibleFutureRows =
+        showFutureProducts && !loadingFutureProducts && !futureState.error ? futureRows : [];
+      const availableSelectableIds = showAvailableProducts
+        ? rows
+            .map((item) => recommendationProductId(item))
+            .filter((value) => typeof value === "string" && value)
+        : [];
+      const futureSelectableIds = visibleFutureRows
+        .map((item) => recommendationProductId(item))
+        .filter((value) => typeof value === "string" && value);
+      const visibleSelectableIds = normalizeProductIds([...availableSelectableIds, ...futureSelectableIds]);
+      const selectedAllProductIds = normalizeProductIds(state.recommendation.selectedProductIds);
+      const selectedSet = new Set(selectedAllProductIds);
+      const selectedVisibleCount = visibleSelectableIds.filter((id) => selectedSet.has(id)).length;
+      const selectedProductCount = selectedAllProductIds.length;
+      const allProductsSelected = visibleSelectableIds.length > 0 && selectedVisibleCount === visibleSelectableIds.length;
+      const responseConstraints = normalizeStyleConstraints(response?.recommendation?.applied_style_constraints);
+      const displayConstraints = responseConstraints || activeStyleConstraints;
+      const constraintSource =
+        response?.recommendation?.constraint_source ||
+        (displayConstraints ? displayConstraints.constraint_source : null);
         const strategyPacketId = response?.recommendation?.strategy_packet_id;
         const strategyTagIntensity = response?.recommendation?.strategy_tag_intensity;
         const activeOccasion = String(state.ui.occasion || "").trim();
@@ -3415,25 +3477,64 @@ function render() {
           selected.home_store_name ||
           selected.home_store_id ||
           "selected store";
+        const currentStoreId =
+          (typeof response?.store?.id === "string" && response.store.id.trim())
+            ? response.store.id.trim()
+            : String(selected.home_store_id || "").trim() || null;
         const stockSummaryText = rows.length
           ? preorderCount > 0
             ? `${storeName}: ${preorderCount} of ${rows.length} recommendations are preorder and not currently in stock. Out-of-stock items are excluded.`
             : `${storeName}: all ${inStockCount} recommendations are currently in stock. Out-of-stock items are excluded.`
           : "Out-of-stock items are excluded. Run recommendations to inspect preorder risk.";
-        const emailDraftBusy =
-          state.recommendation.isPreparingEmailDraft ||
-          state.recommendation.isRefreshingEmailDraft ||
-          state.recommendation.isUpdatingEmailDraft ||
-          state.recommendation.isSendingEmailDraft;
-        return el(
-          "section",
-          {
-            className: "fw-panel",
+      const emailDraftBusy =
+        state.recommendation.isPreparingEmailDraft ||
+        state.recommendation.isRefreshingEmailDraft ||
+        state.recommendation.isUpdatingEmailDraft ||
+        state.recommendation.isSendingEmailDraft;
+      const visibleCards = [
+        ...(showAvailableProducts && response ? recommendationCards(response, currentStoreId) : []),
+        ...visibleFutureRows.map((item) => renderFutureProductCard(item, currentStoreId)),
+      ];
+      return el(
+        "section",
+        {
+          className: "fw-panel",
             id: "fw-customer-view-panel",
             role: "tabpanel",
             "aria-labelledby": "fw-customer-tab-recommendations",
           },
           el("h2", { className: "fw-panel-title", text: "Product Recommendations" }),
+          el(
+            "div",
+            { className: "fw-merch-segmented", role: "group", "aria-label": "Product scope" },
+            ...[
+              { value: "available", label: "Available" },
+              { value: "future", label: "Future Offerings" },
+              { value: "combined", label: "Combined" },
+            ].map((option) =>
+              el(
+                "button",
+                {
+                  className: `fw-merch-segmented-btn ${recommendationScope === option.value ? "active" : ""}`,
+                  type: "button",
+                  onClick: () => {
+                    const nextScope = normalizeRecommendationScope(option.value);
+                    if (nextScope === state.ui.recommendationScope) {
+                      return;
+                    }
+                    markUserInteraction();
+                    state.ui.recommendationScope = nextScope;
+                    persistWidgetState();
+                    if (nextScope !== "available") {
+                      void loadFutureProducts(selected, { quiet: true });
+                    }
+                    render();
+                  },
+                },
+                option.label,
+              ),
+            ),
+          ),
           response && (strategyPacketId || strategyTagIntensity || activeOccasion)
             ? el(
                 "div",
@@ -3454,12 +3555,24 @@ function render() {
                 ...styleConstraintChips(displayConstraints, constraintSource),
               )
             : null,
-          el("p", { className: "fw-empty fw-inline-meta", text: stockSummaryText }),
-          occasionSummaryText ? el("p", { className: "fw-empty fw-inline-meta", text: occasionSummaryText }) : null,
-          response ? renderFutureProductsSection(selected) : null,
-          response
-            ? el(
-                "div",
+          showAvailableProducts
+            ? el("p", { className: "fw-empty fw-inline-meta", text: stockSummaryText })
+            : null,
+        showAvailableProducts && occasionSummaryText
+          ? el("p", { className: "fw-empty fw-inline-meta", text: occasionSummaryText })
+          : null,
+        showFutureProducts && futureState.summary
+          ? el("p", { className: "fw-empty fw-inline-meta", text: futureState.summary })
+          : null,
+        loadingFutureProducts
+          ? el("p", { className: "fw-empty fw-inline-meta", text: "Loading future product offerings..." })
+          : null,
+        showFutureProducts && futureState.error
+          ? el("p", { className: "fw-empty", text: futureState.error })
+          : null,
+        showAvailableProducts && response
+          ? el(
+              "div",
                 { className: "fw-draft-grid" },
                 el(
                   "div",
@@ -3564,60 +3677,70 @@ function render() {
                 ),
               )
             : null,
-          state.recommendation.error
-            ? el("p", { className: "fw-empty", text: state.recommendation.error })
-            : null,
-          response
-            ? el(
+        showAvailableProducts && state.recommendation.error
+          ? el("p", { className: "fw-empty", text: state.recommendation.error })
+          : null,
+        visibleSelectableIds.length
+          ? el(
+              "div",
+              { className: "fw-rec-bulk-row" },
+              el("p", { className: "fw-empty", text: `${selectedVisibleCount} selected in view` }),
+              el(
                 "div",
-                { className: "fw-rec-bulk-row" },
-                el("p", { className: "fw-empty", text: `${selectedProductCount} selected` }),
+                { className: "fw-rec-bulk-actions" },
                 el(
-                  "div",
-                  { className: "fw-rec-bulk-actions" },
-                  el(
-                    "button",
-                    {
-                      className: "fw-text-button",
-                      type: "button",
-                      disabled: !rows.length || allProductsSelected ? "true" : null,
-                      onClick: () => {
-                        selectAllProducts(response);
-                        render();
-                      },
-                    },
-                    "Select all",
-                  ),
-                  el(
-                    "button",
-                    {
-                      className: "fw-text-button",
-                      type: "button",
-                      disabled: !selectedProductCount ? "true" : null,
-                      onClick: () => {
-                        deselectAllProducts();
-                        render();
-                      },
-                    },
-                    "Deselect",
-                  ),
-                ),
-              )
-            : null,
-          ...(response
-            ? recommendationCards(response)
-            : [
-                el(
-                  "p",
+                  "button",
                   {
-                    className: "fw-empty",
-                    text: "Use the controls above to generate recommendations for this customer.",
+                    className: "fw-text-button",
+                    type: "button",
+                    disabled: allProductsSelected ? "true" : null,
+                    onClick: () => {
+                      markUserInteraction();
+                      state.recommendation.selectedProductIds = normalizeProductIds([
+                        ...state.recommendation.selectedProductIds,
+                        ...visibleSelectableIds,
+                      ]);
+                      persistWidgetState();
+                      render();
+                    },
                   },
+                  "Select all",
                 ),
-              ]),
-        );
-      })()
-    : null;
+                el(
+                  "button",
+                  {
+                    className: "fw-text-button",
+                    type: "button",
+                    disabled: !selectedVisibleCount ? "true" : null,
+                    onClick: () => {
+                      markUserInteraction();
+                      const visibleSet = new Set(visibleSelectableIds);
+                      state.recommendation.selectedProductIds = normalizeProductIds(
+                        state.recommendation.selectedProductIds,
+                      ).filter((id) => !visibleSet.has(id));
+                      persistWidgetState();
+                      render();
+                    },
+                  },
+                  "Deselect",
+                ),
+              ),
+            )
+          : null,
+        ...(visibleCards.length
+          ? visibleCards
+          : [
+              el("p", {
+                className: "fw-empty",
+                text:
+                  showAvailableProducts && !response
+                    ? "Use the controls above to generate recommendations for this customer."
+                    : "No products matched the current scope and filters.",
+              }),
+            ]),
+      );
+    })()
+  : null;
 
   container.appendChild(
     el(
