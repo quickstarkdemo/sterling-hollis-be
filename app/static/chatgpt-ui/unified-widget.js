@@ -77,6 +77,8 @@ const state = {
     isExporting: false,
     filtersDirty: false,
     csvText: "",
+    inventoryPage: 1,
+    inventoryPageSize: "50",
   },
   data: {
     executive_overview: null,
@@ -259,6 +261,7 @@ function applyWorkspacePayload(rawInput) {
   state.ui.rowMode = payload.filters.row_mode || "store_product";
   state.ui.overrideScope = payload.filters.override_scope || "store";
   state.ui.question = payload.filters.question || "";
+  state.ui.inventoryPage = 1;
   state.ui.filtersDirty = false;
 
   const initial = payload.last_result || payload.initial_result;
@@ -704,6 +707,9 @@ async function loadView(view, options = {}) {
     return;
   }
   state.data[view] = clone(payload);
+  if (view === "inventory") {
+    state.ui.inventoryPage = 1;
+  }
   state.payload.last_tool = toolName;
   state.payload.last_result = clone(payload);
   state.ui.filtersDirty = false;
@@ -1152,6 +1158,16 @@ function renderInventoryResult() {
     return el("p", { className: "fw-empty", text: "Run Inventory to view filtered rows." });
   }
   const showStore = state.ui.rowMode === "store_product";
+  const pageSize = parsePositiveInt(state.ui.inventoryPageSize, 50, 10, 500);
+  const totalRows = result.rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const currentPage = Math.max(1, Math.min(parsePositiveInt(state.ui.inventoryPage, 1, 1, 10000), totalPages));
+  if (currentPage !== state.ui.inventoryPage) {
+    state.ui.inventoryPage = currentPage;
+  }
+  const start = (currentPage - 1) * pageSize;
+  const end = Math.min(start + pageSize, totalRows);
+  const pageRows = result.rows.slice(start, end);
 
   const table = el(
     "table",
@@ -1177,7 +1193,7 @@ function renderInventoryResult() {
     el(
       "tbody",
       {},
-      ...result.rows.map((row) =>
+      ...pageRows.map((row) =>
         el(
           "tr",
           {},
@@ -1209,6 +1225,66 @@ function renderInventoryResult() {
       kpi("Current", formatNumber(result.current_rows || 0, 0)),
       kpi("Potential", formatNumber(result.potential_rows || 0, 0)),
       kpi("Row Mode", humanizeToken(result.row_mode || state.ui.rowMode)),
+    ),
+    el(
+      "div",
+      { className: "fw-toolbar" },
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Rows / Page" }),
+        buildSelectControl(
+          state.ui.inventoryPageSize,
+          [
+            { value: "25", label: "25" },
+            { value: "50", label: "50" },
+            { value: "100", label: "100" },
+            { value: "200", label: "200" },
+          ],
+          (value) => {
+            state.ui.inventoryPageSize = value;
+            state.ui.inventoryPage = 1;
+            render();
+          },
+        ),
+      ),
+      el("span", {
+        className: "fw-empty",
+        text: totalRows ? `Showing ${start + 1}-${end} of ${formatNumber(totalRows, 0)}` : "Showing 0 rows",
+      }),
+      el(
+        "button",
+        {
+          className: "fw-button secondary",
+          type: "button",
+          disabled: currentPage <= 1 ? "true" : null,
+          onClick: () => {
+            state.ui.inventoryPage = Math.max(1, currentPage - 1);
+            render();
+          },
+        },
+        "Prev",
+      ),
+      el(
+        "span",
+        {
+          className: "fw-empty",
+          text: `Page ${formatNumber(currentPage, 0)} of ${formatNumber(totalPages, 0)}`,
+        },
+      ),
+      el(
+        "button",
+        {
+          className: "fw-button secondary",
+          type: "button",
+          disabled: currentPage >= totalPages ? "true" : null,
+          onClick: () => {
+            state.ui.inventoryPage = Math.min(totalPages, currentPage + 1);
+            render();
+          },
+        },
+        "Next",
+      ),
     ),
     result.summary ? el("p", { className: "fw-empty", text: result.summary }) : null,
     table,
