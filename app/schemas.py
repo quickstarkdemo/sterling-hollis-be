@@ -810,6 +810,401 @@ class MerchProductMixRecommendationsRequest(BaseModel):
         return self
 
 
+class UnifiedWorkspaceView(str, Enum):
+    executive_overview = "executive_overview"
+    inventory = "inventory"
+    recommendations = "recommendations"
+    mix_analysis = "mix_analysis"
+
+
+class UnifiedRowMode(str, Enum):
+    store_product = "store_product"
+    aggregated = "aggregated"
+
+
+class OverrideScope(str, Enum):
+    store = "store"
+    global_scope = "global"
+
+
+class UnifiedRecommendationOverride(BaseModel):
+    product_id: str
+    store_id: str | None = None
+    final_action: MerchFinalAction
+    priority_tier: MerchPriorityTier
+    override_note: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "UnifiedRecommendationOverride":
+        product_id = str(self.product_id or "").strip()
+        if not product_id:
+            raise ValueError("product_id is required.")
+        self.product_id = product_id
+        store_id = str(self.store_id or "").strip()
+        self.store_id = store_id or None
+        if self.override_note is not None:
+            note = str(self.override_note).strip()
+            self.override_note = note or None
+        return self
+
+
+class UnifiedWorkspaceFilters(BaseModel):
+    store_ids: list[str] = Field(default_factory=list)
+    active_store_id: str | None = None
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    category: str | None = None
+    brands: list[str] = Field(default_factory=list)
+    occasions: list[str] = Field(default_factory=list)
+    price_band: PriceBand | None = None
+    objective: Objective = Objective.revenue
+    top_k: int = Field(default=12, ge=1, le=100)
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product
+    override_scope: OverrideScope = OverrideScope.store
+    question: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_fields(self) -> "UnifiedWorkspaceFilters":
+        normalized_store_ids: list[str] = []
+        for value in self.store_ids:
+            token = str(value or "").strip()
+            if token and token not in normalized_store_ids:
+                normalized_store_ids.append(token)
+        self.store_ids = normalized_store_ids
+
+        active_store_id = str(self.active_store_id or "").strip()
+        self.active_store_id = active_store_id or None
+
+        normalized_brands: list[str] = []
+        for value in self.brands:
+            token = str(value or "").strip()
+            if token and token not in normalized_brands:
+                normalized_brands.append(token)
+        self.brands = normalized_brands
+
+        normalized_occasions: list[str] = []
+        for value in self.occasions:
+            token = str(value or "").strip()
+            if token and token not in normalized_occasions:
+                normalized_occasions.append(token)
+        self.occasions = normalized_occasions
+        return self
+
+
+class UnifiedStoreScopeRequest(BaseModel):
+    store_query: str | None = None
+    store_id: str | None = None
+    store_ids: list[str] = Field(default_factory=list)
+    active_store_id: str | None = None
+    lookback_days: int = Field(default=90, ge=7, le=730)
+    category: str | None = None
+    brand: str | None = None
+    brands: list[str] = Field(default_factory=list)
+    occasion: str | None = None
+    occasions: list[str] = Field(default_factory=list)
+    price_band: PriceBand | None = None
+
+    @model_validator(mode="after")
+    def normalize_scope(self) -> "UnifiedStoreScopeRequest":
+        deduped_store_ids: list[str] = []
+        for value in self.store_ids:
+            token = str(value or "").strip()
+            if token and token not in deduped_store_ids:
+                deduped_store_ids.append(token)
+        self.store_ids = deduped_store_ids
+
+        active_store_id = str(self.active_store_id or "").strip()
+        self.active_store_id = active_store_id or None
+
+        deduped_brands: list[str] = []
+        for value in self.brands:
+            token = str(value or "").strip()
+            if token and token not in deduped_brands:
+                deduped_brands.append(token)
+        if self.brand:
+            for value in str(self.brand).replace(";", ",").replace("|", ",").split(","):
+                token = value.strip()
+                if token and token not in deduped_brands:
+                    deduped_brands.append(token)
+        self.brands = deduped_brands
+
+        deduped_occasions: list[str] = []
+        for value in self.occasions:
+            token = str(value or "").strip()
+            if token and token not in deduped_occasions:
+                deduped_occasions.append(token)
+        if self.occasion:
+            for value in str(self.occasion).replace(";", ",").replace("|", ",").split(","):
+                token = value.strip()
+                if token and token not in deduped_occasions:
+                    deduped_occasions.append(token)
+        self.occasions = deduped_occasions
+        return self
+
+
+class UnifiedOverviewRequest(UnifiedStoreScopeRequest):
+    objective: Objective = Objective.revenue
+    top_k_stores: int = Field(default=12, ge=1, le=50)
+
+
+class UnifiedInventoryViewRequest(UnifiedStoreScopeRequest):
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    limit: int = Field(default=300, ge=1, le=2000)
+
+
+class UnifiedActionRecommendationsRequest(UnifiedStoreScopeRequest):
+    question: str | None = None
+    objective: Objective = Objective.margin
+    top_k: int = Field(default=9, ge=1, le=100)
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product
+    override_scope: OverrideScope = OverrideScope.store
+    recommendation_overrides: list[UnifiedRecommendationOverride] = Field(default_factory=list)
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period
+    peer_mode: PeerMode = PeerMode.state_and_profile
+    compare_store_id: str | None = None
+
+    @model_validator(mode="after")
+    def dedupe_overrides(self) -> "UnifiedActionRecommendationsRequest":
+        deduped: list[UnifiedRecommendationOverride] = []
+        seen: set[str] = set()
+        for override in self.recommendation_overrides:
+            key = f"{override.store_id or ''}|{override.product_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(override)
+        self.recommendation_overrides = deduped
+        return self
+
+
+class UnifiedProductMixRecommendationsRequest(UnifiedStoreScopeRequest):
+    top_k: int = Field(default=12, ge=1, le=100)
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product
+    override_scope: OverrideScope = OverrideScope.store
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    recommendation_overrides: list[UnifiedRecommendationOverride] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def dedupe_overrides(self) -> "UnifiedProductMixRecommendationsRequest":
+        deduped: list[UnifiedRecommendationOverride] = []
+        seen: set[str] = set()
+        for override in self.recommendation_overrides:
+            key = f"{override.store_id or ''}|{override.product_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(override)
+        self.recommendation_overrides = deduped
+        return self
+
+
+class UnifiedInventoryViewRow(BaseModel):
+    row_type: MerchInventoryRowType
+    store_id: str | None = None
+    store_name: str | None = None
+    store_count: int = 1
+    product_id: str | None = None
+    offer_id: str | None = None
+    title: str
+    brand: str | None = None
+    category: str | None = None
+    size: str | None = None
+    price: float | None = None
+    availability: str | None = None
+    stock_state: str | None = None
+    inventory_qty: int = 0
+    available_on: str | None = None
+    offer_status: SupplierOfferStatus | None = None
+    link: str | None = None
+    image_url: str | None = None
+    perf_revenue: float = 0.0
+    perf_units: float = 0.0
+    perf_margin_rate: float = 0.0
+
+
+class UnifiedInventoryViewResponse(BaseModel):
+    summary: str
+    store_ids: list[str] = Field(default_factory=list)
+    active_store_id: str | None = None
+    lookback_days: int
+    category: str | None = None
+    brands: list[str] = Field(default_factory=list)
+    price_band: PriceBand | None = None
+    occasions: list[str] = Field(default_factory=list)
+    row_mode: UnifiedRowMode
+    inventory_scope: InventoryScope
+    future_window_days: int
+    rows: list[UnifiedInventoryViewRow] = Field(default_factory=list)
+    total_rows: int = 0
+    current_rows: int = 0
+    potential_rows: int = 0
+
+
+class UnifiedActionRecommendationRow(BaseModel):
+    store_id: str | None = None
+    store_name: str | None = None
+    store_count: int = 1
+    product_id: str
+    title: str
+    brand: str
+    category: str
+    price: float | None = None
+    link: str | None = None
+    image_url: str | None = None
+    price_band: PriceBand | None = None
+    occasion: str | None = None
+    metric_value: float
+    peer_delta: float
+    prior_period_delta: float | None = None
+    rationale: str
+    model_action: MerchAction
+    model_priority_tier: MerchPriorityTier
+    final_action: MerchFinalAction
+    final_priority_tier: MerchPriorityTier
+    override_note: str | None = None
+
+
+class UnifiedActionRecommendationsResponse(BaseModel):
+    summary: str
+    store_ids: list[str] = Field(default_factory=list)
+    active_store_id: str | None = None
+    objective: Objective
+    lookback_days: int
+    category: str | None = None
+    brands: list[str] = Field(default_factory=list)
+    price_band: PriceBand | None = None
+    occasions: list[str] = Field(default_factory=list)
+    row_mode: UnifiedRowMode
+    override_scope: OverrideScope
+    recommendations: list[UnifiedActionRecommendationRow] = Field(default_factory=list)
+
+
+class UnifiedProductMixRecommendationRow(BaseModel):
+    store_id: str | None = None
+    store_name: str | None = None
+    store_count: int = 1
+    action: MerchMixAction
+    fit_score: float
+    expected_mix_impact: float
+    rationale: str
+    brand: str | None = None
+    category: str | None = None
+    current_product_id: str | None = None
+    current_title: str | None = None
+    current_revenue: float | None = None
+    current_units: float | None = None
+    offer_id: str | None = None
+    offer_title: str | None = None
+    offer_status: SupplierOfferStatus | None = None
+    available_on: str | None = None
+    offer_price: float | None = None
+
+
+class UnifiedProductMixRecommendationsResponse(BaseModel):
+    summary: str
+    store_ids: list[str] = Field(default_factory=list)
+    active_store_id: str | None = None
+    lookback_days: int
+    top_k: int
+    category: str | None = None
+    brands: list[str] = Field(default_factory=list)
+    price_band: PriceBand | None = None
+    occasions: list[str] = Field(default_factory=list)
+    row_mode: UnifiedRowMode
+    override_scope: OverrideScope
+    inventory_scope: InventoryScope
+    future_window_days: int
+    rows: list[UnifiedProductMixRecommendationRow] = Field(default_factory=list)
+
+
+class UnifiedOverviewResponse(BaseModel):
+    summary: str
+    lookback_days: int
+    objective: Objective
+    generated_at: datetime
+    store_ids: list[str] = Field(default_factory=list)
+    active_store_id: str | None = None
+    total_revenue: float
+    total_units: float
+    margin_rate: float
+    prior_revenue: float | None = None
+    prior_margin_rate: float | None = None
+    revenue_delta_pct: float | None = None
+    store_count: int
+    stores: list[ExecutiveStoreInsight] = Field(default_factory=list)
+    trend: list[ExecutiveTrendPoint] = Field(default_factory=list)
+
+
+class UnifiedWorkspaceBootstrapResponse(BaseModel):
+    filters: UnifiedWorkspaceFilters
+    active_view: UnifiedWorkspaceView = UnifiedWorkspaceView.executive_overview
+    initial_result: (
+        UnifiedOverviewResponse
+        | UnifiedInventoryViewResponse
+        | UnifiedActionRecommendationsResponse
+        | UnifiedProductMixRecommendationsResponse
+    )
+    last_result: (
+        UnifiedOverviewResponse
+        | UnifiedInventoryViewResponse
+        | UnifiedActionRecommendationsResponse
+        | UnifiedProductMixRecommendationsResponse
+        | None
+    ) = None
+    last_tool: str | None = None
+    initial_notice: str | None = None
+
+
+class UnifiedExportCsvRequest(UnifiedStoreScopeRequest):
+    view: UnifiedWorkspaceView = UnifiedWorkspaceView.executive_overview
+    question: str | None = None
+    objective: Objective = Objective.revenue
+    top_k: int = Field(default=12, ge=1, le=100)
+    top_k_stores: int = Field(default=50, ge=1, le=50)
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product
+    override_scope: OverrideScope = OverrideScope.store
+    inventory_scope: InventoryScope = InventoryScope.combined
+    future_window_days: int = Field(default=120, ge=1, le=365)
+    limit: int = Field(default=300, ge=1, le=2000)
+    recommendation_overrides: list[UnifiedRecommendationOverride] = Field(default_factory=list)
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period
+    peer_mode: PeerMode = PeerMode.state_and_profile
+    compare_store_id: str | None = None
+
+    @model_validator(mode="after")
+    def dedupe_overrides(self) -> "UnifiedExportCsvRequest":
+        deduped: list[UnifiedRecommendationOverride] = []
+        seen: set[str] = set()
+        for override in self.recommendation_overrides:
+            key = f"{override.store_id or ''}|{override.product_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(override)
+        self.recommendation_overrides = deduped
+        return self
+
+
+class UnifiedExportCsvRow(BaseModel):
+    values: dict[str, str] = Field(default_factory=dict)
+
+
+class UnifiedExportCsvResponse(BaseModel):
+    view: UnifiedWorkspaceView
+    row_mode: UnifiedRowMode
+    override_scope: OverrideScope
+    filename: str
+    headers: list[str] = Field(default_factory=list)
+    rows: list[UnifiedExportCsvRow] = Field(default_factory=list)
+    row_count: int = 0
+    csv_text: str
+    generated_at: datetime
+
+
 class ExecutiveWorkspaceFilters(BaseModel):
     lookback_days: int = Field(default=90, ge=7, le=730)
     objective: Objective = Objective.revenue

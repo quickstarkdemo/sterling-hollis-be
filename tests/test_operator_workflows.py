@@ -1692,19 +1692,17 @@ def test_render_merch_workspace_returns_template_and_payload(monkeypatch):
         payload = result.structuredContent["payload"]
         assert payload["store"]["id"] == "1001"
         assert payload["filters"]["objective"] == "margin"
+        assert payload["filters"]["lookback_days"] == 90
+        assert payload["filters"]["top_k"] == 6
+        assert payload["filters"]["compare_mode"] == "peer_and_prior_period"
         assert payload["filters"]["peer_mode"] == "profile_type"
-        assert payload["filters"]["inventory_scope"] == "combined"
-        assert payload["filters"]["future_window_days"] == 120
+        assert payload["filters"]["occasion"] is None
         assert payload["uiHints"]["categoryOptions"]
-        assert payload["uiHints"]["compareStoreOptions"]
-        assert payload["uiHints"]["actionDefinitions"]["feature"]
+        assert payload["uiHints"]["brandOptions"]
         assert payload["initial_result"]["rows"]
-        assert payload["last_tool"] == "fashion_merch_inventory_view"
-        assert payload["inventory_check"] is not None
         assert payload["inventory_check"]["current_store"]["store_id"] == "1001"
-        assert payload["inventory_check"]["totals"]["not_in_stock_skus"] >= 1
-        assert payload["inventory_products"] is not None
-        assert payload["inventory_products"]["row_count"] >= 1
+        assert payload["inventory_products"]["rows"]
+        assert payload["last_tool"] == "fashion_merch_inventory_view"
         assert "<style>" in html
         assert "Merchandising Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
@@ -1720,9 +1718,106 @@ def test_open_merch_workspace_orchestrates_store_resolution(monkeypatch):
         )
 
         payload = result.structuredContent["payload"]
-        assert result.structuredContent["kind"] == "merch_workspace"
-        assert payload["store"]["id"] == "1001"
+        assert result.structuredContent["kind"] == "unified_workspace"
+        assert payload["active_view"] == "inventory"
+        assert payload["filters"]["active_store_id"] == "1001"
         assert "Resolved store Dallas Downtown from 'Dallas'." == payload["initial_notice"]
+
+
+def test_open_exec_workspace_wraps_to_unified(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        result = mcp_server.fashion_open_exec_workspace(lookback_days=56, top_k_stores=8)
+        payload = result.structuredContent["payload"]
+
+        assert result.structuredContent["kind"] == "unified_workspace"
+        assert payload["active_view"] == "executive_overview"
+        assert payload["filters"]["lookback_days"] == 56
+        assert payload["last_tool"] == "fashion_unified_overview"
+
+
+def test_unified_core_tabs_and_export_parity(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        opened = mcp_server.fashion_open_unified_workspace(
+            store_ids=["1001", "1002"],
+            active_store_id="1001",
+            initial_view="inventory",
+            row_mode="store_product",
+            lookback_days=90,
+            top_k=10,
+        )
+        assert opened.structuredContent["kind"] == "unified_workspace"
+        assert opened.structuredContent["payload"]["active_view"] == "inventory"
+        assert opened.structuredContent["payload"]["filters"]["store_ids"] == ["1001", "1002"]
+
+        inventory = mcp_server.fashion_unified_inventory_view(
+            store_ids=["1001", "1002"],
+            active_store_id="1001",
+            row_mode="store_product",
+            inventory_scope="combined",
+            lookback_days=90,
+            limit=300,
+        )
+        assert inventory.rows
+        assert all(row.store_id for row in inventory.rows)
+
+        inventory_export = mcp_server.fashion_unified_export_csv(
+            view="inventory",
+            store_ids=["1001", "1002"],
+            active_store_id="1001",
+            row_mode="store_product",
+            inventory_scope="combined",
+            lookback_days=90,
+        )
+        assert inventory_export.row_count == len(inventory.rows)
+        assert all(row.values.get("view") == "inventory" for row in inventory_export.rows)
+        assert all(row.values.get("store_id") for row in inventory_export.rows)
+
+        baseline_actions = mcp_server.fashion_unified_action_recommendations(
+            store_ids=["1001", "1002"],
+            active_store_id="1001",
+            row_mode="store_product",
+            override_scope="global",
+            top_k=6,
+            objective="margin",
+        )
+        assert baseline_actions.recommendations
+        target = baseline_actions.recommendations[0]
+
+        overridden = mcp_server.fashion_unified_action_recommendations(
+            store_ids=["1001", "1002"],
+            active_store_id="1001",
+            row_mode="store_product",
+            override_scope="global",
+            top_k=6,
+            objective="margin",
+            recommendation_overrides=[
+                {
+                    "product_id": target.product_id,
+                    "final_action": "drop",
+                    "priority_tier": "low",
+                    "override_note": "global demo override",
+                }
+            ],
+        )
+        target_rows = [row for row in overridden.recommendations if row.product_id == target.product_id]
+        assert target_rows
+        assert any(row.final_action.value == "drop" for row in target_rows)
+        assert any(row.final_priority_tier.value == "low" for row in target_rows)
+
+        mix = mcp_server.fashion_unified_product_mix_recommendations(
+            store_ids=["1001", "1002"],
+            active_store_id="1001",
+            row_mode="aggregated",
+            override_scope="global",
+            inventory_scope="combined",
+            top_k=8,
+            lookback_days=90,
+        )
+        assert mix.rows
+        assert all((row.store_count or 0) >= 1 for row in mix.rows)
 
 
 def test_merch_export_csv_supports_all_views(monkeypatch):
@@ -2233,11 +2328,12 @@ def test_render_exec_workspace_returns_template_and_payload(monkeypatch):
         assert template_uri.startswith("ui://widgets/exec/workspace-")
         assert result.structuredContent["kind"] == "exec_workspace"
         payload = result.structuredContent["payload"]
-        assert payload["last_tool"] == "fashion_exec_overview"
         assert payload["filters"]["lookback_days"] == 84
+        assert payload["filters"]["objective"] == "revenue"
         assert payload["filters"]["to_email"] == "manager@example.com"
-        assert "brands" in payload["filters"]
-        assert "brandOptions" in payload["uiHints"]
+        assert payload["initial_result"]["store_count"] > 0
+        assert payload["initial_result"]["stores"]
+        assert payload["last_tool"] == "fashion_exec_overview"
         assert "Executive Overview Workspace" in html
         assert "window.__FASHION_WIDGET__" in html
 

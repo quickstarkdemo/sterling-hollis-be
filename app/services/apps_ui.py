@@ -64,6 +64,7 @@ def _widget_js(kind: str) -> str:
         "customer_search_workspace": "widget.js",
         "merch_workspace": "merch-widget.js",
         "exec_workspace": "exec-widget.js",
+        "unified_workspace": "unified-widget.js",
     }.get(kind, "widget.js")
     return (_STATIC_DIR / script_name).read_text(encoding="utf-8")
 
@@ -79,7 +80,7 @@ def render_widget_html(
     asset_base = settings.public_base_url.rstrip("/") + "/ui-assets"
     vendor_script = (
         f'<script src="{html.escape(asset_base)}/vendor/chart.umd.min.js"></script>'
-        if kind in {"customer_search_workspace", "merch_workspace", "exec_workspace"}
+        if kind in {"customer_search_workspace", "merch_workspace", "exec_workspace", "unified_workspace"}
         else ""
     )
     build_version = settings.app_build_version or "dev"
@@ -87,6 +88,7 @@ def render_widget_html(
         "customer_search_workspace": "Search customers by name, email, or phone and select a profile for follow-up actions.",
         "merch_workspace": "Evaluate store performance, compare peers, and export merchandising decisions to CSV.",
         "exec_workspace": "Review company-wide performance, readiness risks, what-if scenarios, and campaign approvals.",
+        "unified_workspace": "Unified executive and merchandising workspace with shared filters, inventory views, and export parity.",
     }.get(kind, "Operator workspace")
     return f"""<!doctype html>
 <html lang="en">

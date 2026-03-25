@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import csv
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -64,6 +65,7 @@ from app.schemas import (
     InventoryProductRow,
     InventoryProductsResponse,
     MerchActionRecommendationsResponse,
+    MerchAction,
     MerchDiagnosticsResponse,
     MerchEffectiveStrategyResponse,
     MerchExportMode,
@@ -87,6 +89,7 @@ from app.schemas import (
     MerchandisingRecommendationRequest,
     MerchandisingRecommendationResponse,
     Objective,
+    OverrideScope,
     PeerMode,
     ProductPerformanceDimension,
     ProductPerformanceSummaryRequest,
@@ -105,6 +108,25 @@ from app.schemas import (
     SyntheticLoadRequest,
     SyntheticLoadResponse,
     TwilioSmokeTestResponse,
+    UnifiedActionRecommendationsRequest,
+    UnifiedActionRecommendationsResponse,
+    UnifiedActionRecommendationRow,
+    UnifiedExportCsvRequest,
+    UnifiedExportCsvResponse,
+    UnifiedExportCsvRow,
+    UnifiedInventoryViewRequest,
+    UnifiedInventoryViewResponse,
+    UnifiedInventoryViewRow,
+    UnifiedOverviewRequest,
+    UnifiedOverviewResponse,
+    UnifiedProductMixRecommendationsRequest,
+    UnifiedProductMixRecommendationsResponse,
+    UnifiedProductMixRecommendationRow,
+    UnifiedRecommendationOverride,
+    UnifiedRowMode,
+    UnifiedWorkspaceBootstrapResponse,
+    UnifiedWorkspaceFilters,
+    UnifiedWorkspaceView,
     VectorStatusResponse,
 )
 from app.services.apps_ui import render_widget_html
@@ -198,6 +220,7 @@ _WIDGET_TOOL_META = {
 _CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE = "ui://widgets/customer-search/workspace"
 _MERCH_WORKSPACE_TEMPLATE_BASE = "ui://widgets/merch/workspace"
 _EXEC_WORKSPACE_TEMPLATE_BASE = "ui://widgets/exec/workspace"
+_UNIFIED_WORKSPACE_TEMPLATE_BASE = "ui://widgets/unified/workspace"
 _DEFAULT_EXEC_TO_EMAIL = "djn12313@gmail.com"
 _WIDGET_BUILD_TAG = re.sub(r"[^A-Za-z0-9._-]", "-", settings.app_build_version or "dev")
 _WIDGET_ASSET_DIR = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
@@ -221,9 +244,13 @@ _MERCH_WIDGET_TAG = (
 _EXEC_WIDGET_TAG = (
     f"{_WIDGET_BUILD_TAG}-{_widget_asset_hash('exec-widget.js')}-{_widget_asset_hash('widget.css')}"
 )
+_UNIFIED_WIDGET_TAG = (
+    f"{_WIDGET_BUILD_TAG}-{_widget_asset_hash('unified-widget.js')}-{_widget_asset_hash('widget.css')}"
+)
 _CUSTOMER_SEARCH_WIDGET_RESOURCE_URI = f"{_CUSTOMER_SEARCH_WIDGET_TEMPLATE_BASE}-{_CUSTOMER_WIDGET_TAG}.html"
 _MERCH_WORKSPACE_RESOURCE_URI = f"{_MERCH_WORKSPACE_TEMPLATE_BASE}-{_MERCH_WIDGET_TAG}.html"
 _EXEC_WORKSPACE_RESOURCE_URI = f"{_EXEC_WORKSPACE_TEMPLATE_BASE}-{_EXEC_WIDGET_TAG}.html"
+_UNIFIED_WORKSPACE_RESOURCE_URI = f"{_UNIFIED_WORKSPACE_TEMPLATE_BASE}-{_UNIFIED_WIDGET_TAG}.html"
 
 
 class LatestRunResponse(BaseModel):
@@ -996,6 +1023,18 @@ def exec_workspace_resource() -> str:
     return render_widget_html("Executive Overview Workspace", "exec_workspace")
 
 
+@mcp.resource(
+    _UNIFIED_WORKSPACE_RESOURCE_URI,
+    mime_type="text/html;profile=mcp-app",
+    meta={
+        **_WIDGET_RESOURCE_META,
+        "openai/widgetDescription": "Unified executive and merchandising workspace with shared filters and export parity.",
+    },
+)
+def unified_workspace_resource() -> str:
+    return render_widget_html("Unified Workspace", "unified_workspace")
+
+
 @mcp.tool(name="fashion_vector_status", annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True))
 def fashion_vector_status(probe: bool = False) -> VectorStatusResponse:
     """Return the current embedding and Pinecone runtime mode, with optional live provider probes."""
@@ -1631,6 +1670,1215 @@ def _exec_workspace_payload(
             "features": {
                 "execAutoOptimizeEnabled": settings.exec_auto_optimize_enabled,
                 "strategyPacketEnabled": settings.strategy_packet_enabled,
+            },
+        },
+    }
+
+
+def _normalized_string_tokens(values: list[str] | None) -> list[str]:
+    tokens: list[str] = []
+    for value in values or []:
+        token = str(value or "").strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _normalized_unified_brands(*, brand: str | None = None, brands: list[str] | None = None) -> list[str]:
+    normalized = _normalized_string_tokens(brands)
+    if brand:
+        for chunk in str(brand).replace(";", ",").replace("|", ",").split(","):
+            token = chunk.strip()
+            if token and token not in normalized:
+                normalized.append(token)
+    return normalized
+
+
+def _resolve_unified_store_scope(
+    db,
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+) -> tuple[list[str], str | None, dict[str, Store]]:
+    resolved_store_ids = _normalized_string_tokens(store_ids)
+    resolved_active_store_id = str(active_store_id or "").strip() or None
+
+    if store_id or store_query:
+        resolved = resolve_store(db, store_query=store_query, store_id=store_id).resolved
+        if resolved.id not in resolved_store_ids:
+            resolved_store_ids.append(resolved.id)
+        if resolved_active_store_id is None:
+            resolved_active_store_id = resolved.id
+
+    if not resolved_store_ids:
+        resolved_store_ids = list(db.scalars(select(Store.id).order_by(Store.id.asc())).all())
+
+    if resolved_active_store_id and resolved_active_store_id not in resolved_store_ids:
+        resolved_store_ids.insert(0, resolved_active_store_id)
+
+    rows = db.scalars(select(Store).where(Store.id.in_(resolved_store_ids))).all() if resolved_store_ids else []
+    store_map = {row.id: row for row in rows}
+    missing_ids = [value for value in resolved_store_ids if value not in store_map]
+    if missing_ids:
+        raise ValueError(f"Unknown store_ids: {', '.join(missing_ids)}")
+
+    ordered_store_map = {store_id_value: store_map[store_id_value] for store_id_value in resolved_store_ids}
+    if resolved_active_store_id is None and resolved_store_ids:
+        resolved_active_store_id = resolved_store_ids[0]
+    if resolved_active_store_id and resolved_active_store_id not in ordered_store_map:
+        raise ValueError(f"active_store_id {resolved_active_store_id} is not in the selected store scope.")
+    return resolved_store_ids, resolved_active_store_id, ordered_store_map
+
+
+def _unified_inventory_group_key(row: UnifiedInventoryViewRow) -> tuple:
+    if row.row_type == MerchInventoryRowType.potential_offer:
+        return (
+            row.row_type.value,
+            str(row.offer_id or ""),
+            str(row.title or "").strip().lower(),
+            str(row.brand or "").strip().lower(),
+            str(row.category or "").strip().lower(),
+            str(row.available_on or ""),
+        )
+    return (
+        row.row_type.value,
+        str(row.product_id or ""),
+        str(row.title or "").strip().lower(),
+        str(row.brand or "").strip().lower(),
+        str(row.category or "").strip().lower(),
+        str(row.size or "").strip().lower(),
+        _as_scalar(row.price),
+    )
+
+
+def _aggregate_unified_inventory_rows(rows: list[UnifiedInventoryViewRow]) -> list[UnifiedInventoryViewRow]:
+    grouped: dict[tuple, dict] = {}
+    for row in rows:
+        key = _unified_inventory_group_key(row)
+        payload = grouped.get(key)
+        if payload is None:
+            payload = {
+                "row": UnifiedInventoryViewRow(
+                    row_type=row.row_type,
+                    store_id=None,
+                    store_name=None,
+                    store_count=0,
+                    product_id=row.product_id,
+                    offer_id=row.offer_id,
+                    title=row.title,
+                    brand=row.brand,
+                    category=row.category,
+                    size=row.size,
+                    price=row.price,
+                    availability=row.availability,
+                    stock_state=row.stock_state,
+                    inventory_qty=0,
+                    available_on=row.available_on,
+                    offer_status=row.offer_status,
+                    link=row.link,
+                    image_url=row.image_url,
+                    perf_revenue=0.0,
+                    perf_units=0.0,
+                    perf_margin_rate=0.0,
+                ),
+                "store_ids": set(),
+                "margin_value": 0.0,
+                "margin_rate_sum": 0.0,
+                "margin_rate_count": 0,
+            }
+            grouped[key] = payload
+
+        item: UnifiedInventoryViewRow = payload["row"]
+        store_id = str(row.store_id or "").strip()
+        if store_id:
+            payload["store_ids"].add(store_id)
+        item.store_count = len(payload["store_ids"]) if payload["store_ids"] else max(item.store_count, 1)
+        item.inventory_qty = int(item.inventory_qty or 0) + int(row.inventory_qty or 0)
+        item.perf_revenue = float(item.perf_revenue or 0.0) + float(row.perf_revenue or 0.0)
+        item.perf_units = float(item.perf_units or 0.0) + float(row.perf_units or 0.0)
+        payload["margin_value"] += float(row.perf_margin_rate or 0.0) * float(row.perf_revenue or 0.0)
+        payload["margin_rate_sum"] += float(row.perf_margin_rate or 0.0)
+        payload["margin_rate_count"] += 1
+
+    aggregated: list[UnifiedInventoryViewRow] = []
+    for payload in grouped.values():
+        item: UnifiedInventoryViewRow = payload["row"]
+        revenue = float(item.perf_revenue or 0.0)
+        if revenue > 0:
+            item.perf_margin_rate = float(payload["margin_value"] / revenue)
+        elif payload["margin_rate_count"] > 0:
+            item.perf_margin_rate = float(payload["margin_rate_sum"] / payload["margin_rate_count"])
+        item.store_count = len(payload["store_ids"]) if payload["store_ids"] else max(int(item.store_count or 0), 1)
+        aggregated.append(item)
+
+    aggregated.sort(
+        key=lambda row: (
+            row.row_type.value,
+            -float(row.perf_revenue or 0.0),
+            str(row.brand or "").lower(),
+            str(row.title or "").lower(),
+            str(row.product_id or row.offer_id or ""),
+        )
+    )
+    return aggregated
+
+
+def _aggregate_unified_recommendation_rows(
+    rows: list[UnifiedActionRecommendationRow],
+    top_k: int,
+) -> list[UnifiedActionRecommendationRow]:
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        key = str(row.product_id or "").strip() or "|".join(
+            [
+                str(row.title or "").strip().lower(),
+                str(row.brand or "").strip().lower(),
+                str(row.category or "").strip().lower(),
+            ]
+        )
+        payload = grouped.get(key)
+        if payload is None:
+            payload = {
+                "representative": row,
+                "store_ids": set(),
+                "metric_value": 0.0,
+                "peer_delta": 0.0,
+                "prior_period_delta": 0.0,
+                "has_prior_delta": False,
+                "model_action_counter": Counter(),
+                "final_action_counter": Counter(),
+                "model_priority_counter": Counter(),
+                "final_priority_counter": Counter(),
+                "override_notes": set(),
+            }
+            grouped[key] = payload
+
+        if row.store_id:
+            payload["store_ids"].add(row.store_id)
+        payload["metric_value"] += float(row.metric_value or 0.0)
+        payload["peer_delta"] += float(row.peer_delta or 0.0)
+        if row.prior_period_delta is not None:
+            payload["prior_period_delta"] += float(row.prior_period_delta or 0.0)
+            payload["has_prior_delta"] = True
+        payload["model_action_counter"][row.model_action.value] += 1
+        payload["final_action_counter"][row.final_action.value] += 1
+        payload["model_priority_counter"][row.model_priority_tier.value] += 1
+        payload["final_priority_counter"][row.final_priority_tier.value] += 1
+        if row.override_note:
+            payload["override_notes"].add(row.override_note.strip())
+        if float(row.metric_value or 0.0) > float(payload["representative"].metric_value or 0.0):
+            payload["representative"] = row
+
+    aggregated: list[UnifiedActionRecommendationRow] = []
+    for payload in grouped.values():
+        representative: UnifiedActionRecommendationRow = payload["representative"]
+        model_action_value = payload["model_action_counter"].most_common(1)[0][0]
+        final_action_value = payload["final_action_counter"].most_common(1)[0][0]
+        model_priority_value = payload["model_priority_counter"].most_common(1)[0][0]
+        final_priority_value = payload["final_priority_counter"].most_common(1)[0][0]
+        notes = sorted(payload["override_notes"])
+        aggregated.append(
+            UnifiedActionRecommendationRow(
+                store_id=None,
+                store_name=None,
+                store_count=max(1, len(payload["store_ids"])),
+                product_id=representative.product_id,
+                title=representative.title,
+                brand=representative.brand,
+                category=representative.category,
+                price=representative.price,
+                link=representative.link,
+                image_url=representative.image_url,
+                price_band=representative.price_band,
+                occasion=representative.occasion,
+                metric_value=float(payload["metric_value"]),
+                peer_delta=float(payload["peer_delta"]),
+                prior_period_delta=(
+                    float(payload["prior_period_delta"])
+                    if payload["has_prior_delta"]
+                    else None
+                ),
+                rationale=representative.rationale,
+                model_action=MerchAction(model_action_value),
+                model_priority_tier=MerchPriorityTier(model_priority_value),
+                final_action=MerchFinalAction(final_action_value),
+                final_priority_tier=MerchPriorityTier(final_priority_value),
+                override_note=notes[0] if len(notes) == 1 else None,
+            )
+        )
+
+    aggregated.sort(
+        key=lambda row: (
+            -float(row.metric_value or 0.0),
+            str(row.brand or "").lower(),
+            str(row.title or "").lower(),
+            str(row.product_id or ""),
+        )
+    )
+    return aggregated[: max(1, min(int(top_k or 12), 100))]
+
+
+def _aggregate_unified_mix_rows(
+    rows: list[UnifiedProductMixRecommendationRow],
+    top_k: int,
+) -> list[UnifiedProductMixRecommendationRow]:
+    grouped: dict[tuple, dict] = {}
+    for row in rows:
+        key = (
+            row.action.value,
+            str(row.current_product_id or ""),
+            str(row.offer_id or ""),
+            str(row.brand or "").strip().lower(),
+            str(row.category or "").strip().lower(),
+            str(row.current_title or "").strip().lower(),
+            str(row.offer_title or "").strip().lower(),
+        )
+        payload = grouped.get(key)
+        if payload is None:
+            payload = {
+                "representative": row,
+                "store_ids": set(),
+                "fit_score_sum": 0.0,
+                "count": 0,
+                "expected_mix_impact_sum": 0.0,
+            }
+            grouped[key] = payload
+        if row.store_id:
+            payload["store_ids"].add(row.store_id)
+        payload["fit_score_sum"] += float(row.fit_score or 0.0)
+        payload["expected_mix_impact_sum"] += float(row.expected_mix_impact or 0.0)
+        payload["count"] += 1
+
+    aggregated: list[UnifiedProductMixRecommendationRow] = []
+    for payload in grouped.values():
+        representative: UnifiedProductMixRecommendationRow = payload["representative"]
+        count = max(1, int(payload["count"] or 1))
+        aggregated.append(
+            UnifiedProductMixRecommendationRow(
+                store_id=None,
+                store_name=None,
+                store_count=max(1, len(payload["store_ids"])),
+                action=representative.action,
+                fit_score=float(payload["fit_score_sum"] / count),
+                expected_mix_impact=float(payload["expected_mix_impact_sum"]),
+                rationale=representative.rationale,
+                brand=representative.brand,
+                category=representative.category,
+                current_product_id=representative.current_product_id,
+                current_title=representative.current_title,
+                current_revenue=representative.current_revenue,
+                current_units=representative.current_units,
+                offer_id=representative.offer_id,
+                offer_title=representative.offer_title,
+                offer_status=representative.offer_status,
+                available_on=representative.available_on,
+                offer_price=representative.offer_price,
+            )
+        )
+
+    action_rank = {"swap": 0, "add": 1, "hold": 2, "reduce": 3}
+    aggregated.sort(
+        key=lambda row: (
+            action_rank.get(row.action.value, 9),
+            -float(row.fit_score or 0.0),
+            -float(row.expected_mix_impact or 0.0),
+            str(row.offer_title or row.current_title or "").lower(),
+        )
+    )
+    return aggregated[: max(1, min(int(top_k or 12), 100))]
+
+
+def _unified_override_maps(
+    overrides: list[UnifiedRecommendationOverride],
+) -> tuple[dict[str, UnifiedRecommendationOverride], dict[tuple[str, str], UnifiedRecommendationOverride]]:
+    global_map: dict[str, UnifiedRecommendationOverride] = {}
+    store_map: dict[tuple[str, str], UnifiedRecommendationOverride] = {}
+    for override in overrides or []:
+        product_id = str(override.product_id or "").strip()
+        store_id = str(override.store_id or "").strip()
+        if not product_id:
+            continue
+        if store_id:
+            store_map[(store_id, product_id)] = override
+        else:
+            global_map[product_id] = override
+    return global_map, store_map
+
+
+def _resolve_unified_override(
+    *,
+    override_scope: OverrideScope,
+    store_id: str,
+    product_id: str,
+    global_map: dict[str, UnifiedRecommendationOverride],
+    store_map: dict[tuple[str, str], UnifiedRecommendationOverride],
+) -> UnifiedRecommendationOverride | None:
+    if override_scope == OverrideScope.global_scope:
+        return global_map.get(product_id)
+    return store_map.get((store_id, product_id))
+
+
+def _unified_overview_impl(params: UnifiedOverviewRequest) -> UnifiedOverviewResponse:
+    with SessionLocal() as db:
+        resolved_store_ids, resolved_active_store_id, _ = _resolve_unified_store_scope(
+            db,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            active_store_id=params.active_store_id,
+        )
+        overview = executive_overview(
+            db,
+            store_ids=resolved_store_ids,
+            lookback_days=params.lookback_days,
+            objective=params.objective,
+            top_k_stores=params.top_k_stores,
+        )
+
+    return UnifiedOverviewResponse(
+        summary=overview.summary,
+        lookback_days=overview.lookback_days,
+        objective=overview.objective,
+        generated_at=overview.generated_at,
+        store_ids=resolved_store_ids,
+        active_store_id=resolved_active_store_id,
+        total_revenue=overview.total_revenue,
+        total_units=overview.total_units,
+        margin_rate=overview.margin_rate,
+        prior_revenue=overview.prior_revenue,
+        prior_margin_rate=overview.prior_margin_rate,
+        revenue_delta_pct=overview.revenue_delta_pct,
+        store_count=overview.store_count,
+        stores=overview.stores,
+        trend=overview.trend,
+    )
+
+
+def _unified_inventory_view_impl(params: UnifiedInventoryViewRequest) -> UnifiedInventoryViewResponse:
+    with SessionLocal() as db:
+        resolved_store_ids, resolved_active_store_id, store_map = _resolve_unified_store_scope(
+            db,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            active_store_id=params.active_store_id,
+        )
+
+    brand_values = _normalized_unified_brands(brand=params.brand, brands=params.brands)
+    brand_csv = ", ".join(brand_values) if brand_values else None
+    occasion_values = _normalized_occasion_tokens(occasion=params.occasion, occasions=params.occasions)
+    resolved_occasion = occasion_values[0] if occasion_values else None
+
+    store_rows: list[UnifiedInventoryViewRow] = []
+    for store_id_value in resolved_store_ids:
+        inventory_view = _merch_inventory_view_impl(
+            MerchInventoryViewRequest(
+                store_id=store_id_value,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=brand_csv,
+                price_band=params.price_band,
+                occasion=resolved_occasion,
+                occasions=occasion_values,
+                inventory_scope=params.inventory_scope,
+                future_window_days=params.future_window_days,
+                limit=params.limit,
+            )
+        )
+        store = store_map.get(store_id_value)
+        store_name = store.name if store is not None else store_id_value
+        for row in inventory_view.rows:
+            store_rows.append(
+                UnifiedInventoryViewRow(
+                    row_type=row.row_type,
+                    store_id=store_id_value,
+                    store_name=store_name,
+                    store_count=1,
+                    product_id=row.product_id,
+                    offer_id=row.offer_id,
+                    title=row.title,
+                    brand=row.brand,
+                    category=row.category,
+                    size=row.size,
+                    price=row.price,
+                    availability=row.availability,
+                    stock_state=row.stock_state,
+                    inventory_qty=row.inventory_qty,
+                    available_on=row.available_on,
+                    offer_status=row.offer_status,
+                    link=row.link,
+                    image_url=row.image_url,
+                    perf_revenue=row.perf_revenue,
+                    perf_units=row.perf_units,
+                    perf_margin_rate=row.perf_margin_rate,
+                )
+            )
+
+    if params.row_mode == UnifiedRowMode.aggregated:
+        rows = _aggregate_unified_inventory_rows(store_rows)
+    else:
+        rows = sorted(
+            store_rows,
+            key=lambda row: (
+                str(row.store_name or "").lower(),
+                row.row_type.value,
+                str(row.brand or "").lower(),
+                str(row.title or "").lower(),
+                str(row.product_id or row.offer_id or ""),
+            ),
+        )
+
+    current_rows = sum(1 for row in rows if row.row_type == MerchInventoryRowType.current_inventory)
+    potential_rows = sum(1 for row in rows if row.row_type == MerchInventoryRowType.potential_offer)
+    summary = (
+        f"Unified inventory ({params.row_mode.value}) across {len(resolved_store_ids)} stores: "
+        f"{len(rows)} rows (current {current_rows}, potential {potential_rows})."
+    )
+    return UnifiedInventoryViewResponse(
+        summary=summary,
+        store_ids=resolved_store_ids,
+        active_store_id=resolved_active_store_id,
+        lookback_days=params.lookback_days,
+        category=params.category,
+        brands=brand_values,
+        price_band=params.price_band,
+        occasions=occasion_values,
+        row_mode=params.row_mode,
+        inventory_scope=params.inventory_scope,
+        future_window_days=params.future_window_days,
+        rows=rows,
+        total_rows=len(rows),
+        current_rows=current_rows,
+        potential_rows=potential_rows,
+    )
+
+
+def _unified_action_recommendations_impl(
+    params: UnifiedActionRecommendationsRequest,
+) -> UnifiedActionRecommendationsResponse:
+    brand_values = _normalized_unified_brands(brand=params.brand, brands=params.brands)
+    brand_csv = ", ".join(brand_values) if brand_values else None
+    occasion_values = _normalized_occasion_tokens(occasion=params.occasion, occasions=params.occasions)
+    resolved_occasion = occasion_values[0] if occasion_values else None
+    global_override_map, store_override_map = _unified_override_maps(params.recommendation_overrides)
+
+    with SessionLocal() as db:
+        resolved_store_ids, resolved_active_store_id, store_map = _resolve_unified_store_scope(
+            db,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            active_store_id=params.active_store_id,
+        )
+
+        store_rows: list[UnifiedActionRecommendationRow] = []
+        for store_id_value in resolved_store_ids:
+            result = merchandising_action_recommendations(
+                db,
+                store_id=store_id_value,
+                question=params.question,
+                objective=params.objective,
+                lookback_days=params.lookback_days,
+                top_k=params.top_k,
+                category=params.category,
+                brand=brand_csv,
+                price_band=params.price_band,
+                occasion=resolved_occasion,
+                occasions=occasion_values,
+                compare_mode=params.compare_mode,
+                peer_mode=params.peer_mode,
+                compare_store_id=params.compare_store_id,
+            )
+            total_recommendations = max(1, len(result.recommendations))
+            store = store_map.get(store_id_value)
+            store_name = store.name if store is not None else store_id_value
+            for index, item in enumerate(result.recommendations):
+                model_priority_tier = _priority_tier_for_rank(index, total_recommendations)
+                override = _resolve_unified_override(
+                    override_scope=params.override_scope,
+                    store_id=store_id_value,
+                    product_id=item.product_id,
+                    global_map=global_override_map,
+                    store_map=store_override_map,
+                )
+                model_action = item.action
+                default_final_action = MerchFinalAction(item.action.value)
+                final_action = override.final_action if override else default_final_action
+                final_priority_tier = override.priority_tier if override else model_priority_tier
+                store_rows.append(
+                    UnifiedActionRecommendationRow(
+                        store_id=store_id_value,
+                        store_name=store_name,
+                        store_count=1,
+                        product_id=item.product_id,
+                        title=item.title,
+                        brand=item.brand,
+                        category=item.category,
+                        price=item.price,
+                        link=item.link,
+                        image_url=item.image_url,
+                        price_band=item.price_band,
+                        occasion=item.occasion,
+                        metric_value=item.metric_value,
+                        peer_delta=item.peer_delta,
+                        prior_period_delta=item.prior_period_delta,
+                        rationale=item.rationale,
+                        model_action=model_action,
+                        model_priority_tier=model_priority_tier,
+                        final_action=final_action,
+                        final_priority_tier=final_priority_tier,
+                        override_note=override.override_note if override else None,
+                    )
+                )
+
+    if params.row_mode == UnifiedRowMode.aggregated:
+        rows = _aggregate_unified_recommendation_rows(store_rows, top_k=params.top_k)
+    else:
+        rows = sorted(
+            store_rows,
+            key=lambda row: (
+                str(row.store_name or "").lower(),
+                -float(row.metric_value or 0.0),
+                str(row.title or "").lower(),
+                str(row.product_id or ""),
+            ),
+        )
+
+    summary = (
+        f"Unified recommendations ({params.row_mode.value}) generated across {len(resolved_store_ids)} stores "
+        f"with override scope {params.override_scope.value}."
+    )
+    return UnifiedActionRecommendationsResponse(
+        summary=summary,
+        store_ids=resolved_store_ids,
+        active_store_id=resolved_active_store_id,
+        objective=params.objective,
+        lookback_days=params.lookback_days,
+        category=params.category,
+        brands=brand_values,
+        price_band=params.price_band,
+        occasions=occasion_values,
+        row_mode=params.row_mode,
+        override_scope=params.override_scope,
+        recommendations=rows,
+    )
+
+
+def _mix_overrides_for_store(
+    *,
+    store_id: str,
+    override_scope: OverrideScope,
+    overrides: list[UnifiedRecommendationOverride],
+) -> list[MerchRecommendationOverride]:
+    scoped: list[MerchRecommendationOverride] = []
+    for override in overrides:
+        if override_scope == OverrideScope.store and str(override.store_id or "").strip() != store_id:
+            continue
+        if override_scope == OverrideScope.global_scope and str(override.store_id or "").strip():
+            continue
+        scoped.append(
+            MerchRecommendationOverride(
+                product_id=override.product_id,
+                final_action=override.final_action,
+                priority_tier=override.priority_tier,
+                override_note=override.override_note,
+            )
+        )
+    return scoped
+
+
+def _unified_mix_recommendations_impl(
+    params: UnifiedProductMixRecommendationsRequest,
+) -> UnifiedProductMixRecommendationsResponse:
+    brand_values = _normalized_unified_brands(brand=params.brand, brands=params.brands)
+    brand_csv = ", ".join(brand_values) if brand_values else None
+    occasion_values = _normalized_occasion_tokens(occasion=params.occasion, occasions=params.occasions)
+    resolved_occasion = occasion_values[0] if occasion_values else None
+
+    with SessionLocal() as db:
+        resolved_store_ids, resolved_active_store_id, store_map = _resolve_unified_store_scope(
+            db,
+            store_query=params.store_query,
+            store_id=params.store_id,
+            store_ids=params.store_ids,
+            active_store_id=params.active_store_id,
+        )
+
+    store_rows: list[UnifiedProductMixRecommendationRow] = []
+    for store_id_value in resolved_store_ids:
+        mix_result = _merch_mix_analysis_impl(
+            MerchProductMixRecommendationsRequest(
+                store_id=store_id_value,
+                lookback_days=params.lookback_days,
+                top_k=params.top_k,
+                category=params.category,
+                brand=brand_csv,
+                price_band=params.price_band,
+                occasion=resolved_occasion,
+                occasions=occasion_values,
+                inventory_scope=params.inventory_scope,
+                future_window_days=params.future_window_days,
+                recommendation_overrides=_mix_overrides_for_store(
+                    store_id=store_id_value,
+                    override_scope=params.override_scope,
+                    overrides=params.recommendation_overrides,
+                ),
+            )
+        )
+        store = store_map.get(store_id_value)
+        store_name = store.name if store is not None else store_id_value
+        for row in mix_result.rows:
+            store_rows.append(
+                UnifiedProductMixRecommendationRow(
+                    store_id=store_id_value,
+                    store_name=store_name,
+                    store_count=1,
+                    action=row.action,
+                    fit_score=row.fit_score,
+                    expected_mix_impact=row.expected_mix_impact,
+                    rationale=row.rationale,
+                    brand=row.brand,
+                    category=row.category,
+                    current_product_id=row.current_product_id,
+                    current_title=row.current_title,
+                    current_revenue=row.current_revenue,
+                    current_units=row.current_units,
+                    offer_id=row.offer_id,
+                    offer_title=row.offer_title,
+                    offer_status=row.offer_status,
+                    available_on=row.available_on,
+                    offer_price=row.offer_price,
+                )
+            )
+
+    if params.row_mode == UnifiedRowMode.aggregated:
+        rows = _aggregate_unified_mix_rows(store_rows, top_k=params.top_k)
+    else:
+        rows = sorted(
+            store_rows,
+            key=lambda row: (
+                str(row.store_name or "").lower(),
+                {"swap": 0, "add": 1, "hold": 2, "reduce": 3}.get(row.action.value, 9),
+                -float(row.fit_score or 0.0),
+                str(row.offer_title or row.current_title or "").lower(),
+            ),
+        )
+
+    summary = (
+        f"Unified mix analysis ({params.row_mode.value}) generated across {len(resolved_store_ids)} stores "
+        f"with override scope {params.override_scope.value}."
+    )
+    return UnifiedProductMixRecommendationsResponse(
+        summary=summary,
+        store_ids=resolved_store_ids,
+        active_store_id=resolved_active_store_id,
+        lookback_days=params.lookback_days,
+        top_k=params.top_k,
+        category=params.category,
+        brands=brand_values,
+        price_band=params.price_band,
+        occasions=occasion_values,
+        row_mode=params.row_mode,
+        override_scope=params.override_scope,
+        inventory_scope=params.inventory_scope,
+        future_window_days=params.future_window_days,
+        rows=rows,
+    )
+
+
+def _unified_export_csv_impl(params: UnifiedExportCsvRequest) -> UnifiedExportCsvResponse:
+    generated_at = datetime.now(timezone.utc)
+    rows: list[dict[str, str]] = []
+    headers: list[str] = []
+
+    if params.view == UnifiedWorkspaceView.executive_overview:
+        result = _unified_overview_impl(
+            UnifiedOverviewRequest(
+                store_query=params.store_query,
+                store_id=params.store_id,
+                store_ids=params.store_ids,
+                active_store_id=params.active_store_id,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                brands=params.brands,
+                occasion=params.occasion,
+                occasions=params.occasions,
+                price_band=params.price_band,
+                objective=params.objective,
+                top_k_stores=params.top_k_stores,
+            )
+        )
+        headers = [
+            "view",
+            "row_type",
+            "store_id",
+            "store_name",
+            "city",
+            "state",
+            "rank",
+            "revenue",
+            "units",
+            "margin_rate",
+            "revenue_share_pct",
+            "revenue_delta_pct",
+            "lookback_days",
+            "objective",
+            "generated_at",
+        ]
+        rows = [
+            {
+                "view": params.view.value,
+                "row_type": "store_summary",
+                "store_id": _as_scalar(item.store_id),
+                "store_name": _as_scalar(item.store_name),
+                "city": _as_scalar(item.city),
+                "state": _as_scalar(item.state),
+                "rank": _as_scalar(item.rank),
+                "revenue": _as_scalar(item.revenue),
+                "units": _as_scalar(item.units),
+                "margin_rate": _as_scalar(item.margin_rate),
+                "revenue_share_pct": _as_scalar(item.revenue_share_pct),
+                "revenue_delta_pct": _as_scalar(item.revenue_delta_pct),
+                "lookback_days": _as_scalar(result.lookback_days),
+                "objective": _as_scalar(result.objective),
+                "generated_at": result.generated_at.isoformat(),
+            }
+            for item in result.stores
+        ]
+    elif params.view == UnifiedWorkspaceView.inventory:
+        result = _unified_inventory_view_impl(
+            UnifiedInventoryViewRequest(
+                store_query=params.store_query,
+                store_id=params.store_id,
+                store_ids=params.store_ids,
+                active_store_id=params.active_store_id,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                brands=params.brands,
+                occasion=params.occasion,
+                occasions=params.occasions,
+                price_band=params.price_band,
+                row_mode=params.row_mode,
+                inventory_scope=params.inventory_scope,
+                future_window_days=params.future_window_days,
+                limit=params.limit,
+            )
+        )
+        headers = [
+            "view",
+            "row_mode",
+            "row_type",
+            "store_id",
+            "store_name",
+            "store_count",
+            "product_id",
+            "offer_id",
+            "title",
+            "brand",
+            "category",
+            "size",
+            "price",
+            "availability",
+            "stock_state",
+            "inventory_qty",
+            "available_on",
+            "offer_status",
+            "perf_revenue",
+            "perf_units",
+            "perf_margin_rate",
+            "inventory_scope",
+            "future_window_days",
+            "lookback_days",
+            "link",
+            "image_url",
+        ]
+        rows = [
+            {
+                "view": params.view.value,
+                "row_mode": _as_scalar(result.row_mode),
+                "row_type": _as_scalar(item.row_type),
+                "store_id": _as_scalar(item.store_id),
+                "store_name": _as_scalar(item.store_name),
+                "store_count": _as_scalar(item.store_count),
+                "product_id": _as_scalar(item.product_id),
+                "offer_id": _as_scalar(item.offer_id),
+                "title": _as_scalar(item.title),
+                "brand": _as_scalar(item.brand),
+                "category": _as_scalar(item.category),
+                "size": _as_scalar(item.size),
+                "price": _as_scalar(item.price),
+                "availability": _as_scalar(item.availability),
+                "stock_state": _as_scalar(item.stock_state),
+                "inventory_qty": _as_scalar(item.inventory_qty),
+                "available_on": _as_scalar(item.available_on),
+                "offer_status": _as_scalar(item.offer_status),
+                "perf_revenue": _as_scalar(item.perf_revenue),
+                "perf_units": _as_scalar(item.perf_units),
+                "perf_margin_rate": _as_scalar(item.perf_margin_rate),
+                "inventory_scope": _as_scalar(result.inventory_scope),
+                "future_window_days": _as_scalar(result.future_window_days),
+                "lookback_days": _as_scalar(result.lookback_days),
+                "link": _as_scalar(item.link),
+                "image_url": _as_scalar(item.image_url),
+            }
+            for item in result.rows
+        ]
+    elif params.view == UnifiedWorkspaceView.recommendations:
+        result = _unified_action_recommendations_impl(
+            UnifiedActionRecommendationsRequest(
+                store_query=params.store_query,
+                store_id=params.store_id,
+                store_ids=params.store_ids,
+                active_store_id=params.active_store_id,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                brands=params.brands,
+                occasion=params.occasion,
+                occasions=params.occasions,
+                price_band=params.price_band,
+                question=params.question,
+                objective=params.objective,
+                top_k=params.top_k,
+                row_mode=params.row_mode,
+                override_scope=params.override_scope,
+                recommendation_overrides=params.recommendation_overrides,
+                compare_mode=params.compare_mode,
+                peer_mode=params.peer_mode,
+                compare_store_id=params.compare_store_id,
+            )
+        )
+        headers = [
+            "view",
+            "row_mode",
+            "override_scope",
+            "store_id",
+            "store_name",
+            "store_count",
+            "product_id",
+            "title",
+            "brand",
+            "category",
+            "price",
+            "price_band",
+            "metric_value",
+            "peer_delta",
+            "prior_period_delta",
+            "model_action",
+            "model_priority_tier",
+            "final_action",
+            "final_priority_tier",
+            "override_note",
+            "rationale",
+            "link",
+            "image_url",
+        ]
+        rows = [
+            {
+                "view": params.view.value,
+                "row_mode": _as_scalar(result.row_mode),
+                "override_scope": _as_scalar(result.override_scope),
+                "store_id": _as_scalar(item.store_id),
+                "store_name": _as_scalar(item.store_name),
+                "store_count": _as_scalar(item.store_count),
+                "product_id": _as_scalar(item.product_id),
+                "title": _as_scalar(item.title),
+                "brand": _as_scalar(item.brand),
+                "category": _as_scalar(item.category),
+                "price": _as_scalar(item.price),
+                "price_band": _as_scalar(item.price_band),
+                "metric_value": _as_scalar(item.metric_value),
+                "peer_delta": _as_scalar(item.peer_delta),
+                "prior_period_delta": _as_scalar(item.prior_period_delta),
+                "model_action": _as_scalar(item.model_action),
+                "model_priority_tier": _as_scalar(item.model_priority_tier),
+                "final_action": _as_scalar(item.final_action),
+                "final_priority_tier": _as_scalar(item.final_priority_tier),
+                "override_note": _as_scalar(item.override_note),
+                "rationale": _as_scalar(item.rationale),
+                "link": _as_scalar(item.link),
+                "image_url": _as_scalar(item.image_url),
+            }
+            for item in result.recommendations
+        ]
+    else:
+        result = _unified_mix_recommendations_impl(
+            UnifiedProductMixRecommendationsRequest(
+                store_query=params.store_query,
+                store_id=params.store_id,
+                store_ids=params.store_ids,
+                active_store_id=params.active_store_id,
+                lookback_days=params.lookback_days,
+                category=params.category,
+                brand=params.brand,
+                brands=params.brands,
+                occasion=params.occasion,
+                occasions=params.occasions,
+                price_band=params.price_band,
+                top_k=params.top_k,
+                row_mode=params.row_mode,
+                override_scope=params.override_scope,
+                inventory_scope=params.inventory_scope,
+                future_window_days=params.future_window_days,
+                recommendation_overrides=params.recommendation_overrides,
+            )
+        )
+        headers = [
+            "view",
+            "row_mode",
+            "override_scope",
+            "store_id",
+            "store_name",
+            "store_count",
+            "action",
+            "fit_score",
+            "expected_mix_impact",
+            "brand",
+            "category",
+            "current_product_id",
+            "current_title",
+            "current_revenue",
+            "current_units",
+            "offer_id",
+            "offer_title",
+            "offer_status",
+            "available_on",
+            "offer_price",
+            "inventory_scope",
+            "future_window_days",
+            "lookback_days",
+            "rationale",
+        ]
+        rows = [
+            {
+                "view": params.view.value,
+                "row_mode": _as_scalar(result.row_mode),
+                "override_scope": _as_scalar(result.override_scope),
+                "store_id": _as_scalar(item.store_id),
+                "store_name": _as_scalar(item.store_name),
+                "store_count": _as_scalar(item.store_count),
+                "action": _as_scalar(item.action),
+                "fit_score": _as_scalar(item.fit_score),
+                "expected_mix_impact": _as_scalar(item.expected_mix_impact),
+                "brand": _as_scalar(item.brand),
+                "category": _as_scalar(item.category),
+                "current_product_id": _as_scalar(item.current_product_id),
+                "current_title": _as_scalar(item.current_title),
+                "current_revenue": _as_scalar(item.current_revenue),
+                "current_units": _as_scalar(item.current_units),
+                "offer_id": _as_scalar(item.offer_id),
+                "offer_title": _as_scalar(item.offer_title),
+                "offer_status": _as_scalar(item.offer_status),
+                "available_on": _as_scalar(item.available_on),
+                "offer_price": _as_scalar(item.offer_price),
+                "inventory_scope": _as_scalar(result.inventory_scope),
+                "future_window_days": _as_scalar(result.future_window_days),
+                "lookback_days": _as_scalar(result.lookback_days),
+                "rationale": _as_scalar(item.rationale),
+            }
+            for item in result.rows
+        ]
+
+    csv_text = _csv_text(headers, rows)
+    filename = f"unified_{params.view.value}_{generated_at.strftime('%Y%m%d_%H%M%S')}.csv"
+    return UnifiedExportCsvResponse(
+        view=params.view,
+        row_mode=params.row_mode,
+        override_scope=params.override_scope,
+        filename=filename,
+        headers=headers,
+        rows=[UnifiedExportCsvRow(values=row) for row in rows],
+        row_count=len(rows),
+        csv_text=csv_text,
+        generated_at=generated_at,
+    )
+
+
+def _unified_tool_for_view(view: UnifiedWorkspaceView) -> str:
+    if isinstance(view, str):
+        try:
+            view = UnifiedWorkspaceView(view)
+        except Exception:
+            view = UnifiedWorkspaceView.executive_overview
+    if view == UnifiedWorkspaceView.inventory:
+        return "fashion_unified_inventory_view"
+    if view == UnifiedWorkspaceView.recommendations:
+        return "fashion_unified_action_recommendations"
+    if view == UnifiedWorkspaceView.mix_analysis:
+        return "fashion_unified_product_mix_recommendations"
+    return "fashion_unified_overview"
+
+
+def _unified_workspace_payload(
+    *,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    initial_view: UnifiedWorkspaceView = UnifiedWorkspaceView.executive_overview,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    override_scope: OverrideScope = OverrideScope.store,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    question: str | None = None,
+    recommendation_overrides: list[UnifiedRecommendationOverride] | None = None,
+    initial_notice: str | None = None,
+) -> dict:
+    try:
+        resolved_initial_view = (
+            initial_view
+            if isinstance(initial_view, UnifiedWorkspaceView)
+            else UnifiedWorkspaceView(str(initial_view or "").strip() or UnifiedWorkspaceView.executive_overview.value)
+        )
+    except Exception:
+        resolved_initial_view = UnifiedWorkspaceView.executive_overview
+    try:
+        resolved_row_mode = (
+            row_mode
+            if isinstance(row_mode, UnifiedRowMode)
+            else UnifiedRowMode(str(row_mode or "").strip() or UnifiedRowMode.store_product.value)
+        )
+    except Exception:
+        resolved_row_mode = UnifiedRowMode.store_product
+    try:
+        resolved_override_scope = (
+            override_scope
+            if isinstance(override_scope, OverrideScope)
+            else OverrideScope(str(override_scope or "").strip() or OverrideScope.store.value)
+        )
+    except Exception:
+        resolved_override_scope = OverrideScope.store
+
+    bounded_lookback = max(7, min(int(lookback_days or 90), 730))
+    bounded_top_k = max(1, min(int(top_k or 12), 100))
+    bounded_future_window = max(1, min(int(future_window_days or 120), 365))
+    normalized_brands = _normalized_unified_brands(brand=brand, brands=brands)
+    normalized_occasions = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
+
+    with SessionLocal() as db:
+        resolved_store_ids, resolved_active_store_id, _ = _resolve_unified_store_scope(
+            db,
+            store_query=store_query,
+            store_id=store_id,
+            store_ids=store_ids,
+            active_store_id=active_store_id,
+        )
+
+    filters = UnifiedWorkspaceFilters(
+        store_ids=resolved_store_ids,
+        active_store_id=resolved_active_store_id,
+        lookback_days=bounded_lookback,
+        category=category,
+        brands=normalized_brands,
+        occasions=normalized_occasions,
+        price_band=price_band,
+        objective=objective,
+        top_k=bounded_top_k,
+        inventory_scope=inventory_scope,
+        future_window_days=bounded_future_window,
+        row_mode=resolved_row_mode,
+        override_scope=resolved_override_scope,
+        question=question,
+    )
+
+    overrides = recommendation_overrides or []
+    if resolved_initial_view == UnifiedWorkspaceView.inventory:
+        initial_result = _unified_inventory_view_impl(
+            UnifiedInventoryViewRequest(
+                store_ids=resolved_store_ids,
+                active_store_id=resolved_active_store_id,
+                lookback_days=bounded_lookback,
+                category=category,
+                brands=normalized_brands,
+                occasions=normalized_occasions,
+                price_band=price_band,
+                row_mode=resolved_row_mode,
+                inventory_scope=inventory_scope,
+                future_window_days=bounded_future_window,
+                limit=300,
+            )
+        )
+    elif resolved_initial_view == UnifiedWorkspaceView.recommendations:
+        initial_result = _unified_action_recommendations_impl(
+            UnifiedActionRecommendationsRequest(
+                store_ids=resolved_store_ids,
+                active_store_id=resolved_active_store_id,
+                lookback_days=bounded_lookback,
+                category=category,
+                brands=normalized_brands,
+                occasions=normalized_occasions,
+                price_band=price_band,
+                question=question,
+                objective=objective,
+                top_k=bounded_top_k,
+                row_mode=resolved_row_mode,
+                override_scope=resolved_override_scope,
+                recommendation_overrides=overrides,
+            )
+        )
+    elif resolved_initial_view == UnifiedWorkspaceView.mix_analysis:
+        initial_result = _unified_mix_recommendations_impl(
+            UnifiedProductMixRecommendationsRequest(
+                store_ids=resolved_store_ids,
+                active_store_id=resolved_active_store_id,
+                lookback_days=bounded_lookback,
+                top_k=bounded_top_k,
+                category=category,
+                brands=normalized_brands,
+                occasions=normalized_occasions,
+                price_band=price_band,
+                row_mode=resolved_row_mode,
+                override_scope=resolved_override_scope,
+                inventory_scope=inventory_scope,
+                future_window_days=bounded_future_window,
+                recommendation_overrides=overrides,
+            )
+        )
+    else:
+        initial_result = _unified_overview_impl(
+            UnifiedOverviewRequest(
+                store_ids=resolved_store_ids,
+                active_store_id=resolved_active_store_id,
+                lookback_days=bounded_lookback,
+                category=category,
+                brands=normalized_brands,
+                occasions=normalized_occasions,
+                price_band=price_band,
+                objective=objective,
+                top_k_stores=max(1, min(len(resolved_store_ids) or 12, 50)),
+            )
+        )
+
+    return {
+        "filters": filters.model_dump(mode="json"),
+        "active_view": resolved_initial_view.value,
+        "initial_result": initial_result.model_dump(mode="json"),
+        "last_result": None,
+        "last_tool": _unified_tool_for_view(resolved_initial_view),
+        "initial_notice": initial_notice,
+        "uiHints": {
+            "emptyState": "Select a tab and refresh to load unified workspace data.",
+            "categoryOptions": _merch_category_options(),
+            "brandOptions": _exec_brand_options(),
+            "occasionOptions": _exec_event_options(),
+            "storeOptions": _exec_store_options(),
+            "features": {
+                "execAutoOptimizeEnabled": settings.exec_auto_optimize_enabled,
+                "strategyPacketEnabled": settings.strategy_packet_enabled,
+                "merchStrategyContextEnabled": settings.merch_strategy_context_enabled,
             },
         },
     }
@@ -3061,6 +4309,148 @@ def fashion_open_customer_workspace(
 
 
 @mcp.tool(
+    name="fashion_render_unified_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _UNIFIED_WORKSPACE_RESOURCE_URI,
+        invoking="Opening unified workspace...",
+        invoked="Unified workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_render_unified_workspace(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    initial_view: UnifiedWorkspaceView = UnifiedWorkspaceView.executive_overview,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    override_scope: OverrideScope = OverrideScope.store,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    question: str | None = None,
+    recommendation_overrides: list[UnifiedRecommendationOverride] | None = None,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Render the unified executive + merchandising workspace inside ChatGPT."""
+    workspace_payload = _unified_workspace_payload(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids,
+        active_store_id=active_store_id,
+        initial_view=initial_view,
+        lookback_days=lookback_days,
+        objective=objective,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        brands=brands,
+        price_band=price_band,
+        occasion=occasion,
+        occasions=occasions,
+        row_mode=row_mode,
+        override_scope=override_scope,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        question=question,
+        recommendation_overrides=recommendation_overrides,
+        initial_notice=initial_notice,
+    )
+    structured_payload = {"kind": "unified_workspace", "payload": workspace_payload}
+    return _calltool_result(
+        text="Opened unified workspace.",
+        payload=structured_payload,
+        meta=_render_tool_meta(
+            _UNIFIED_WORKSPACE_RESOURCE_URI,
+            invoking="Opening unified workspace...",
+            invoked="Unified workspace ready.",
+        ),
+    )
+
+
+@mcp.tool(
+    name="fashion_open_unified_workspace",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _UNIFIED_WORKSPACE_RESOURCE_URI,
+        invoking="Opening unified workspace...",
+        invoked="Unified workspace ready.",
+    ),
+    structured_output=False,
+)
+def fashion_open_unified_workspace(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    initial_view: UnifiedWorkspaceView = UnifiedWorkspaceView.executive_overview,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    override_scope: OverrideScope = OverrideScope.store,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    question: str | None = None,
+    recommendation_overrides: list[UnifiedRecommendationOverride] | None = None,
+    initial_notice: str | None = None,
+) -> CallToolResult:
+    """Open unified workspace with optional store resolution and seeded tab context."""
+    notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
+    resolved_store_id = store_id
+
+    if store_query and not resolved_store_id:
+        normalized_query = store_query.strip()
+        if normalized_query:
+            resolved = fashion_resolve_store(normalized_query).resolved
+            resolved_store_id = resolved.id
+            if notice is None:
+                notice = f"Resolved store {resolved.name} from '{normalized_query}'."
+    elif resolved_store_id and notice is None:
+        with SessionLocal() as db:
+            resolved = resolve_store(db, store_id=resolved_store_id).resolved
+        notice = f"Loaded store {resolved.name} in unified workspace."
+
+    return fashion_render_unified_workspace(
+        store_id=resolved_store_id,
+        store_ids=store_ids,
+        active_store_id=active_store_id or resolved_store_id,
+        initial_view=initial_view,
+        lookback_days=lookback_days,
+        objective=objective,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        brands=brands,
+        price_band=price_band,
+        occasion=occasion,
+        occasions=occasions,
+        row_mode=row_mode,
+        override_scope=override_scope,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        question=question,
+        recommendation_overrides=recommendation_overrides,
+        initial_notice=notice,
+    )
+
+
+@mcp.tool(
     name="fashion_render_merch_workspace",
     annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
     meta=_render_tool_meta(
@@ -3097,15 +4487,15 @@ def fashion_render_merch_workspace(
     workspace_payload = _merch_workspace_payload(
         store_query=store_query,
         store_id=store_id,
-        question=question,
-        objective=objective,
-        lookback_days=lookback_days,
-        top_k=top_k,
         category=category,
         brand=brand,
         price_band=price_band,
         occasion=occasion,
         occasions=occasions,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         compare_mode=compare_mode,
@@ -3173,8 +4563,11 @@ def fashion_open_merch_workspace(
         if not notice:
             notice = f"Resolved store {resolved_store.name} from '{normalized_query}'."
 
-    return fashion_render_merch_workspace(
+    return fashion_open_unified_workspace(
         store_id=resolved_store.id,
+        store_ids=[resolved_store.id],
+        active_store_id=resolved_store.id,
+        initial_view=UnifiedWorkspaceView.inventory,
         question=question,
         objective=objective,
         lookback_days=lookback_days,
@@ -3184,12 +4577,10 @@ def fashion_open_merch_workspace(
         price_band=price_band,
         occasion=occasion,
         occasions=occasions,
+        row_mode=UnifiedRowMode.store_product,
+        override_scope=OverrideScope.store,
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
-        compare_mode=compare_mode,
-        peer_mode=peer_mode,
-        compare_store_id=compare_store_id,
-        strategy_packet_id=strategy_packet_id,
         initial_notice=notice,
     )
 
@@ -3344,20 +4735,12 @@ def fashion_open_exec_workspace(
     """Open the executive workspace with company-wide defaults."""
     notice = initial_notice.strip() if initial_notice and initial_notice.strip() else None
     if notice is None:
-        notice = "Company-wide executive scope loaded."
-    return fashion_render_exec_workspace(
+        notice = "Company-wide unified executive scope loaded."
+    return fashion_open_unified_workspace(
+        initial_view=UnifiedWorkspaceView.executive_overview,
         lookback_days=lookback_days,
         objective=objective,
-        top_k_stores=top_k_stores,
-        optimize_discount_min_pct=optimize_discount_min_pct,
-        optimize_discount_max_pct=optimize_discount_max_pct,
-        optimize_discount_step_pct=optimize_discount_step_pct,
-        optimize_shift_min_pct=optimize_shift_min_pct,
-        optimize_shift_max_pct=optimize_shift_max_pct,
-        optimize_shift_step_pct=optimize_shift_step_pct,
-        optimize_top_k_scenarios=optimize_top_k_scenarios,
-        min_margin_rate=min_margin_rate,
-        max_discount_pct=max_discount_pct,
+        top_k=top_k_stores,
         initial_notice=notice,
     )
 
@@ -3810,7 +5193,7 @@ def fashion_merch_inventory_view(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
-        occasions=occasions,
+        occasions=occasions or [],
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         limit=limit,
@@ -3847,12 +5230,257 @@ def fashion_merch_product_mix_recommendations(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
-        occasions=occasions,
+        occasions=occasions or [],
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         recommendation_overrides=recommendation_overrides or [],
     )
     return _merch_mix_analysis_impl(params)
+
+
+@mcp.tool(
+    name="fashion_unified_overview",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_unified_overview(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    lookback_days: int = 90,
+    objective: Objective = Objective.revenue,
+    top_k_stores: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    price_band: PriceBand | None = None,
+) -> UnifiedOverviewResponse:
+    """Return unified executive overview for selected stores with shared filter envelope."""
+    params = UnifiedOverviewRequest(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        active_store_id=active_store_id,
+        lookback_days=lookback_days,
+        category=category,
+        brand=brand,
+        brands=brands or [],
+        occasion=occasion,
+        occasions=occasions or [],
+        price_band=price_band,
+        objective=objective,
+        top_k_stores=top_k_stores,
+    )
+    return _unified_overview_impl(params)
+
+
+@mcp.tool(
+    name="fashion_unified_inventory_view",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_unified_inventory_view(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    lookback_days: int = 90,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    limit: int = 300,
+) -> UnifiedInventoryViewResponse:
+    """Return unified inventory view across one or many stores with row-mode toggle semantics."""
+    params = UnifiedInventoryViewRequest(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        active_store_id=active_store_id,
+        lookback_days=lookback_days,
+        category=category,
+        brand=brand,
+        brands=brands or [],
+        occasion=occasion,
+        occasions=occasions or [],
+        price_band=price_band,
+        row_mode=row_mode,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        limit=limit,
+    )
+    return _unified_inventory_view_impl(params)
+
+
+@mcp.tool(
+    name="fashion_unified_action_recommendations",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_unified_action_recommendations(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.margin,
+    lookback_days: int = 90,
+    top_k: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    override_scope: OverrideScope = OverrideScope.store,
+    recommendation_overrides: list[UnifiedRecommendationOverride] | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
+) -> UnifiedActionRecommendationsResponse:
+    """Return unified merchandising action recommendations with row-mode and override-scope semantics."""
+    params = UnifiedActionRecommendationsRequest(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        active_store_id=active_store_id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        brands=brands or [],
+        occasion=occasion,
+        occasions=occasions or [],
+        price_band=price_band,
+        row_mode=row_mode,
+        override_scope=override_scope,
+        recommendation_overrides=recommendation_overrides or [],
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+        compare_store_id=compare_store_id,
+    )
+    return _unified_action_recommendations_impl(params)
+
+
+@mcp.tool(
+    name="fashion_unified_product_mix_recommendations",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_unified_product_mix_recommendations(
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    lookback_days: int = 90,
+    top_k: int = 12,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    override_scope: OverrideScope = OverrideScope.store,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    recommendation_overrides: list[UnifiedRecommendationOverride] | None = None,
+) -> UnifiedProductMixRecommendationsResponse:
+    """Return unified product-mix recommendations across selected stores with row-mode semantics."""
+    params = UnifiedProductMixRecommendationsRequest(
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        active_store_id=active_store_id,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        category=category,
+        brand=brand,
+        brands=brands or [],
+        occasion=occasion,
+        occasions=occasions or [],
+        price_band=price_band,
+        row_mode=row_mode,
+        override_scope=override_scope,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        recommendation_overrides=recommendation_overrides or [],
+    )
+    return _unified_mix_recommendations_impl(params)
+
+
+@mcp.tool(
+    name="fashion_unified_export_csv",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_WIDGET_TOOL_META,
+)
+def fashion_unified_export_csv(
+    view: UnifiedWorkspaceView = UnifiedWorkspaceView.executive_overview,
+    store_query: str | None = None,
+    store_id: str | None = None,
+    store_ids: list[str] | None = None,
+    active_store_id: str | None = None,
+    question: str | None = None,
+    objective: Objective = Objective.revenue,
+    lookback_days: int = 90,
+    top_k: int = 12,
+    top_k_stores: int = 50,
+    category: str | None = None,
+    brand: str | None = None,
+    brands: list[str] | None = None,
+    occasion: str | None = None,
+    occasions: list[str] | None = None,
+    price_band: PriceBand | None = None,
+    row_mode: UnifiedRowMode = UnifiedRowMode.store_product,
+    override_scope: OverrideScope = OverrideScope.store,
+    inventory_scope: InventoryScope = InventoryScope.combined,
+    future_window_days: int = 120,
+    limit: int = 300,
+    recommendation_overrides: list[UnifiedRecommendationOverride] | None = None,
+    compare_mode: CompareMode = CompareMode.peer_and_prior_period,
+    peer_mode: PeerMode = PeerMode.state_and_profile,
+    compare_store_id: str | None = None,
+) -> UnifiedExportCsvResponse:
+    """Export unified workspace CSV where rows match active tab + filters + row_mode + override_scope."""
+    params = UnifiedExportCsvRequest(
+        view=view,
+        store_query=store_query,
+        store_id=store_id,
+        store_ids=store_ids or [],
+        active_store_id=active_store_id,
+        question=question,
+        objective=objective,
+        lookback_days=lookback_days,
+        top_k=top_k,
+        top_k_stores=top_k_stores,
+        category=category,
+        brand=brand,
+        brands=brands or [],
+        occasion=occasion,
+        occasions=occasions or [],
+        price_band=price_band,
+        row_mode=row_mode,
+        override_scope=override_scope,
+        inventory_scope=inventory_scope,
+        future_window_days=future_window_days,
+        limit=limit,
+        recommendation_overrides=recommendation_overrides or [],
+        compare_mode=compare_mode,
+        peer_mode=peer_mode,
+        compare_store_id=compare_store_id,
+    )
+    return _unified_export_csv_impl(params)
 
 
 @mcp.tool(
@@ -4497,7 +6125,7 @@ def fashion_merch_export_csv(
         brand=brand,
         price_band=price_band,
         occasion=occasion,
-        occasions=occasions,
+        occasions=occasions or [],
         inventory_scope=inventory_scope,
         future_window_days=future_window_days,
         recommendation_overrides=recommendation_overrides or [],
