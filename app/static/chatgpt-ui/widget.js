@@ -529,6 +529,20 @@ function callTool(name, args) {
     .catch((error) => ({ __toolError: error instanceof Error ? error.message : "Tool invocation failed." }));
 }
 
+async function requestWorkspaceClose() {
+  if (!window.openai || typeof window.openai.requestClose !== "function") {
+    setNotice("Close action is unavailable in this host environment.", "error");
+    render();
+    return;
+  }
+  try {
+    await window.openai.requestClose();
+  } catch (error) {
+    setNotice(error instanceof Error ? error.message : "Unable to close the workspace.", "error");
+    render();
+  }
+}
+
 function clear(node) {
   node.innerHTML = "";
   return node;
@@ -2619,7 +2633,24 @@ function render() {
       "div",
       { className: "fw-title-row" },
       el("h1", { className: "fw-title", text: meta.title || "Customer Workspace" }),
-      buildLabel ? el("span", { className: "fw-version", text: buildLabel }) : null,
+      el(
+        "div",
+        { className: "fw-title-actions" },
+        buildLabel ? el("span", { className: "fw-version", text: buildLabel }) : null,
+        el(
+          "button",
+          {
+            className: "fw-close-button",
+            type: "button",
+            "aria-label": "Close workspace",
+            title: "Close workspace",
+            onClick: () => {
+              void requestWorkspaceClose();
+            },
+          },
+          "×",
+        ),
+      ),
     ),
     el(
       "p",
