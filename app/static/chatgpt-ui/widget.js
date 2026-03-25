@@ -70,6 +70,8 @@ const state = {
   runtime: {
     toolOutputApplied: false,
     userInteracted: false,
+    workspacePayloadHash: "",
+    widgetStateVersion: 0,
     draftHydrationRequestedForId: null,
     modelContextHash: "",
     modelContextTimer: null,
@@ -216,6 +218,11 @@ function applyWorkspacePayload(raw) {
   if (!payload) {
     return false;
   }
+  const payloadHash = JSON.stringify(payload);
+  if (payloadHash === state.runtime.workspacePayloadHash) {
+    return false;
+  }
+  state.runtime.workspacePayloadHash = payloadHash;
   state.payload = payload;
   state.ui.resultsExpanded = Array.isArray(payload.results) && payload.results.length > 0 && !payload.selected_customer_id;
   if (!state.ui.query && payload.query) {
@@ -292,6 +299,19 @@ function markUserInteraction() {
 
 function applyUiWidgetState(raw) {
   if (!isObject(raw)) {
+    return false;
+  }
+  const incomingVersion = Number.isFinite(Number(raw.widgetStateVersion))
+    ? Math.max(0, Math.floor(Number(raw.widgetStateVersion)))
+    : null;
+  if (incomingVersion !== null) {
+    if (incomingVersion < state.runtime.widgetStateVersion) {
+      return false;
+    }
+    if (incomingVersion > state.runtime.widgetStateVersion) {
+      state.runtime.widgetStateVersion = incomingVersion;
+    }
+  } else if (state.runtime.userInteracted) {
     return false;
   }
   let changed = false;
@@ -375,6 +395,10 @@ function loadWidgetState() {
     return;
   }
   const widgetState = window.openai.widgetState;
+  const persistedVersion = Number(widgetState.widgetStateVersion);
+  if (Number.isFinite(persistedVersion) && persistedVersion > 0) {
+    state.runtime.widgetStateVersion = Math.max(state.runtime.widgetStateVersion, Math.floor(persistedVersion));
+  }
   if (typeof widgetState.query === "string") {
     state.ui.query = widgetState.query;
   }
@@ -421,8 +445,11 @@ function persistWidgetState() {
     queueModelContextUpdate();
     return;
   }
+  const nextWidgetStateVersion = state.runtime.widgetStateVersion + 1;
+  state.runtime.widgetStateVersion = nextWidgetStateVersion;
   try {
     window.openai.setWidgetState({
+      widgetStateVersion: nextWidgetStateVersion,
       query: state.ui.query,
       selectedCustomerId: state.ui.selectedCustomerId,
       customerTab: state.ui.customerTab,
@@ -849,6 +876,10 @@ async function runSearch() {
     resolved,
     results: nextResults,
   };
+  const normalizedPayload = normalizeWorkspacePayload(state.payload);
+  if (normalizedPayload) {
+    state.runtime.workspacePayloadHash = JSON.stringify(normalizedPayload);
+  }
   clearRecommendationState();
 
   if (resolved && resolved.id) {
@@ -928,7 +959,8 @@ async function loadRecommendations(selected, options = {}) {
   if (styleConstraints) {
     args.style_constraints = styleConstraints;
     if (styleConstraints.constraint_source === "chat_image") {
-      args.retrieval_mode = "semantic";
+      const hasExplicitMerchContext = Boolean(occasion) || budgetMax !== null;
+      args.retrieval_mode = hasExplicitMerchContext ? "fast" : "semantic";
     }
   }
 

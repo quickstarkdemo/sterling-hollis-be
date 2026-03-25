@@ -827,11 +827,11 @@ def _resolve_retrieval_mode(
 ) -> RetrievalMode:
     if retrieval_mode != RetrievalMode.auto:
         return retrieval_mode
+    if customer_resolved and (occasion or budget_min is not None or budget_max is not None):
+        return RetrievalMode.fast
     if style_constraints is not None and not style_constraints.is_empty():
         if (style_constraints.constraint_source or "").strip().lower() == "chat_image":
             return RetrievalMode.semantic
-    if customer_resolved and (occasion or budget_min is not None or budget_max is not None):
-        return RetrievalMode.fast
     return RetrievalMode.semantic
 
 

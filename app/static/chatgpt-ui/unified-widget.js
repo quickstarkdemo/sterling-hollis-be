@@ -418,7 +418,15 @@ function multiSelectSummary(selectedValues, optionsById, labels) {
   return `${selectedValues.length} ${labels.plural} selected`;
 }
 
-function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText, onApply }) {
+function buildCheckMultiSelect({
+  selectedValues,
+  options,
+  labels,
+  noOptionsText,
+  onApply,
+  autoApply = false,
+  onDone = null,
+}) {
   const normalizedOptions = normalizeOptions(options);
   const selected = new Set(normalizeSelectionValues(selectedValues));
   const details = el("details", { className: "fw-multi-select" });
@@ -428,6 +436,11 @@ function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText,
     text: multiSelectSummary(Array.from(selected), optionsById, labels),
   });
   const list = el("div", { className: "fw-multi-select-list" });
+  const commitSelection = () => {
+    const nextValues = normalizeSelectionValues(Array.from(selected));
+    summary.textContent = multiSelectSummary(nextValues, optionsById, labels);
+    onApply(nextValues);
+  };
 
   if (!normalizedOptions.length) {
     list.appendChild(el("p", { className: "fw-empty", text: noOptionsText }));
@@ -440,6 +453,9 @@ function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText,
           selected.add(option.value);
         } else {
           selected.delete(option.value);
+        }
+        if (autoApply) {
+          commitSelection();
         }
       });
       list.appendChild(label);
@@ -459,24 +475,42 @@ function buildCheckMultiSelect({ selectedValues, options, labels, noOptionsText,
           list.querySelectorAll("input[type='checkbox']").forEach((node) => {
             node.checked = false;
           });
+          if (autoApply) {
+            commitSelection();
+          }
         },
       },
       "Clear",
     ),
-    el(
-      "button",
-      {
-        className: "fw-button secondary",
-        type: "button",
-        onClick: () => {
-          const nextValues = normalizeSelectionValues(Array.from(selected));
-          summary.textContent = multiSelectSummary(nextValues, optionsById, labels);
-          details.open = false;
-          onApply(nextValues);
-        },
-      },
-      "Apply",
-    ),
+    autoApply
+      ? el(
+          "button",
+          {
+            className: "fw-button secondary",
+            type: "button",
+            onClick: () => {
+              details.open = false;
+              if (typeof onDone === "function") {
+                onDone();
+              }
+            },
+          },
+          "Done",
+        )
+      : el(
+          "button",
+          {
+            className: "fw-button secondary",
+            type: "button",
+            onClick: () => {
+              const nextValues = normalizeSelectionValues(Array.from(selected));
+              summary.textContent = multiSelectSummary(nextValues, optionsById, labels);
+              details.open = false;
+              onApply(nextValues);
+            },
+          },
+          "Apply",
+        ),
   );
 
   details.appendChild(summary);
@@ -513,13 +547,16 @@ function buildStoreMultiSelect(selectedStoreValues, options) {
     options,
     labels: { all: "All stores", singular: "store", plural: "stores" },
     noOptionsText: "No stores available.",
+    autoApply: true,
+    onDone: () => {
+      render();
+    },
     onApply: (nextValues) => {
       state.ui.selectedStoreIds = normalizeStoreIds(nextValues);
       if (!state.ui.selectedStoreIds.includes(state.ui.activeStoreId)) {
         state.ui.activeStoreId = state.ui.selectedStoreIds[0] || "";
       }
       markFiltersDirty();
-      render();
     },
   });
 }
