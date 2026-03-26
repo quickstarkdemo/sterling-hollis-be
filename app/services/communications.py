@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import CustomerCommunication, Product, TwilioSmokeTest
+from app.models import CustomerCommunication, Product, SupplierProductOffer, TwilioSmokeTest
 from app.schemas import (
     CustomerCommunicationDraftResponse,
     CustomerCommunicationHistoryResponse,
@@ -69,6 +69,67 @@ def _product_summary_lines(session: Session, product_ids: list[str]) -> list[str
     return lines
 
 
+def _coming_soon_offer_map(session: Session, product_ids: list[str]) -> dict[str, SupplierProductOffer]:
+    targets = {str(value).strip() for value in (product_ids or []) if str(value).strip()}
+    if not targets:
+        return {}
+    today = datetime.now(timezone.utc).date()
+    offers = session.scalars(
+        select(SupplierProductOffer).where(SupplierProductOffer.status.in_(["potential", "committed", "launched"]))
+    ).all()
+    mapped: dict[str, SupplierProductOffer] = {}
+    for offer in offers:
+        metadata = offer.metadata_json if isinstance(offer.metadata_json, dict) else {}
+        source_product_id = str(metadata.get("source_product_id") or "").strip()
+        if not source_product_id or source_product_id not in targets:
+            continue
+        if offer.available_on and offer.available_on < today:
+            continue
+        existing = mapped.get(source_product_id)
+        existing_date = existing.available_on if existing and existing.available_on is not None else date.max
+        offer_date = offer.available_on if offer.available_on is not None else date.max
+        if existing is None or offer_date < existing_date:
+            mapped[source_product_id] = offer
+    return mapped
+
+
+def _email_product_sections(
+    session: Session,
+    product_ids: list[str],
+    *,
+    max_items: int = 3,
+) -> tuple[list[str], list[str]]:
+    if not product_ids:
+        return [], []
+    products = session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    by_id = {product.id: product for product in products}
+    upcoming_offer_by_product_id = _coming_soon_offer_map(session, product_ids)
+    available_now_lines: list[str] = []
+    coming_soon_lines: list[str] = []
+    for product_id in product_ids[:max_items]:
+        product = by_id.get(product_id)
+        if not product:
+            continue
+        offer = upcoming_offer_by_product_id.get(product.id)
+        availability_token = str(product.availability or "").strip().lower()
+        labels: list[str] = []
+        if availability_token == "preorder":
+            labels.append("preorder")
+        if offer is not None:
+            offer_status = str(offer.status or "").strip().lower()
+            if offer_status:
+                labels.append(offer_status)
+            if offer.available_on:
+                labels.append(f"available {offer.available_on.isoformat()}")
+        line = f"- {product.title} (${float(product.price):.2f})"
+        if labels:
+            line = f"{line} [{'; '.join(labels)}]"
+        target_lines = coming_soon_lines if (availability_token == "preorder" or offer is not None) else available_now_lines
+        target_lines.append(line)
+        target_lines.append(f"  {product.link}")
+    return available_now_lines, coming_soon_lines
+
+
 def _selected_product_cards(session: Session, product_ids: list[str]) -> list[UiProductCard]:
     if not product_ids:
         return []
@@ -122,11 +183,28 @@ def build_email_body(
     customer: ResolvedCustomer,
     selected_product_ids: list[str],
 ) -> str:
+    available_now_lines, coming_soon_lines = _email_product_sections(session, selected_product_ids)
+    section_lines: list[str] = []
+    if available_now_lines:
+        section_lines.extend(["Available now:", *available_now_lines])
+    if coming_soon_lines:
+        if section_lines:
+            section_lines.append("")
+        section_lines.extend(
+            [
+                "Coming Soon / Preorder:",
+                *coming_soon_lines,
+                "",
+                "If you'd like, I can place a preorder request or follow up when these arrive.",
+            ]
+        )
+    if not section_lines:
+        section_lines = ["- I have a few curated options ready to review."]
     lines = [
         f"Hi {customer.first_name},",
         "",
         f"I pulled together a few recommendations from {store.name}:",
-        *(_product_summary_lines(session, selected_product_ids) or ["- I have a few curated options ready to review."]),
+        *section_lines,
         "",
         "Reply to this email if you'd like me to hold any of these or tailor another set of options.",
     ]

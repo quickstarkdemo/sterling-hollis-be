@@ -199,6 +199,8 @@ function normalizeWorkspacePayload(rawInput) {
   }
 
   const filters = raw.filters;
+  const uiHints = isObject(raw.uiHints) ? raw.uiHints : isObject(raw.ui_hints) ? raw.ui_hints : {};
+  const uiFeatures = isObject(uiHints.features) ? uiHints.features : {};
   return {
     filters: {
       store_ids: normalizeStoreIds(filters.store_ids),
@@ -223,17 +225,21 @@ function normalizeWorkspacePayload(rawInput) {
     initial_notice: typeof raw.initial_notice === "string" ? raw.initial_notice : null,
     uiHints: {
       emptyState:
-        isObject(raw.uiHints) && typeof raw.uiHints.emptyState === "string"
-          ? raw.uiHints.emptyState
+        typeof uiHints.emptyState === "string"
+          ? uiHints.emptyState
+          : typeof uiHints.empty_state === "string"
+            ? uiHints.empty_state
           : DEFAULT_PAYLOAD.uiHints.emptyState,
-      categoryOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.categoryOptions : null),
-      brandOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.brandOptions : null),
-      occasionOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.occasionOptions : null),
-      storeOptions: normalizeOptions(isObject(raw.uiHints) ? raw.uiHints.storeOptions : null),
+      categoryOptions: normalizeOptions(uiHints.categoryOptions || uiHints.category_options),
+      brandOptions: normalizeOptions(uiHints.brandOptions || uiHints.brand_options),
+      occasionOptions: normalizeOptions(uiHints.occasionOptions || uiHints.occasion_options),
+      storeOptions: normalizeOptions(uiHints.storeOptions || uiHints.store_options),
       features: {
-        execAutoOptimizeEnabled: Boolean(raw?.uiHints?.features?.execAutoOptimizeEnabled),
-        strategyPacketEnabled: Boolean(raw?.uiHints?.features?.strategyPacketEnabled),
-        merchStrategyContextEnabled: Boolean(raw?.uiHints?.features?.merchStrategyContextEnabled),
+        execAutoOptimizeEnabled: Boolean(uiFeatures.execAutoOptimizeEnabled || uiFeatures.exec_auto_optimize_enabled),
+        strategyPacketEnabled: Boolean(uiFeatures.strategyPacketEnabled || uiFeatures.strategy_packet_enabled),
+        merchStrategyContextEnabled: Boolean(
+          uiFeatures.merchStrategyContextEnabled || uiFeatures.merch_strategy_context_enabled,
+        ),
       },
     },
   };
@@ -541,12 +547,12 @@ function buildSelectControl(currentValue, options, onChange) {
   );
 }
 
-function buildStoreMultiSelect(selectedStoreValues, options) {
+function buildStoreMultiSelect(selectedStoreValues, options, noOptionsText = "No stores available.") {
   return buildCheckMultiSelect({
     selectedValues: normalizeStoreIds(selectedStoreValues),
     options,
     labels: { all: "All stores", singular: "store", plural: "stores" },
-    noOptionsText: "No stores available.",
+    noOptionsText,
     autoApply: true,
     onDone: () => {
       render();
@@ -559,6 +565,52 @@ function buildStoreMultiSelect(selectedStoreValues, options) {
       markFiltersDirty();
     },
   });
+}
+
+function deriveFallbackStoreOptions() {
+  const byId = new Map();
+  const addOption = (value, label) => {
+    const token = String(value || "").trim();
+    if (!token || byId.has(token)) {
+      return;
+    }
+    const resolvedLabel = String(label || token).trim() || token;
+    byId.set(token, { value: token, label: resolvedLabel });
+  };
+
+  const overview = state.data.executive_overview;
+  if (isObject(overview) && Array.isArray(overview.stores)) {
+    overview.stores.forEach((row) => {
+      if (!isObject(row)) {
+        return;
+      }
+      const storeId = String(row.store_id || "").trim();
+      const storeName = String(row.store_name || storeId).trim();
+      const city = String(row.city || "").trim();
+      const region = String(row.state || "").trim();
+      const decoratedLabel = city && region ? `${storeName} (${city}, ${region})` : storeName;
+      addOption(storeId, decoratedLabel);
+    });
+  }
+
+  ["inventory", "recommendations", "mix_analysis"].forEach((view) => {
+    const payload = state.data[view];
+    if (!isObject(payload) || !Array.isArray(payload.rows)) {
+      return;
+    }
+    payload.rows.forEach((row) => {
+      if (!isObject(row)) {
+        return;
+      }
+      const storeId = String(row.store_id || "").trim();
+      const storeName = String(row.store_name || storeId).trim();
+      addOption(storeId, storeName || storeId);
+    });
+  });
+
+  normalizeStoreIds(state.ui.selectedStoreIds).forEach((storeId) => addOption(storeId, storeId));
+  normalizeStoreIds(state.payload?.filters?.store_ids).forEach((storeId) => addOption(storeId, storeId));
+  return Array.from(byId.values());
 }
 
 function buildBrandsMultiSelect(selectedValues, options) {
@@ -862,15 +914,20 @@ function kpi(label, value) {
 }
 
 function renderControlsPanel() {
-  const storeOptions = normalizeOptions(state.payload.uiHints.storeOptions);
+  const hintedStoreOptions = normalizeOptions(state.payload.uiHints.storeOptions);
+  const storeOptions = hintedStoreOptions.length ? hintedStoreOptions : deriveFallbackStoreOptions();
   const storeSearchToken = String(state.ui.storeSearch || "").trim().toLowerCase();
-  const visibleStoreOptions = storeSearchToken
+  const filteredStoreOptions = storeSearchToken
     ? storeOptions.filter((item) => {
         const label = String(item.label || "").toLowerCase();
         const value = String(item.value || "").toLowerCase();
         return label.includes(storeSearchToken) || value.includes(storeSearchToken);
       })
     : storeOptions;
+  const visibleStoreOptions = filteredStoreOptions;
+  const storeNoOptionsText = storeSearchToken && storeOptions.length
+    ? `No stores match "${state.ui.storeSearch.trim()}".`
+    : "No stores available.";
   const categoryOptions = [{ value: "", label: "Any" }, ...normalizeOptions(state.payload.uiHints.categoryOptions)];
   const selectedStoreSummary = state.ui.selectedStoreIds.length
     ? `${state.ui.selectedStoreIds.length} stores selected`
@@ -905,7 +962,12 @@ function renderControlsPanel() {
           },
         }),
       ),
-      el("div", { className: "fw-field" }, el("label", { className: "fw-label", text: "Stores" }), buildStoreMultiSelect(state.ui.selectedStoreIds, visibleStoreOptions)),
+      el(
+        "div",
+        { className: "fw-field" },
+        el("label", { className: "fw-label", text: "Stores" }),
+        buildStoreMultiSelect(state.ui.selectedStoreIds, visibleStoreOptions, storeNoOptionsText),
+      ),
       el(
         "div",
         { className: "fw-field" },

@@ -2312,6 +2312,23 @@ def test_customer_email_draft_tools(monkeypatch):
         assert sent.provider_message_id == "SES_TOOL_DRAFT_123"
 
 
+def test_customer_email_draft_sections_include_preorder_and_coming_soon(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        draft = mcp_server.fashion_prepare_customer_email_draft(
+            store_id="1001",
+            customer_id="cust_000001",
+            selected_product_ids=["prod_pre_1", "prod_2"],
+            to_email="coming-soon@example.com",
+        )
+        body = draft.message.body_text or ""
+        assert "Coming Soon / Preorder:" in body
+        assert "preorder" in body.lower()
+        assert "launched" in body.lower()
+        assert "place a preorder request" in body
+
+
 def test_fast_mode_skips_embedding(monkeypatch):
     import app.services.recommendations as recommendations
 

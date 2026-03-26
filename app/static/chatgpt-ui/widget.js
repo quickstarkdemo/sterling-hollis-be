@@ -2028,11 +2028,12 @@ function buildEmailDraftClipboardText(selected) {
   return [`To: ${destination}`, `Subject: ${subject}`, "", body].join("\n");
 }
 
+function selectedProductIdsForDraft() {
+  return normalizeProductIds(state.recommendation.selectedProductIds);
+}
+
 function buildEmailDraftArgs(selected, options = {}) {
-  const rows = recommendationRows(state.recommendation.response);
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
-    seedWhenEmpty: false,
-  });
+  const selectedIds = selectedProductIdsForDraft();
   const destination = (state.ui.emailTo || selected.email || "").trim();
   const args = {
     store_id: selected.home_store_id,
@@ -2107,14 +2108,12 @@ async function prepareEmailDraft(selected, options = {}) {
     return null;
   }
   const rows = recommendationRows(state.recommendation.response);
-  if (!rows.length) {
+  const selectedIds = selectedProductIdsForDraft();
+  if (!rows.length && !selectedIds.length) {
     setNotice("Load recommendations before preparing an email draft.", "error");
     render();
     return null;
   }
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
-    seedWhenEmpty: false,
-  });
   state.recommendation.selectedProductIds = selectedIds;
   const destination = (state.ui.emailTo || selected.email || "").trim();
   if (!destination) {
@@ -2183,10 +2182,7 @@ async function syncEmailDraftEdits(selected) {
   if (!state.ui.emailDraftId) {
     return prepareEmailDraft(selected, { includeMessageId: false, silent: true });
   }
-  const rows = recommendationRows(state.recommendation.response);
-  const selectedIds = syncSelectedProducts(rows, state.recommendation.selectedProductIds, {
-    seedWhenEmpty: false,
-  });
+  const selectedIds = selectedProductIdsForDraft();
   const destination = (state.ui.emailTo || selected.email || "").trim();
   if (!destination) {
     setNotice("Enter a destination email before updating draft.", "error");
