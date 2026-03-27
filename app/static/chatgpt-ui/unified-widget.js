@@ -770,6 +770,35 @@ async function copyTextToClipboard(text) {
   return copied;
 }
 
+function fallbackCsvFilename() {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "_");
+  return `unified_${state.ui.activeView}_${stamp}.csv`;
+}
+
+function normalizeCsvFilename(raw) {
+  const base = String(raw || "").trim() || fallbackCsvFilename();
+  const sanitized = base.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return sanitized.toLowerCase().endsWith(".csv") ? sanitized : `${sanitized}.csv`;
+}
+
+function downloadCsvText(csvText, filename) {
+  const content = String(csvText || "");
+  if (!content) {
+    return false;
+  }
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = normalizeCsvFilename(filename);
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return true;
+}
+
 async function loadView(view, options = {}) {
   const toolName = TOOL_BY_VIEW[view];
   if (!toolName) {
@@ -809,7 +838,8 @@ async function loadView(view, options = {}) {
   render();
 }
 
-async function exportCsv() {
+async function exportCsv(options = {}) {
+  const mode = options?.mode === "download" ? "download" : "copy";
   state.ui.isExporting = true;
   setNotice("Building CSV export...", "info");
   render();
@@ -828,11 +858,21 @@ async function exportCsv() {
     return;
   }
   state.ui.csvText = payload.csv_text;
-  const copied = await copyTextToClipboard(payload.csv_text);
-  if (copied) {
-    setNotice(`Copied CSV (${payload.row_count || 0} rows) to clipboard.`, "info");
+  if (mode === "download") {
+    const filename = normalizeCsvFilename(payload.filename);
+    const downloaded = downloadCsvText(payload.csv_text, filename);
+    if (downloaded) {
+      setNotice(`Downloaded ${filename} (${payload.row_count || 0} rows).`, "info");
+    } else {
+      setNotice("CSV generated. Download was blocked by the browser; copy from the text area below.", "error");
+    }
   } else {
-    setNotice("CSV generated. Copy from the text area below.", "info");
+    const copied = await copyTextToClipboard(payload.csv_text);
+    if (copied) {
+      setNotice(`Copied CSV (${payload.row_count || 0} rows) to clipboard.`, "info");
+    } else {
+      setNotice("CSV generated. Copy from the text area below.", "info");
+    }
   }
   render();
 }
@@ -1197,6 +1237,18 @@ function renderTabs() {
           },
         },
         state.ui.isExporting ? "Exporting..." : "Copy CSV",
+      ),
+      el(
+        "button",
+        {
+          className: "fw-button secondary",
+          type: "button",
+          disabled: state.ui.isExporting ? "true" : null,
+          onClick: () => {
+            void exportCsv({ mode: "download" });
+          },
+        },
+        state.ui.isExporting ? "Exporting..." : "Download CSV",
       ),
     ),
   );
