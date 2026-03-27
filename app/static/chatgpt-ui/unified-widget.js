@@ -849,22 +849,53 @@ function normalizeCsvFilename(raw) {
   return sanitized.toLowerCase().endsWith(".csv") ? sanitized : `${sanitized}.csv`;
 }
 
-function downloadCsvText(csvText, filename) {
+async function downloadCsvText(csvText, filename) {
   const content = String(csvText || "");
   if (!content) {
-    return false;
+    return { ok: false, method: "none" };
   }
+  const resolvedFilename = normalizeCsvFilename(filename);
+
+  // Prefer native file save when available. This is more reliable inside embedded app shells.
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: resolvedFilename,
+        types: [
+          {
+            description: "CSV file",
+            accept: {
+              "text/csv": [".csv"],
+            },
+          },
+        ],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      return { ok: true, method: "file_picker" };
+    } catch {
+      // Fall back to anchor download.
+    }
+  }
+
   const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = normalizeCsvFilename(filename);
+  link.download = resolvedFilename;
   link.style.display = "none";
   document.body.appendChild(link);
-  link.click();
+  try {
+    link.click();
+  } catch {
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    return { ok: false, method: "anchor" };
+  }
   document.body.removeChild(link);
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  return true;
+  return { ok: true, method: "anchor" };
 }
 
 function restoreStoreSearchFocus() {
@@ -948,11 +979,13 @@ async function exportCsv(options = {}) {
   state.ui.csvFilename = normalizeCsvFilename(payload.filename);
   if (mode === "download") {
     const filename = state.ui.csvFilename || fallbackCsvFilename();
-    const downloaded = downloadCsvText(payload.csv_text, filename);
-    if (downloaded) {
-      setNotice(`Downloaded ${filename} (${payload.row_count || 0} rows).`, "info");
+    const downloadResult = await downloadCsvText(payload.csv_text, filename);
+    if (downloadResult.ok && downloadResult.method === "file_picker") {
+      setNotice(`Saved ${filename} (${payload.row_count || 0} rows).`, "info");
+    } else if (downloadResult.ok) {
+      setNotice(`Download started for ${filename} (${payload.row_count || 0} rows).`, "info");
     } else {
-      setNotice("CSV ready. Browser blocked direct download; click Download CSV again or use Copy CSV.", "error");
+      setNotice("CSV ready. Direct download was blocked; use Copy CSV and paste into a local .csv file.", "error");
     }
   } else {
     const copied = await copyTextToClipboard(payload.csv_text);
@@ -1340,15 +1373,17 @@ function renderTabs() {
           className: "fw-button secondary",
           type: "button",
           disabled: state.ui.isExporting ? "true" : null,
-          onClick: () => {
+          onClick: async () => {
             const hasFreshCsv = Boolean(state.ui.csvText && !state.ui.filtersDirty);
             if (hasFreshCsv) {
               const filename = state.ui.csvFilename || fallbackCsvFilename();
-              const downloaded = downloadCsvText(state.ui.csvText, filename);
-              if (downloaded) {
-                setNotice(`Downloaded ${filename}.`, "info");
+              const downloadResult = await downloadCsvText(state.ui.csvText, filename);
+              if (downloadResult.ok && downloadResult.method === "file_picker") {
+                setNotice(`Saved ${filename}.`, "info");
+              } else if (downloadResult.ok) {
+                setNotice(`Download started for ${filename}.`, "info");
               } else {
-                setNotice("Download was blocked by the browser; use Copy CSV.", "error");
+                setNotice("Direct download was blocked; use Copy CSV.", "error");
               }
               render();
               return;
