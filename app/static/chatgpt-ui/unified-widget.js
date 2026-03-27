@@ -77,8 +77,11 @@ const state = {
     isExporting: false,
     filtersDirty: false,
     csvText: "",
+    csvFilename: "",
     inventoryPage: 1,
     inventoryPageSize: "50",
+    storeDropdownOpen: false,
+    _storeSearchFocus: { preserve: false, caret: 0 },
   },
   data: {
     executive_overview: null,
@@ -168,6 +171,39 @@ function normalizeOptions(raw, options = {}) {
       return { value, label: useHumanizedLabel ? humanizeToken(value) : value };
     })
     .filter(Boolean);
+}
+
+function mergeOptionLists(primary, secondary) {
+  const merged = new Map();
+  const seed = Array.isArray(secondary) ? secondary : [];
+  const preferred = Array.isArray(primary) ? primary : [];
+  seed.forEach((item) => {
+    if (!isObject(item)) {
+      return;
+    }
+    const value = String(item.value || "").trim();
+    if (!value) {
+      return;
+    }
+    merged.set(value, {
+      value,
+      label: String(item.label || value).trim() || value,
+    });
+  });
+  preferred.forEach((item) => {
+    if (!isObject(item)) {
+      return;
+    }
+    const value = String(item.value || "").trim();
+    if (!value) {
+      return;
+    }
+    merged.set(value, {
+      value,
+      label: String(item.label || value).trim() || value,
+    });
+  });
+  return Array.from(merged.values()).sort((left, right) => left.label.localeCompare(right.label));
 }
 
 function parseToolPayload(raw) {
@@ -432,10 +468,15 @@ function buildCheckMultiSelect({
   onApply,
   autoApply = false,
   onDone = null,
+  open = false,
+  onToggle = null,
 }) {
   const normalizedOptions = normalizeOptions(options);
   const selected = new Set(normalizeSelectionValues(selectedValues));
   const details = el("details", { className: "fw-multi-select" });
+  if (open) {
+    details.open = true;
+  }
   const optionsById = new Map(normalizedOptions.map((item) => [item.value, item.label]));
   const summary = el("summary", {
     className: "fw-input fw-multi-select-summary",
@@ -521,6 +562,11 @@ function buildCheckMultiSelect({
 
   details.appendChild(summary);
   details.appendChild(el("div", { className: "fw-multi-select-panel" }, list, actions));
+  if (typeof onToggle === "function") {
+    details.addEventListener("toggle", () => {
+      onToggle(Boolean(details.open));
+    });
+  }
   return details;
 }
 
@@ -554,7 +600,12 @@ function buildStoreMultiSelect(selectedStoreValues, options, noOptionsText = "No
     labels: { all: "All stores", singular: "store", plural: "stores" },
     noOptionsText,
     autoApply: true,
+    open: Boolean(state.ui.storeDropdownOpen),
+    onToggle: (isOpen) => {
+      state.ui.storeDropdownOpen = Boolean(isOpen);
+    },
     onDone: () => {
+      state.ui.storeDropdownOpen = false;
       render();
     },
     onApply: (nextValues) => {
@@ -569,14 +620,24 @@ function buildStoreMultiSelect(selectedStoreValues, options, noOptionsText = "No
 
 function deriveFallbackStoreOptions() {
   const byId = new Map();
-  const addOption = (value, label) => {
+  const addOption = (value, label, options = {}) => {
+    const allowLabelUpdate = options.allowLabelUpdate === true;
     const token = String(value || "").trim();
-    if (!token || byId.has(token)) {
+    if (!token) {
       return;
     }
     const resolvedLabel = String(label || token).trim() || token;
-    byId.set(token, { value: token, label: resolvedLabel });
+    if (!byId.has(token)) {
+      byId.set(token, { value: token, label: resolvedLabel });
+      return;
+    }
+    if (allowLabelUpdate) {
+      byId.set(token, { value: token, label: resolvedLabel });
+    }
   };
+
+  normalizeStoreIds(state.payload?.filters?.store_ids).forEach((storeId) => addOption(storeId, storeId));
+  normalizeStoreIds(state.ui.selectedStoreIds).forEach((storeId) => addOption(storeId, storeId));
 
   const overview = state.data.executive_overview;
   if (isObject(overview) && Array.isArray(overview.stores)) {
@@ -585,11 +646,14 @@ function deriveFallbackStoreOptions() {
         return;
       }
       const storeId = String(row.store_id || "").trim();
+      if (!byId.has(storeId)) {
+        return;
+      }
       const storeName = String(row.store_name || storeId).trim();
       const city = String(row.city || "").trim();
       const region = String(row.state || "").trim();
       const decoratedLabel = city && region ? `${storeName} (${city}, ${region})` : storeName;
-      addOption(storeId, decoratedLabel);
+      addOption(storeId, decoratedLabel, { allowLabelUpdate: true });
     });
   }
 
@@ -603,13 +667,17 @@ function deriveFallbackStoreOptions() {
         return;
       }
       const storeId = String(row.store_id || "").trim();
-      const storeName = String(row.store_name || storeId).trim();
-      addOption(storeId, storeName || storeId);
+      if (!byId.has(storeId)) {
+        return;
+      }
+      const storeName = String(row.store_name || "").trim();
+      if (!storeName) {
+        return;
+      }
+      addOption(storeId, storeName, { allowLabelUpdate: true });
     });
   });
 
-  normalizeStoreIds(state.ui.selectedStoreIds).forEach((storeId) => addOption(storeId, storeId));
-  normalizeStoreIds(state.payload?.filters?.store_ids).forEach((storeId) => addOption(storeId, storeId));
   return Array.from(byId.values());
 }
 
@@ -799,6 +867,25 @@ function downloadCsvText(csvText, filename) {
   return true;
 }
 
+function restoreStoreSearchFocus() {
+  const focusState = state.ui._storeSearchFocus;
+  if (!isObject(focusState) || !focusState.preserve) {
+    return;
+  }
+  state.ui._storeSearchFocus = { preserve: false, caret: 0 };
+  const input = document.getElementById("fw-unified-store-search");
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
+  input.focus();
+  const caret = Math.max(0, Math.min(input.value.length, Number(focusState.caret || input.value.length)));
+  try {
+    input.setSelectionRange(caret, caret);
+  } catch {
+    // no-op
+  }
+}
+
 async function loadView(view, options = {}) {
   const toolName = TOOL_BY_VIEW[view];
   if (!toolName) {
@@ -858,13 +945,14 @@ async function exportCsv(options = {}) {
     return;
   }
   state.ui.csvText = payload.csv_text;
+  state.ui.csvFilename = normalizeCsvFilename(payload.filename);
   if (mode === "download") {
-    const filename = normalizeCsvFilename(payload.filename);
+    const filename = state.ui.csvFilename || fallbackCsvFilename();
     const downloaded = downloadCsvText(payload.csv_text, filename);
     if (downloaded) {
       setNotice(`Downloaded ${filename} (${payload.row_count || 0} rows).`, "info");
     } else {
-      setNotice("CSV generated. Download was blocked by the browser; copy from the text area below.", "error");
+      setNotice("CSV ready. Browser blocked direct download; click Download CSV again or use Copy CSV.", "error");
     }
   } else {
     const copied = await copyTextToClipboard(payload.csv_text);
@@ -955,9 +1043,9 @@ function kpi(label, value) {
 
 function renderControlsPanel() {
   const hintedStoreOptions = normalizeOptions(state.payload.uiHints.storeOptions);
-  const storeOptions = hintedStoreOptions.length ? hintedStoreOptions : deriveFallbackStoreOptions();
+  const storeOptions = mergeOptionLists(hintedStoreOptions, deriveFallbackStoreOptions());
   const storeSearchToken = String(state.ui.storeSearch || "").trim().toLowerCase();
-  const filteredStoreOptions = storeSearchToken
+  const filteredStoreOptions = storeSearchToken.length >= 2
     ? storeOptions.filter((item) => {
         const label = String(item.label || "").toLowerCase();
         const value = String(item.value || "").toLowerCase();
@@ -965,7 +1053,7 @@ function renderControlsPanel() {
       })
     : storeOptions;
   const visibleStoreOptions = filteredStoreOptions;
-  const storeNoOptionsText = storeSearchToken && storeOptions.length
+  const storeNoOptionsText = storeSearchToken.length >= 2 && storeOptions.length
     ? `No stores match "${state.ui.storeSearch.trim()}".`
     : "No stores available.";
   const categoryOptions = [{ value: "", label: "Any" }, ...normalizeOptions(state.payload.uiHints.categoryOptions)];
@@ -992,12 +1080,20 @@ function renderControlsPanel() {
         { className: "fw-field" },
         el("label", { className: "fw-label", text: "Store Search" }),
         el("input", {
+          id: "fw-unified-store-search",
           className: "fw-input",
           type: "text",
           placeholder: "Search stores, city, state, or id",
           value: state.ui.storeSearch,
           onInput: (event) => {
             state.ui.storeSearch = event.target.value;
+            state.ui._storeSearchFocus = {
+              preserve: true,
+              caret:
+                typeof event.target.selectionStart === "number"
+                  ? event.target.selectionStart
+                  : String(event.target.value || "").length,
+            };
             render();
           },
         }),
@@ -1245,6 +1341,18 @@ function renderTabs() {
           type: "button",
           disabled: state.ui.isExporting ? "true" : null,
           onClick: () => {
+            const hasFreshCsv = Boolean(state.ui.csvText && !state.ui.filtersDirty);
+            if (hasFreshCsv) {
+              const filename = state.ui.csvFilename || fallbackCsvFilename();
+              const downloaded = downloadCsvText(state.ui.csvText, filename);
+              if (downloaded) {
+                setNotice(`Downloaded ${filename}.`, "info");
+              } else {
+                setNotice("Download was blocked by the browser; use Copy CSV.", "error");
+              }
+              render();
+              return;
+            }
             void exportCsv({ mode: "download" });
           },
         },
@@ -1711,6 +1819,7 @@ function render() {
       renderCsvPanel(),
     ),
   );
+  restoreStoreSearchFocus();
 }
 
 async function boot() {
