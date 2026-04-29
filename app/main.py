@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
     )
     static_dir = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
     product_image_dir = Path(settings.product_image_output_dir)
+    product_image_dir.mkdir(parents=True, exist_ok=True)
 
     @app.get("/health")
     def health() -> dict:

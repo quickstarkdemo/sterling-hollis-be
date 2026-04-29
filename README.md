@@ -326,6 +326,11 @@ The files are written to `PRODUCT_IMAGE_OUTPUT_DIR` (`data/product-images` by
 default), public URLs use `PRODUCT_IMAGE_URL_PATH` (`/product-images` by default),
 and the FastAPI app serves that directory from the same path.
 
+For deployed public URLs to work, run generation inside the deployed API container
+or copy generated files into the deployed `/app/data/product-images` volume. Running
+the script on a laptop can update DB URLs while leaving the actual image files only
+on the laptop filesystem.
+
 Useful dry-run example:
 
 ```bash
