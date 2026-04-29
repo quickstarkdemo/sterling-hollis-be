@@ -113,6 +113,84 @@ class Product(Base):
     )
 
 
+class CatalogProduct(Base):
+    __tablename__ = "catalog_products"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seed_run_id: Mapped[str] = mapped_column(ForeignKey("synthetic_runs.id"), nullable=False, index=True)
+    catalog_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    brand: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    variants: Mapped[list["ProductVariant"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_catalog_products_category_brand", "category", "brand"),
+    )
+
+
+class ProductVariant(Base):
+    __tablename__ = "product_variants"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seed_run_id: Mapped[str] = mapped_column(ForeignKey("synthetic_runs.id"), nullable=False, index=True)
+    catalog_product_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    variant_key: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    color: Mapped[str | None] = mapped_column(String(64))
+    material: Mapped[str | None] = mapped_column(String(64))
+    gender: Mapped[str | None] = mapped_column(String(32))
+    season: Mapped[str | None] = mapped_column(String(32))
+    price_min: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    price_max: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    link: Mapped[str | None] = mapped_column(String(500))
+    image_link: Mapped[str | None] = mapped_column(String(500))
+    image_set: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    product: Mapped[CatalogProduct] = relationship(back_populates="variants")
+    inventory: Mapped[list["StoreInventory"]] = relationship(back_populates="variant", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint("price_min >= 0", name="ck_product_variants_price_min_non_negative"),
+        CheckConstraint("price_max >= price_min", name="ck_product_variants_price_range_valid"),
+        Index("ix_product_variants_product_price", "catalog_product_id", "price_min", "price_max"),
+    )
+
+
+class StoreInventory(Base):
+    __tablename__ = "store_inventory"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seed_run_id: Mapped[str] = mapped_column(ForeignKey("synthetic_runs.id"), nullable=False, index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), nullable=False, index=True)
+    variant_id: Mapped[str] = mapped_column(
+        ForeignKey("product_variants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    size: Mapped[str] = mapped_column(String(64), nullable=False, default="One Size")
+    availability: Mapped[str] = mapped_column(String(32), nullable=False)
+    inventory_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    objective_weight: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    variant: Mapped[ProductVariant] = relationship(back_populates="inventory")
+
+    __table_args__ = (
+        CheckConstraint("inventory_qty >= 0", name="ck_store_inventory_qty_non_negative"),
+        UniqueConstraint("store_id", "variant_id", "size", name="uq_store_inventory_store_variant_size"),
+        Index("ix_store_inventory_store_availability", "store_id", "availability"),
+        Index("ix_store_inventory_variant_size", "variant_id", "size"),
+    )
+
+
 class SupplierProductOffer(Base):
     __tablename__ = "supplier_product_offers"
 

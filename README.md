@@ -271,6 +271,13 @@ Pinecone:
 
 ## API highlights
 
+- `GET /api/categories`
+- `GET /api/categories/{category}/products`
+- `GET /api/products`
+- `GET /api/products/{product_id}`
+- `GET /api/products/{product_id}/related`
+- `GET /api/search/products?q=<query>`
+- `POST /api/recommendations/products`
 - `POST /admin/synthetic/generate`
 - `POST /admin/synthetic/load`
 - `POST /admin/synthetic/index-products`
@@ -280,8 +287,58 @@ Pinecone:
 - `POST /admin/seed/run/{seed_run_id}/finalize?status=loaded`
 - `POST /recommendations/customer`
 - `POST /recommendations/merchandising`
-- `GET /feeds/products/openai?store_id=<ID>&limit=2000`
+- `GET /feeds/products/openai?store_id=<ID>&limit=2000` deprecated compatibility export
 - `POST /mcp` and related Streamable HTTP MCP traffic mounted at `/mcp`
+
+The `/api/*` catalog endpoints are the primary retail frontend contract. They expose
+category metadata, product listing/search/detail, related products, and product
+recommendations without requiring OpenAI or Pinecone. Product responses split stable
+catalog fields from store-scoped inventory fields and are backed by normalized
+`catalog_products`, `product_variants`, and `store_inventory` tables. Legacy
+`products` rows remain for MCP/operator compatibility during the transition.
+
+Set `ENABLE_MCP_ADAPTER=false` to run the backend without mounting `/mcp`. Set
+`ENABLE_OPENAI_APPS_UI=false` to disable `/ui-assets`, ChatGPT sandbox CORS, and
+widget session endpoints.
+
+### Product image generation
+
+Product variants have an `image_link` and `image_set`. Synthetic legacy products
+still contain placeholder `fashion.example` URLs, and the normalization backfill
+copies usable image metadata onto `product_variants`.
+
+To generate real product images with OpenAI and update `product_variants.image_link`
+and `product_variants.image_set`:
+
+```bash
+. .venv/bin/activate
+python scripts/generate_product_images.py --category womens_apparel --limit 10
+```
+
+The script builds prompts from product title, description, brand, category, color,
+material, gender, and season. For each display variant it writes one thumbnail plus
+multiple full-size detail images, stores the primary URL in
+`product_variants.image_link`, and stores the full gallery in
+`product_variants.image_set`. `--store-id` is optional and means "variants stocked
+by this store"; it does not create store-specific product images.
+
+The files are written to `PRODUCT_IMAGE_OUTPUT_DIR` (`data/product-images` by
+default), public URLs use `PRODUCT_IMAGE_URL_PATH` (`/product-images` by default),
+and the FastAPI app serves that directory from the same path.
+
+Useful dry-run example:
+
+```bash
+python scripts/generate_product_images.py --category womens_apparel --limit 3 --dry-run
+```
+
+Optional image settings:
+- `PRODUCT_IMAGE_MODEL` default `gpt-image-2`
+- `PRODUCT_IMAGE_SIZE` default `1024x1024`
+- `PRODUCT_IMAGE_QUALITY` default `medium`
+- `PRODUCT_IMAGE_OUTPUT_FORMAT` default `jpeg`
+- `PRODUCT_IMAGE_DETAIL_COUNT` default `3`
+- `PRODUCT_IMAGE_THUMBNAIL_SIZE` default `320`
 
 ## MCP highlights
 

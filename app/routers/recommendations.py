@@ -36,8 +36,12 @@ def recommend_merchandising(req: MerchandisingRecommendationRequest, db: Session
     return MerchandisingRecommendationResponse(store_id=req.store_id, objective=req.objective, recommendations=rows)
 
 
-@router.get("/feeds/products/openai")
+@router.get("/feeds/products/openai", deprecated=True)
 def openai_product_feed(store_id: str | None = None, limit: int = 2000, db: Session = Depends(get_db)):
+    """Compatibility export for OpenAI-commerce-style feed consumers.
+
+    Retail frontend product discovery should use the declarative `/api/*` catalog endpoints.
+    """
     query = select(Product)
     if store_id:
         query = query.where(Product.store_id == store_id)

@@ -10,17 +10,21 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    CatalogProduct,
     Customer,
     CustomerCommunication,
     Order,
     OrderItem,
     Product,
     ProductEmbedding,
+    ProductVariant,
     SupplierProductOffer,
     Store,
     StoreDailyMetric,
+    StoreInventory,
     SyntheticRun,
 )
+from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.operator_cache import clear_operator_caches
 
 ENTITY_MODEL_MAP = {
@@ -107,6 +111,9 @@ def reset_synthetic_tables(db: Session) -> None:
     db.execute(delete(Order))
     db.execute(delete(CustomerCommunication))
     db.execute(delete(ProductEmbedding))
+    db.execute(delete(StoreInventory))
+    db.execute(delete(ProductVariant))
+    db.execute(delete(CatalogProduct))
     db.execute(delete(StoreDailyMetric))
     db.execute(delete(SupplierProductOffer))
     db.execute(delete(Product))
@@ -122,6 +129,9 @@ def assert_synthetic_tables_empty(db: Session) -> None:
         "orders": db.scalar(select(func.count()).select_from(Order)) or 0,
         "customer_communications": db.scalar(select(func.count()).select_from(CustomerCommunication)) or 0,
         "product_embeddings": db.scalar(select(func.count()).select_from(ProductEmbedding)) or 0,
+        "store_inventory": db.scalar(select(func.count()).select_from(StoreInventory)) or 0,
+        "product_variants": db.scalar(select(func.count()).select_from(ProductVariant)) or 0,
+        "catalog_products": db.scalar(select(func.count()).select_from(CatalogProduct)) or 0,
         "store_daily_metrics": db.scalar(select(func.count()).select_from(StoreDailyMetric)) or 0,
         "supplier_product_offers": db.scalar(select(func.count()).select_from(SupplierProductOffer)) or 0,
         "products": db.scalar(select(func.count()).select_from(Product)) or 0,
@@ -193,6 +203,15 @@ def current_loaded_counts(db: Session, run_id: str) -> dict[str, int]:
     counts["stores"] = db.scalar(select(func.count()).select_from(Store).where(Store.seed_run_id == run_id)) or 0
     counts["customers"] = db.scalar(select(func.count()).select_from(Customer).where(Customer.seed_run_id == run_id)) or 0
     counts["products"] = db.scalar(select(func.count()).select_from(Product).where(Product.seed_run_id == run_id)) or 0
+    counts["catalog_products"] = (
+        db.scalar(select(func.count()).select_from(CatalogProduct).where(CatalogProduct.seed_run_id == run_id)) or 0
+    )
+    counts["product_variants"] = (
+        db.scalar(select(func.count()).select_from(ProductVariant).where(ProductVariant.seed_run_id == run_id)) or 0
+    )
+    counts["store_inventory"] = (
+        db.scalar(select(func.count()).select_from(StoreInventory).where(StoreInventory.seed_run_id == run_id)) or 0
+    )
     counts["orders"] = db.scalar(select(func.count()).select_from(Order).where(Order.seed_run_id == run_id)) or 0
     order_ids_subq = select(Order.id).where(Order.seed_run_id == run_id)
     counts["order_items"] = db.scalar(select(func.count()).select_from(OrderItem).where(OrderItem.order_id.in_(order_ids_subq))) or 0
@@ -203,6 +222,15 @@ def current_loaded_counts(db: Session, run_id: str) -> dict[str, int]:
         db.scalar(select(func.count()).select_from(SupplierProductOffer).where(SupplierProductOffer.seed_run_id == run_id)) or 0
     )
     return counts
+
+
+def normalize_loaded_catalog(db: Session, run_id: str) -> dict[str, int]:
+    stats = backfill_catalog_from_legacy_products(db, run_id=run_id)
+    return {
+        "catalog_products": stats.catalog_products,
+        "product_variants": stats.product_variants,
+        "store_inventory": stats.store_inventory,
+    }
 
 
 def read_generated_counts(data_dir: Path, run_id: str) -> dict[str, int]:

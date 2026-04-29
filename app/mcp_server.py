@@ -3124,6 +3124,7 @@ def _merch_potential_offer_rows(
     brand_tokens = _normalized_brand_tokens(brand)
     occasion_tokens = _normalized_occasion_tokens(occasion=occasion, occasions=occasions)
     today = datetime.now(timezone.utc).date()
+    earliest_available = today - timedelta(days=max(0, min(int(lookback_days or 90), 730)))
     latest_available = today + timedelta(days=max(1, min(int(future_window_days or 120), 365)))
 
     query = select(SupplierProductOffer)
@@ -3134,7 +3135,7 @@ def _merch_potential_offer_rows(
     query = _apply_price_band_filter_column(query, SupplierProductOffer.price, price_band)
     query = query.where(
         and_(
-            or_(SupplierProductOffer.available_on.is_(None), SupplierProductOffer.available_on >= today),
+            or_(SupplierProductOffer.available_on.is_(None), SupplierProductOffer.available_on >= earliest_available),
             or_(SupplierProductOffer.available_on.is_(None), SupplierProductOffer.available_on <= latest_available),
         )
     )

@@ -83,7 +83,8 @@ def _coming_soon_offer_map(session: Session, product_ids: list[str]) -> dict[str
         source_product_id = str(metadata.get("source_product_id") or "").strip()
         if not source_product_id or source_product_id not in targets:
             continue
-        if offer.available_on and offer.available_on < today:
+        offer_status = str(offer.status or "").strip().lower()
+        if offer.available_on and offer.available_on < today and offer_status != "launched":
             continue
         existing = mapped.get(source_product_id)
         existing_date = existing.available_on if existing and existing.available_on is not None else date.max

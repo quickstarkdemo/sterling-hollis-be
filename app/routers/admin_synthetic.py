@@ -26,6 +26,7 @@ from app.services.loader import (
     current_loaded_counts,
     finalize_run,
     load_entity_csv,
+    normalize_loaded_catalog,
     read_generated_counts,
     reset_synthetic_tables,
 )
@@ -123,6 +124,9 @@ def load_synthetic(req: SyntheticLoadRequest, db: Session = Depends(get_db)):
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Failed loading {entity}: {exc}") from exc
 
+    if "products" in loaded_rows:
+        loaded_rows.update(normalize_loaded_catalog(db, req.run_id))
+
     run.status = "loaded"
     run.completed_at = datetime.now(timezone.utc)
     db.add(run)
@@ -199,9 +203,10 @@ def seed_load_entity(entity: str, run_id: str = Query(...), db: Session = Depend
         reset_synthetic_tables(db)
     try:
         loaded = load_entity_csv(db, run_id, Path(settings.data_dir), entity)
+        normalized = normalize_loaded_catalog(db, run_id) if entity == "products" else {}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"run_id": run_id, "entity": entity, "loaded_rows": loaded}
+    return {"run_id": run_id, "entity": entity, "loaded_rows": loaded, **normalized}
 
 
 @router.post("/seed/run/{seed_run_id}/finalize")

@@ -15,6 +15,7 @@ test-results/
 
 # Synthetic outputs
 /data/runs/
+/data/product-images/
 /data/neiman_stores_snapshot.json
 
 # Local reference materials (kept outside git)

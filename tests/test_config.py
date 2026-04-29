@@ -25,7 +25,7 @@ def test_strategy_flags_default_to_false(monkeypatch):
         "MERCH_STRATEGY_CONTEXT_ENABLED",
         "ASSOCIATE_PRIORITY_TAGS_ENABLED",
     ]:
-        monkeypatch.delenv(env_key, raising=False)
+        monkeypatch.setenv(env_key, "false")
     get_settings.cache_clear()
 
     settings = get_settings()

@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     vector_top_k: int = 50
     index_worker_poll_seconds: float = 2.0
 
+    enable_mcp_adapter: bool = True
+    enable_openai_apps_ui: bool = True
+
+    product_image_model: str = "gpt-image-2"
+    product_image_size: str = "1024x1024"
+    product_image_quality: str = "medium"
+    product_image_output_format: str = "jpeg"
+    product_image_output_dir: str = "data/product-images"
+    product_image_url_path: str = "/product-images"
+    product_image_detail_count: int = 3
+    product_image_thumbnail_size: int = 320
+
     exec_auto_optimize_enabled: bool = False
     strategy_packet_enabled: bool = False
     merch_strategy_context_enabled: bool = False
