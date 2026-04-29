@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.catalog.schemas import (
+    CatalogIndexResponse,
     CategoryListResponse,
     ProductDetailResponse,
     ProductListResponse,
@@ -25,16 +26,101 @@ from app.database import get_db
 router = APIRouter(prefix="/api", tags=["catalog"])
 
 
-@router.get("/categories", response_model=CategoryListResponse)
-def categories(store_id: str | None = None, db: Session = Depends(get_db)):
+@router.get(
+    "/catalog",
+    response_model=CatalogIndexResponse,
+    summary="Catalog Index",
+    description="Store-independent catalog entry point for retail frontends. Returns category IDs and product IDs without requiring a store.",
+)
+def catalog_index(
+    category: str | None = Query(default=None, description="Optional catalog category id."),
+    brand: str | None = Query(default=None, description="Optional product brand filter."),
+    q: str | None = Query(default=None, min_length=1, description="Optional text search over catalog product fields."),
+    sort: ProductSort = Query(default=ProductSort.relevance, description="Catalog product sort order."),
+    limit: int = Query(default=24, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    products = list_products(
+        db,
+        ProductFilters(q=q, category=category, brand=brand, sort=sort, limit=limit, offset=offset),
+    )
+    return CatalogIndexResponse(
+        categories=list_categories(db).categories,
+        products=products.items,
+        total_products=products.total,
+        limit=products.limit,
+        offset=products.offset,
+    )
+
+
+@router.get(
+    "/catalog/categories",
+    response_model=CategoryListResponse,
+    summary="Catalog Categories",
+    description="Store-independent category list. Use these category IDs for product browsing.",
+)
+def catalog_categories(db: Session = Depends(get_db)):
+    return list_categories(db)
+
+
+@router.get(
+    "/catalog/products",
+    response_model=ProductListResponse,
+    summary="Catalog Products",
+    description="Store-independent product browsing. Returns catalog product IDs; store-specific inventory is summarized, not used as product identity.",
+)
+def catalog_products(
+    category: str | None = Query(default=None, description="Optional catalog category id."),
+    brand: str | None = Query(default=None, description="Optional product brand filter."),
+    q: str | None = Query(default=None, min_length=1, description="Optional text search over catalog product fields."),
+    min_price: float | None = Query(default=None, ge=0),
+    max_price: float | None = Query(default=None, ge=0),
+    sort: ProductSort = Query(default=ProductSort.relevance),
+    limit: int = Query(default=24, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return list_products(
+        db,
+        ProductFilters(
+            q=q,
+            category=category,
+            brand=brand,
+            min_price=min_price,
+            max_price=max_price,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
+    "/categories",
+    response_model=CategoryListResponse,
+    summary="Categories",
+    description="Store-independent category list. This is an alias of /api/catalog/categories.",
+)
+def categories(db: Session = Depends(get_db)):
+    return list_categories(db)
+
+
+@router.get(
+    "/stores/{store_id}/categories",
+    response_model=CategoryListResponse,
+    summary="Store Categories",
+    description="Inventory-scoped category availability for one store. Store ID is inventory context, not category identity.",
+)
+def store_categories(store_id: str, db: Session = Depends(get_db)):
     return list_categories(db, store_id=store_id)
 
 
 @router.get("/categories/{category}/products", response_model=ProductListResponse)
 def category_products(
     category: str,
-    store_id: str | None = None,
-    brand: str | None = None,
+    store_id: str | None = Query(default=None, description="Optional inventory filter. Does not change product identity."),
+    brand: str | None = Query(default=None, description="Optional product brand filter."),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     in_stock_only: bool = False,
@@ -61,12 +147,12 @@ def category_products(
 
 @router.get("/products", response_model=ProductListResponse)
 def products(
-    store_id: str | None = None,
-    category: str | None = None,
-    brand: str | None = None,
-    size: str | None = None,
-    color: str | None = None,
-    availability: str | None = None,
+    store_id: str | None = Query(default=None, description="Optional inventory filter. Does not change product identity."),
+    category: str | None = Query(default=None, description="Optional catalog category id."),
+    brand: str | None = Query(default=None, description="Optional product brand filter."),
+    size: str | None = Query(default=None, description="Optional inventory size filter."),
+    color: str | None = Query(default=None, description="Optional variant color filter."),
+    availability: str | None = Query(default=None, description="Optional inventory availability filter."),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     in_stock_only: bool = False,
@@ -97,7 +183,11 @@ def products(
 
 
 @router.get("/products/{product_id}", response_model=ProductDetailResponse)
-def product_detail(product_id: str, store_id: str | None = None, db: Session = Depends(get_db)):
+def product_detail(
+    product_id: str,
+    store_id: str | None = Query(default=None, description="Optional inventory filter for variant availability."),
+    db: Session = Depends(get_db),
+):
     product = get_product_detail(db, product_id, store_id=store_id)
     if not product:
         raise HTTPException(status_code=404, detail="product_id not found")
@@ -119,9 +209,9 @@ def product_related(
 @router.get("/search/products", response_model=ProductListResponse)
 def search_products(
     q: str = Query(min_length=1),
-    store_id: str | None = None,
-    category: str | None = None,
-    brand: str | None = None,
+    store_id: str | None = Query(default=None, description="Optional inventory filter. Does not change product identity."),
+    category: str | None = Query(default=None, description="Optional catalog category id."),
+    brand: str | None = Query(default=None, description="Optional product brand filter."),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     limit: int = Query(default=24, ge=1, le=100),

@@ -26,6 +26,14 @@ class CategoryListResponse(BaseModel):
     categories: list[CatalogCategory]
 
 
+class CatalogIndexResponse(BaseModel):
+    categories: list[CatalogCategory]
+    products: list["CatalogProduct"]
+    total_products: int
+    limit: int
+    offset: int
+
+
 class ProductInventory(BaseModel):
     store_id: str
     availability: str

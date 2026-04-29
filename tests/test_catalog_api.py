@@ -155,12 +155,33 @@ def _seed_catalog(session):
 def test_categories_expose_taxonomy_and_counts(monkeypatch):
     with _catalog_client(monkeypatch) as client:
         response = client.get("/api/categories")
+        catalog_response = client.get("/api/catalog/categories")
+        store_response = client.get("/api/stores/1001/categories")
 
     assert response.status_code == 200
     categories = {row["id"]: row for row in response.json()["categories"]}
     assert categories["womens_apparel"]["label"] == "Women's Apparel"
     assert categories["womens_apparel"]["product_count"] == 2
     assert categories["shoes"]["available_units"] == 4
+    assert catalog_response.status_code == 200
+    assert catalog_response.json() == response.json()
+    assert store_response.status_code == 200
+    assert {row["id"] for row in store_response.json()["categories"]} == {"mens_apparel", "shoes", "womens_apparel"}
+
+
+def test_catalog_index_and_products_do_not_require_store_id(monkeypatch):
+    with _catalog_client(monkeypatch) as client:
+        index = client.get("/api/catalog", params={"limit": 2})
+        products = client.get("/api/catalog/products", params={"limit": 2})
+
+    assert index.status_code == 200
+    index_payload = index.json()
+    assert len(index_payload["categories"]) == 3
+    assert len(index_payload["products"]) == 2
+    assert index_payload["products"][0]["id"].startswith("cat_")
+    assert "inventory" not in index_payload["products"][0]
+    assert products.status_code == 200
+    assert products.json()["items"][0]["id"].startswith("cat_")
 
 
 def test_product_list_filters_facets_and_inventory_shape(monkeypatch):
