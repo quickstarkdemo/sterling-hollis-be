@@ -264,6 +264,20 @@ def _write_thumbnail(source_bytes: bytes, output_path: Path, *, output_format: s
             image.save(output_path, format=output_format.upper(), optimize=True)
 
 
+def _image_generation_params(options: ProductImageGenerationOptions, prompt: str) -> dict:
+    params = {
+        "model": options.model,
+        "prompt": prompt,
+        "size": options.size,
+        "quality": options.quality,
+        "output_format": options.output_format,
+        "n": options.detail_count,
+    }
+    if options.model.startswith("dall-e-"):
+        params["response_format"] = "b64_json"
+    return params
+
+
 def query_variants_for_image_generation(
     db: Session,
     *,
@@ -390,15 +404,7 @@ class ProductImageGenerator:
 
         try:
             assert self.client is not None
-            response = self.client.images.generate(
-                model=self.options.model,
-                prompt=prompt,
-                size=self.options.size,
-                quality=self.options.quality,
-                output_format=self.options.output_format,
-                response_format="b64_json",
-                n=self.options.detail_count,
-            )
+            response = self.client.images.generate(**_image_generation_params(self.options, prompt))
             image_payloads = [item.b64_json for item in response.data if item.b64_json]
             if not image_payloads:
                 raise RuntimeError("OpenAI image response did not include b64_json data.")
@@ -508,15 +514,7 @@ class ProductImageGenerator:
 
         try:
             assert self.client is not None
-            response = self.client.images.generate(
-                model=self.options.model,
-                prompt=prompt,
-                size=self.options.size,
-                quality=self.options.quality,
-                output_format=self.options.output_format,
-                response_format="b64_json",
-                n=self.options.detail_count,
-            )
+            response = self.client.images.generate(**_image_generation_params(self.options, prompt))
             image_payloads = [item.b64_json for item in response.data if item.b64_json]
             if not image_payloads:
                 raise RuntimeError("OpenAI image response did not include b64_json data.")

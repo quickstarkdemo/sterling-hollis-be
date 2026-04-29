@@ -161,7 +161,7 @@ def test_generator_writes_image_and_updates_image_link(tmp_path):
     assert image_set["primary_url"] == result.image_link
     assert image_set["detail_urls"] == result.detail_links
     assert fake_client.images.calls[0]["model"] == options.model
-    assert fake_client.images.calls[0]["response_format"] == "b64_json"
+    assert "response_format" not in fake_client.images.calls[0]
     assert fake_client.images.calls[0]["n"] == 3
 
 
