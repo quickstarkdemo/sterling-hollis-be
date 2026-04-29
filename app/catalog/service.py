@@ -233,7 +233,6 @@ def product_to_catalog(
     price_min = min((float(variant.price_min) for variant in variants), default=0.0)
     price_max = max((float(variant.price_max) for variant in variants), default=0.0)
     summary = _summary(inventory_rows)
-    representative_inventory = inventory_rows[0] if inventory_rows else None
     base = CatalogProduct(
         id=product.id,
         catalog_id=product.id,
@@ -251,7 +250,6 @@ def product_to_catalog(
         images=images,
         attributes=_variant_attributes(default_variant) if default_variant else {},
         inventory_summary=summary,
-        inventory=_inventory_api(representative_inventory) if representative_inventory else None,
     )
     if not include_variants:
         return base

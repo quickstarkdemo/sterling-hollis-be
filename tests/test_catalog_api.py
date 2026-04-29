@@ -189,13 +189,7 @@ def test_product_list_filters_facets_and_inventory_shape(monkeypatch):
         ],
     }
     assert item["inventory_summary"]["in_stock_units"] == 12
-    assert item["inventory"] == {
-        "store_id": "1001",
-        "availability": "in stock",
-        "stock_state": "in_stock",
-        "inventory_qty": 12,
-        "size": "M",
-    }
+    assert "inventory" not in item
     assert {facet["name"] for facet in payload["facets"]} == {"brand", "category", "size", "color"}
 
 

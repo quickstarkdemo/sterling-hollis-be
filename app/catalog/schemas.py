@@ -66,7 +66,6 @@ class CatalogProduct(BaseModel):
     images: ProductImages | None = None
     attributes: dict[str, str] = Field(default_factory=dict)
     inventory_summary: ProductInventorySummary
-    inventory: ProductInventory | None = None
 
 
 class CatalogVariant(BaseModel):
