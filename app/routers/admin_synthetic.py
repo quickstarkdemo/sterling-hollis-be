@@ -11,14 +11,23 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    ImageGenerationJobListResponse,
+    ImageGenerationJobRequest,
+    ImageGenerationJobResponse,
     IndexProductsRequest,
     IndexProductsResponse,
+    IndexJobStatus,
     RunReportResponse,
     SyntheticGenerateRequest,
     SyntheticGenerateResponse,
     SyntheticLoadRequest,
     SyntheticLoadResponse,
     VectorStatusResponse,
+)
+from app.services.image_jobs import (
+    enqueue_image_generation_job,
+    get_image_generation_job,
+    list_image_generation_jobs,
 )
 from app.services.indexing import index_products_for_run
 from app.services.loader import (
@@ -148,6 +157,31 @@ def index_products(req: IndexProductsRequest, db: Session = Depends(get_db)):
     db.commit()
 
     return IndexProductsResponse(run_id=req.run_id, **stats)
+
+
+@router.post("/product-images/generate", response_model=ImageGenerationJobResponse)
+def generate_product_images(req: ImageGenerationJobRequest, db: Session = Depends(get_db)):
+    try:
+        return enqueue_image_generation_job(db, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/product-images/jobs/{job_id}", response_model=ImageGenerationJobResponse)
+def image_generation_job(job_id: str, db: Session = Depends(get_db)):
+    try:
+        return get_image_generation_job(db, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/product-images/jobs", response_model=ImageGenerationJobListResponse)
+def image_generation_jobs(
+    status: IndexJobStatus | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    return list_image_generation_jobs(db, status=status, limit=limit)
 
 
 @router.get("/system/vector-status", response_model=VectorStatusResponse)

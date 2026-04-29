@@ -288,6 +288,7 @@ def query_variants_for_image_generation(
     category: str | None = None,
     brand: str | None = None,
     limit: int = 20,
+    missing_images_only: bool = False,
 ) -> list[ProductVariant]:
     query = select(ProductVariant.id).join(CatalogProduct, CatalogProduct.id == ProductVariant.catalog_product_id)
     if run_id:
@@ -302,6 +303,12 @@ def query_variants_for_image_generation(
         query = query.where(CatalogProduct.category == category)
     if brand:
         query = query.where(CatalogProduct.brand == brand)
+    if missing_images_only:
+        query = query.where(
+            (ProductVariant.image_link.is_(None))
+            | (ProductVariant.image_link == "")
+            | (ProductVariant.image_link.like(f"%{PLACEHOLDER_IMAGE_HOST}%"))
+        )
     variant_ids = db.scalars(query.distinct().order_by(ProductVariant.id.asc()).limit(max(1, min(limit, 500)))).all()
     if not variant_ids:
         return []

@@ -337,6 +337,32 @@ Useful dry-run example:
 python scripts/generate_product_images.py --category womens_apparel --limit 3 --dry-run
 ```
 
+For frontend-triggered or large batch generation, enqueue a background job instead
+of waiting on a synchronous request:
+
+```bash
+curl -X POST http://localhost:8000/admin/product-images/generate \
+  -H "Content-Type: application/json" \
+  -d '{"category":"womens_apparel","limit":25,"detail_count":3}'
+```
+
+API jobs default to `missing_images_only=true`, so broad category/all-catalog jobs
+pick variants that still have placeholder or empty image URLs. Set
+`overwrite=true` to regenerate existing galleries.
+
+Poll the job until `status` is `succeeded` or `failed`:
+
+```bash
+curl http://localhost:8000/admin/product-images/jobs/imgjob_...
+curl http://localhost:8000/admin/product-images/jobs?limit=10
+```
+
+The existing `index-worker` service now acts as the background worker for both
+indexing and image generation jobs. Keep it running with `OPENAI_API_KEY`
+configured. In production, the API and worker both mount `products_data:/app/data`,
+so worker-generated files under `/app/data/product-images` are served immediately
+from `/product-images/...`.
+
 Optional image settings:
 - `PRODUCT_IMAGE_MODEL` default `gpt-image-2`
 - `PRODUCT_IMAGE_SIZE` default `1024x1024`

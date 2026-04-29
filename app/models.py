@@ -392,6 +392,45 @@ class IndexJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ImageGenerationJob(Base):
+    __tablename__ = "image_generation_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("synthetic_runs.id"), index=True)
+    store_id: Mapped[str | None] = mapped_column(ForeignKey("stores.id"), index=True)
+    product_id: Mapped[str | None] = mapped_column(ForeignKey("catalog_products.id"), index=True)
+    variant_id: Mapped[str | None] = mapped_column(ForeignKey("product_variants.id"), index=True)
+    category: Mapped[str | None] = mapped_column(String(128), index=True)
+    brand: Mapped[str | None] = mapped_column(String(128), index=True)
+    limit: Mapped[int] = mapped_column("requested_limit", Integer, nullable=False, default=20)
+    detail_count: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    thumbnail_size: Mapped[int] = mapped_column(Integer, nullable=False, default=320)
+    overwrite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    missing_images_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    size: Mapped[str] = mapped_column(String(32), nullable=False)
+    quality: Mapped[str] = mapped_column(String(32), nullable=False)
+    output_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    attempted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    generated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status_breakdown: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    result_sample: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_image_generation_jobs_status_created", "status", "created_at"),
+        Index("ix_image_generation_jobs_category_brand", "category", "brand"),
+    )
+
+
 class ExecutiveCampaignDraft(Base):
     __tablename__ = "executive_campaign_drafts"
 

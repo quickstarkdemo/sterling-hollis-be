@@ -471,6 +471,58 @@ class IndexJobListResponse(BaseModel):
     jobs: list[IndexJobResponse]
 
 
+class ImageGenerationJobRequest(BaseModel):
+    run_id: str | None = None
+    store_id: str | None = None
+    product_id: str | None = None
+    variant_id: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    limit: int = Field(default=20, ge=1, le=500)
+    detail_count: int | None = Field(default=None, ge=1, le=10)
+    thumbnail_size: int | None = Field(default=None, ge=96, le=1024)
+    overwrite: bool = False
+    missing_images_only: bool = True
+    model: str | None = None
+    size: str | None = None
+    quality: str | None = None
+    output_format: str | None = None
+
+
+class ImageGenerationJobResponse(BaseModel):
+    id: str
+    run_id: str | None = None
+    store_id: str | None = None
+    product_id: str | None = None
+    variant_id: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    limit: int
+    detail_count: int
+    thumbnail_size: int
+    overwrite: bool
+    missing_images_only: bool
+    model: str
+    size: str
+    quality: str
+    output_format: str
+    status: IndexJobStatus
+    attempted: int
+    generated: int
+    skipped: int
+    failed_count: int
+    status_breakdown: dict[str, int]
+    result_sample: list[dict] = Field(default_factory=list)
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ImageGenerationJobListResponse(BaseModel):
+    jobs: list[ImageGenerationJobResponse]
+
+
 class AssociateWorkspaceFilters(BaseModel):
     occasion: str | None = None
     budget_min: float | None = None
