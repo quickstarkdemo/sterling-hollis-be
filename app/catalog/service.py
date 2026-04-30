@@ -11,6 +11,8 @@ from app.catalog.schemas import (
     CatalogProduct,
     CatalogVariant,
     CategoryListResponse,
+    ImageAnalysisAttributes,
+    ImageRecommendationResponse,
     ProductDetailResponse,
     ProductFacetGroup,
     ProductFacetValue,
@@ -28,7 +30,10 @@ from app.models import Product, ProductVariant, StoreInventory
 from app.schemas import CustomerRecommendationRequest, RetrievalMode
 from app.services.catalog_normalization import catalog_key_for_product, catalog_product_id_for_key
 from app.services.demo_assets import demo_image_url
+from app.services.embeddings import EmbeddingService
+from app.services.image_analysis import image_analysis_query_text
 from app.services.inventory_status import is_in_stock, is_preorder
+from app.services.pinecone_service import PineconeService
 from app.services.product_images import product_variant_image_set
 from app.services.recommendations import customer_recommendations
 from app.services.taxonomy import CATEGORY_TAXONOMY
@@ -453,3 +458,178 @@ def recommend_products(db: Session, req: ProductRecommendationRequest) -> Produc
         for idx, row in enumerate(rows)
     ]
     return ProductRecommendationResponse(recommendations=recommendations, strategy="sql_catalog_rules")
+
+
+def _catalog_card_matches_request(product: CatalogProduct, req: ProductRecommendationRequest) -> bool:
+    if req.category and product.category.lower() != req.category.lower():
+        return False
+    if req.brand and product.brand.lower() != req.brand.lower():
+        return False
+    if req.budget_min is not None and product.price_max < req.budget_min:
+        return False
+    if req.budget_max is not None and product.price_min > req.budget_max:
+        return False
+    if product.inventory_summary.availability == "in_stock":
+        return True
+    if req.include_preorder and product.inventory_summary.availability == "preorder":
+        return True
+    return False
+
+
+def _image_keyword_score(product: CatalogProduct, analysis: ImageAnalysisAttributes) -> tuple[float, list[str]]:
+    score = 0.25
+    reasons: list[str] = []
+    if analysis.target_categories and product.category in set(analysis.target_categories):
+        score += 0.35
+        reasons.append("matched uploaded image category")
+
+    searchable = " ".join(
+        [
+            product.title,
+            product.description,
+            product.brand,
+            product.category,
+            " ".join(product.attributes.values()),
+        ]
+    ).lower()
+    keyword_hits = []
+    for keyword in [
+        *analysis.colors,
+        *analysis.materials,
+        *analysis.patterns,
+        *analysis.style_keywords,
+        *analysis.occasion_keywords,
+    ]:
+        token = str(keyword or "").strip().lower()
+        if token and token in searchable and token not in keyword_hits:
+            keyword_hits.append(token)
+
+    if keyword_hits:
+        score += min(0.36, 0.06 * len(keyword_hits))
+        reasons.append("matched uploaded image cues: " + ", ".join(keyword_hits[:4]))
+    if product.inventory_summary.availability == "in_stock":
+        score += 0.08
+        reasons.append("currently in stock")
+    elif product.inventory_summary.availability == "preorder":
+        score += 0.02
+        reasons.append("available for preorder")
+    return score, reasons or ["matched uploaded image guidance"]
+
+
+def _recommend_products_from_catalog_ids(
+    db: Session,
+    product_ids: list[str],
+    scores: dict[str, float],
+    req: ProductRecommendationRequest,
+    analysis: ImageAnalysisAttributes,
+) -> list[RecommendedProduct]:
+    product_map = {
+        product.id: product
+        for product in db.scalars(select(CatalogProductModel).where(CatalogProductModel.id.in_(product_ids))).all()
+    }
+    recommendations: list[RecommendedProduct] = []
+    seen: set[str] = set()
+    for product_id in product_ids:
+        if product_id in seen:
+            continue
+        model = product_map.get(product_id)
+        if not model:
+            continue
+        card = product_to_catalog(db, model, store_id=req.store_id)
+        assert isinstance(card, CatalogProduct)
+        if not _catalog_card_matches_request(card, req):
+            continue
+        _, reasons = _image_keyword_score(card, analysis)
+        recommendations.append(
+            RecommendedProduct(
+                product=card,
+                score=round(float(scores.get(product_id, 0.0)), 4),
+                reasons=["visually similar to uploaded image", *reasons[:2]],
+                strategy="catalog_vector_image",
+            )
+        )
+        seen.add(product_id)
+        if len(recommendations) >= req.top_k:
+            break
+    return recommendations
+
+
+def _image_vector_recommendations(
+    db: Session,
+    req: ProductRecommendationRequest,
+    analysis: ImageAnalysisAttributes,
+) -> list[RecommendedProduct]:
+    embedding_service = EmbeddingService()
+    pinecone = PineconeService()
+    if not (embedding_service.enabled and pinecone.enabled):
+        return []
+
+    vector = embedding_service.embed_text(image_analysis_query_text(analysis))
+    namespace = pinecone.settings.pinecone_catalog_namespace
+    matches = pinecone.query(namespace=namespace, vector=vector, top_k=max(req.top_k * 5, 50))
+    product_ids = [
+        str(match.get("metadata", {}).get("catalog_product_id") or match.get("id", "").replace("catalog:", ""))
+        for match in matches
+    ]
+    scores = {
+        str(match.get("metadata", {}).get("catalog_product_id") or match.get("id", "").replace("catalog:", "")): float(
+            match.get("score", 0.0)
+        )
+        for match in matches
+    }
+    return _recommend_products_from_catalog_ids(db, product_ids, scores, req, analysis)
+
+
+def _image_sql_recommendations(
+    db: Session,
+    req: ProductRecommendationRequest,
+    analysis: ImageAnalysisAttributes,
+) -> list[RecommendedProduct]:
+    filters = ProductFilters(
+        store_id=req.store_id,
+        category=req.category,
+        brand=req.brand,
+        min_price=req.budget_min,
+        max_price=req.budget_max,
+        include_preorder=req.include_preorder,
+        sort=ProductSort.relevance,
+        limit=max(req.top_k * 8, 50),
+    )
+    rows = [
+        row
+        for row in list_products(db, filters, include_facets=False).items
+        if _catalog_card_matches_request(row, req)
+    ]
+    ranked = []
+    for row in rows:
+        score, reasons = _image_keyword_score(row, analysis)
+        ranked.append((score, row, reasons))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [
+        RecommendedProduct(
+            product=row,
+            score=round(score, 4),
+            reasons=reasons,
+            strategy="sql_catalog_image_rules",
+        )
+        for score, row, reasons in ranked[: req.top_k]
+    ]
+
+
+def recommend_products_from_image_analysis(
+    db: Session,
+    req: ProductRecommendationRequest,
+    analysis: ImageAnalysisAttributes,
+) -> ImageRecommendationResponse:
+    vector_rows = _image_vector_recommendations(db, req, analysis)
+    if vector_rows:
+        return ImageRecommendationResponse(
+            analysis=analysis,
+            recommendations=vector_rows,
+            strategy="catalog_vector_image",
+        )
+    return ImageRecommendationResponse(
+        analysis=analysis,
+        recommendations=_image_sql_recommendations(db, req, analysis),
+        strategy="sql_catalog_image_rules",
+    )

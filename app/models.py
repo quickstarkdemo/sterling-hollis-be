@@ -289,6 +289,26 @@ class ProductEmbedding(Base):
     )
 
 
+class CatalogProductEmbedding(Base):
+    __tablename__ = "catalog_product_embeddings"
+
+    product_id: Mapped[str] = mapped_column(ForeignKey("catalog_products.id", ondelete="CASCADE"), primary_key=True)
+    seed_run_id: Mapped[str] = mapped_column(ForeignKey("synthetic_runs.id"), nullable=False, index=True)
+    namespace: Mapped[str] = mapped_column(String(128), nullable=False)
+    vector_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="indexed")
+    error: Mapped[str | None] = mapped_column(Text)
+    embedded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_catalog_product_embeddings_namespace", "namespace"),
+        Index("ix_catalog_product_embeddings_status", "status"),
+    )
+
+
 class SyntheticValidationFailure(Base):
     __tablename__ = "synthetic_validation_failures"
 

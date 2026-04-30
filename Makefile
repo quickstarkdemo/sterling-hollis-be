@@ -4,7 +4,7 @@ COMPOSE ?= docker compose
 API_URL ?= http://localhost:8000
 E2E_SEED ?= 20260313
 
-.PHONY: install test up down logs migrate stamp e2e reindex-latest mcp-smoke
+.PHONY: install test up down logs migrate stamp e2e reindex-latest mcp-smoke openapi
 
 install:
 	python3 -m venv .venv
@@ -61,3 +61,6 @@ mcp-smoke:
 	set -euo pipefail; \
 	until curl -fsS $(API_URL)/health >/dev/null; do sleep 2; done; \
 	. .venv/bin/activate && python scripts/mcp_smoke.py $(API_URL)/mcp
+
+openapi:
+	.venv/bin/python scripts/export_openapi.py

@@ -4,6 +4,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas import StyleConstraints
+
 
 class ProductSort(str, Enum):
     relevance = "relevance"
@@ -138,5 +140,31 @@ class RecommendedProduct(BaseModel):
 
 
 class ProductRecommendationResponse(BaseModel):
+    recommendations: list[RecommendedProduct]
+    strategy: str
+
+
+class ImageAnalysisAttributes(BaseModel):
+    summary: str = ""
+    target_categories: list[str] = Field(default_factory=list)
+    exclude_categories: list[str] = Field(default_factory=list)
+    target_genders: list[str] = Field(default_factory=list)
+    colors: list[str] = Field(default_factory=list)
+    materials: list[str] = Field(default_factory=list)
+    patterns: list[str] = Field(default_factory=list)
+    style_keywords: list[str] = Field(default_factory=list)
+    occasion_keywords: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class ImageAnalysisResponse(BaseModel):
+    analysis: ImageAnalysisAttributes
+    style_constraints: StyleConstraints
+    model: str
+    image_discarded: bool = True
+
+
+class ImageRecommendationResponse(BaseModel):
+    analysis: ImageAnalysisAttributes
     recommendations: list[RecommendedProduct]
     strategy: str

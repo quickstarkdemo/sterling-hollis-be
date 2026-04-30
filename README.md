@@ -249,6 +249,7 @@ Key tables:
 - `orders`
 - `order_items`
 - `product_embeddings`
+- `catalog_product_embeddings`
 - `store_daily_metrics`
 - `synthetic_validation_failures`
 - `customer_communications`
@@ -267,6 +268,9 @@ Pinecone:
 - Pinecone is a hosted service, not a container in this repo.
 - The app talks to Pinecone through [app/services/pinecone_service.py](/Users/dirk.nielsen/Documents/Github/personal/product-db/app/services/pinecone_service.py).
 - The Pinecone index is created on demand by the code when product indexing runs.
+- Product indexing writes both store-scoped `product:*` vectors and global
+  `catalog:*` vectors in `PINECONE_CATALOG_NAMESPACE` for store-independent
+  visual search.
 - Rebuilding Postgres from scratch requires reloading data and re-running product indexing so Postgres rows and Pinecone vectors are aligned.
 
 ## API highlights
@@ -278,6 +282,8 @@ Pinecone:
 - `GET /api/products/{product_id}/related`
 - `GET /api/search/products?q=<query>`
 - `POST /api/recommendations/products`
+- `POST /api/image-analysis`
+- `POST /api/recommendations/image`
 - `POST /admin/synthetic/generate`
 - `POST /admin/synthetic/load`
 - `POST /admin/synthetic/index-products`
@@ -300,6 +306,50 @@ catalog fields from store-scoped inventory fields and are backed by normalized
 Set `ENABLE_MCP_ADAPTER=false` to run the backend without mounting `/mcp`. Set
 `ENABLE_OPENAI_APPS_UI=false` to disable `/ui-assets`, ChatGPT sandbox CORS, and
 widget session endpoints.
+
+### Frontend API spec
+
+Frontend-facing API documentation lives in:
+
+- `docs/frontend-api.md` for the retail frontend integration guide.
+- `docs/frontend-openapi.yaml` for the curated frontend OpenAPI contract.
+
+The running FastAPI service also exposes its canonical generated schema at
+`/openapi.json`. To export that generated schema into the repo:
+
+```bash
+.venv/bin/python scripts/export_openapi.py
+```
+
+or:
+
+```bash
+make openapi
+```
+
+### Consumer image recommendations
+
+Retail frontends can upload a consumer inspiration image without storing the raw
+file in this service:
+
+```bash
+curl -X POST http://localhost:8000/api/recommendations/image \
+  -F "image=@/path/to/style.png;type=image/png" \
+  -F "top_k=8"
+```
+
+The API validates JPEG, PNG, or WebP uploads in memory, sends the image to
+OpenAI for structured visual attribute extraction, discards the raw bytes, and
+returns catalog-card recommendations. `POST /api/image-analysis` exposes the
+analysis step alone for frontends that want to preview or reuse extracted cues.
+
+Visual recommendations query the global catalog vector namespace first. Re-run
+product indexing after deploying this version so existing catalog rows have
+`catalog:*` vectors:
+
+```bash
+make reindex-latest
+```
 
 ### Product image generation
 
@@ -362,6 +412,25 @@ indexing and image generation jobs. Keep it running with `OPENAI_API_KEY`
 configured. In production, the API and worker both mount `products_data:/app/data`,
 so worker-generated files under `/app/data/product-images` are served immediately
 from `/product-images/...`.
+
+To generate across the catalog by category, use the API orchestration script. It
+fetches `GET /api/categories`, enqueues one category batch at a time, polls each
+job, and repeats a category until the API returns `attempted: 0`:
+
+```bash
+python scripts/generate_category_images.py \
+  --base-url https://products-api.quickstark.com \
+  --batch-size 50 \
+  --detail-count 3
+```
+
+Preview the category plan without enqueueing jobs:
+
+```bash
+python scripts/generate_category_images.py \
+  --base-url https://products-api.quickstark.com \
+  --plan-only
+```
 
 Optional image settings:
 - `PRODUCT_IMAGE_MODEL` default `gpt-image-2`

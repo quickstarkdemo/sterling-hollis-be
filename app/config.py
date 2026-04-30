@@ -30,11 +30,15 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     embedding_model: str = "text-embedding-3-small"
     embedding_dimension: int = 1536
+    image_analysis_model: str = "gpt-5.5"
+    image_analysis_detail: str = "auto"
+    image_upload_max_bytes: int = 8 * 1024 * 1024
 
     pinecone_api_key: str | None = None
     pinecone_cloud: str = "aws"
     pinecone_region: str = "us-east-1"
     pinecone_index_name: str = "fashion-products-v1"
+    pinecone_catalog_namespace: str = "catalog_products_v1"
 
     twilio_account_sid: str | None = None
     twilio_api_key_sid: str | None = None

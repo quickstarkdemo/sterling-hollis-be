@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.catalog.schemas import (
     CatalogIndexResponse,
     CategoryListResponse,
+    ImageAnalysisResponse,
+    ImageRecommendationResponse,
     ProductDetailResponse,
     ProductListResponse,
     ProductRecommendationRequest,
@@ -17,10 +20,12 @@ from app.catalog.service import (
     get_product_detail,
     list_categories,
     list_products,
+    recommend_products_from_image_analysis,
     recommend_products,
     related_products,
 )
 from app.database import get_db
+from app.services.image_analysis import ImageAnalysisService, ImageUploadError, read_validated_image
 
 
 router = APIRouter(prefix="/api", tags=["catalog"])
@@ -236,3 +241,58 @@ def search_products(
 @router.post("/recommendations/products", response_model=ProductRecommendationResponse)
 def product_recommendations(req: ProductRecommendationRequest, db: Session = Depends(get_db)):
     return recommend_products(db, req)
+
+
+def _http_error_for_image_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, ImageUploadError):
+        return HTTPException(status_code=exc.status_code, detail=str(exc))
+    if isinstance(exc, RuntimeError):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/image-analysis", response_model=ImageAnalysisResponse)
+async def image_analysis(
+    image: UploadFile = File(..., description="Consumer image to analyze. JPEG, PNG, or WebP."),
+    context: str | None = Form(default=None, description="Optional frontend context to guide analysis."),
+):
+    try:
+        image_bytes, mime_type = await read_validated_image(image)
+        return ImageAnalysisService().analyze(image_bytes, mime_type, context=context)
+    except Exception as exc:
+        raise _http_error_for_image_exception(exc) from exc
+
+
+@router.post("/recommendations/image", response_model=ImageRecommendationResponse)
+async def image_recommendations(
+    image: UploadFile = File(..., description="Consumer image to analyze for recommendations. JPEG, PNG, or WebP."),
+    context: str | None = Form(default=None, description="Optional frontend context to guide analysis."),
+    store_id: str | None = Form(default=None),
+    category: str | None = Form(default=None),
+    brand: str | None = Form(default=None),
+    budget_min: float | None = Form(default=None, ge=0),
+    budget_max: float | None = Form(default=None, ge=0),
+    include_preorder: bool = Form(default=True),
+    top_k: int = Form(default=12, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    try:
+        req = ProductRecommendationRequest(
+            store_id=store_id,
+            category=category,
+            brand=brand,
+            budget_min=budget_min,
+            budget_max=budget_max,
+            include_preorder=include_preorder,
+            top_k=top_k,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+    try:
+        image_bytes, mime_type = await read_validated_image(image)
+        analysis_response = ImageAnalysisService().analyze(image_bytes, mime_type, context=context)
+    except Exception as exc:
+        raise _http_error_for_image_exception(exc) from exc
+
+    return recommend_products_from_image_analysis(db, req, analysis_response.analysis)

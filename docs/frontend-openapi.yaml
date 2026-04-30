@@ -1,0 +1,1008 @@
+openapi: 3.0.3
+info:
+  title: Product DB Retail Frontend API
+  version: 0.1.0
+  description: >
+    Curated frontend contract for retail catalog browsing, product details,
+    recommendations, generated product images, and image-generation job status.
+servers:
+  - url: http://localhost:8000
+    description: Local development
+  - url: https://products-api.quickstark.com
+    description: Production
+tags:
+  - name: catalog
+  - name: recommendations
+  - name: images
+  - name: admin
+paths:
+  /api/catalog:
+    get:
+      tags: [catalog]
+      summary: Catalog entry point
+      parameters:
+        - $ref: "#/components/parameters/Category"
+        - $ref: "#/components/parameters/Brand"
+        - $ref: "#/components/parameters/SearchQuery"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Category navigation and product cards.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogIndexResponse"
+  /api/categories:
+    get:
+      tags: [catalog]
+      summary: Store-independent categories
+      responses:
+        "200":
+          description: Available catalog categories.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryListResponse"
+  /api/catalog/categories:
+    get:
+      tags: [catalog]
+      summary: Store-independent categories alias
+      responses:
+        "200":
+          description: Available catalog categories.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryListResponse"
+  /api/stores/{store_id}/categories:
+    get:
+      tags: [catalog]
+      summary: Store-scoped category availability
+      parameters:
+        - $ref: "#/components/parameters/StoreId"
+      responses:
+        "200":
+          description: Category counts scoped by store inventory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryListResponse"
+  /api/products:
+    get:
+      tags: [catalog]
+      summary: Product listing
+      parameters:
+        - $ref: "#/components/parameters/SearchQuery"
+        - $ref: "#/components/parameters/Category"
+        - $ref: "#/components/parameters/Brand"
+        - $ref: "#/components/parameters/Color"
+        - $ref: "#/components/parameters/Size"
+        - $ref: "#/components/parameters/Availability"
+        - $ref: "#/components/parameters/StoreIdQuery"
+        - $ref: "#/components/parameters/MinPrice"
+        - $ref: "#/components/parameters/MaxPrice"
+        - $ref: "#/components/parameters/IncludePreorder"
+        - $ref: "#/components/parameters/InStockOnly"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Catalog product cards with facets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+  /api/catalog/products:
+    get:
+      tags: [catalog]
+      summary: Store-independent product listing alias
+      parameters:
+        - $ref: "#/components/parameters/SearchQuery"
+        - $ref: "#/components/parameters/Category"
+        - $ref: "#/components/parameters/Brand"
+        - $ref: "#/components/parameters/MinPrice"
+        - $ref: "#/components/parameters/MaxPrice"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Catalog product cards with facets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+  /api/categories/{category}/products:
+    get:
+      tags: [catalog]
+      summary: Products in one category
+      parameters:
+        - name: category
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/StoreIdQuery"
+        - $ref: "#/components/parameters/Brand"
+        - $ref: "#/components/parameters/MinPrice"
+        - $ref: "#/components/parameters/MaxPrice"
+        - $ref: "#/components/parameters/InStockOnly"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Catalog product cards scoped to a category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+  /api/products/{product_id}:
+    get:
+      tags: [catalog]
+      summary: Product detail
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/StoreIdQuery"
+      responses:
+        "200":
+          description: Product detail with variants and inventory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductDetailResponse"
+        "404":
+          description: Product not found.
+  /api/products/{product_id}/related:
+    get:
+      tags: [catalog]
+      summary: Related products
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/RelatedLimit"
+      responses:
+        "200":
+          description: Related product cards.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+  /api/search/products:
+    get:
+      tags: [catalog]
+      summary: Product search
+      parameters:
+        - $ref: "#/components/parameters/SearchQueryRequired"
+        - $ref: "#/components/parameters/StoreIdQuery"
+        - $ref: "#/components/parameters/Category"
+        - $ref: "#/components/parameters/Brand"
+        - $ref: "#/components/parameters/MinPrice"
+        - $ref: "#/components/parameters/MaxPrice"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Search results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+  /api/recommendations/products:
+    post:
+      tags: [recommendations]
+      summary: Product recommendations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductRecommendationRequest"
+      responses:
+        "200":
+          description: Recommended product cards.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductRecommendationResponse"
+  /api/image-analysis:
+    post:
+      tags: [images, recommendations]
+      summary: Analyze uploaded consumer image
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                context:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Structured image attributes and normalized style constraints.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageAnalysisResponse"
+  /api/recommendations/image:
+    post:
+      tags: [images, recommendations]
+      summary: Recommend products from uploaded consumer image
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                context:
+                  type: string
+                  nullable: true
+                store_id:
+                  type: string
+                  nullable: true
+                category:
+                  type: string
+                  nullable: true
+                brand:
+                  type: string
+                  nullable: true
+                budget_min:
+                  type: number
+                  nullable: true
+                budget_max:
+                  type: number
+                  nullable: true
+                include_preorder:
+                  type: boolean
+                  default: true
+                top_k:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                  default: 12
+      responses:
+        "200":
+          description: Image analysis and recommended product cards.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageRecommendationResponse"
+  /admin/product-images/generate:
+    post:
+      tags: [admin, images]
+      summary: Enqueue product image generation
+      description: Admin/operations endpoint. Starts a background job processed by the worker.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImageGenerationJobRequest"
+      responses:
+        "200":
+          description: Queued image generation job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationJobResponse"
+  /admin/product-images/jobs:
+    get:
+      tags: [admin, images]
+      summary: List image generation jobs
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/JobStatus"
+        - $ref: "#/components/parameters/AdminLimit"
+      responses:
+        "200":
+          description: Recent image generation jobs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationJobListResponse"
+  /admin/product-images/jobs/{job_id}:
+    get:
+      tags: [admin, images]
+      summary: Get image generation job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Image generation job status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationJobResponse"
+        "404":
+          description: Job not found.
+  /health:
+    get:
+      tags: [admin]
+      summary: Health check
+      responses:
+        "200":
+          description: Service health.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  version:
+                    type: string
+components:
+  parameters:
+    ProductId:
+      name: product_id
+      in: path
+      required: true
+      schema:
+        type: string
+    StoreId:
+      name: store_id
+      in: path
+      required: true
+      schema:
+        type: string
+    StoreIdQuery:
+      name: store_id
+      in: query
+      schema:
+        type: string
+    SearchQuery:
+      name: q
+      in: query
+      schema:
+        type: string
+    SearchQueryRequired:
+      name: q
+      in: query
+      required: true
+      schema:
+        type: string
+    Category:
+      name: category
+      in: query
+      schema:
+        type: string
+    Brand:
+      name: brand
+      in: query
+      schema:
+        type: string
+    Color:
+      name: color
+      in: query
+      schema:
+        type: string
+    Size:
+      name: size
+      in: query
+      schema:
+        type: string
+    Availability:
+      name: availability
+      in: query
+      schema:
+        type: string
+    MinPrice:
+      name: min_price
+      in: query
+      schema:
+        type: number
+        minimum: 0
+    MaxPrice:
+      name: max_price
+      in: query
+      schema:
+        type: number
+        minimum: 0
+    IncludePreorder:
+      name: include_preorder
+      in: query
+      schema:
+        type: boolean
+        default: true
+    InStockOnly:
+      name: in_stock_only
+      in: query
+      schema:
+        type: boolean
+        default: false
+    Sort:
+      name: sort
+      in: query
+      schema:
+        $ref: "#/components/schemas/ProductSort"
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 24
+    RelatedLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 12
+    AdminLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+  schemas:
+    ProductSort:
+      type: string
+      enum: [relevance, newest, price_asc, price_desc, inventory_desc]
+    JobStatus:
+      type: string
+      enum: [queued, running, succeeded, failed]
+    CategoryListResponse:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogCategory"
+    CatalogCategory:
+      type: object
+      required: [id, label, product_count]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        product_count:
+          type: integer
+        min_price:
+          type: number
+          nullable: true
+        max_price:
+          type: number
+          nullable: true
+        available_units:
+          type: integer
+    CatalogIndexResponse:
+      type: object
+      required: [categories, products, total_products, limit, offset]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogCategory"
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogProduct"
+        total_products:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+    ProductListResponse:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogProduct"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        facets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductFacetGroup"
+    CatalogProduct:
+      type: object
+      required:
+        - id
+        - catalog_id
+        - title
+        - description
+        - brand
+        - category
+        - category_label
+        - price
+        - price_min
+        - price_max
+        - attributes
+        - inventory_summary
+      properties:
+        id:
+          type: string
+        catalog_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        brand:
+          type: string
+        category:
+          type: string
+        category_label:
+          type: string
+        price:
+          type: number
+        price_min:
+          type: number
+        price_max:
+          type: number
+        default_variant_id:
+          type: string
+          nullable: true
+        link:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          nullable: true
+        images:
+          allOf:
+            - $ref: "#/components/schemas/ProductImages"
+          nullable: true
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        inventory_summary:
+          $ref: "#/components/schemas/ProductInventorySummary"
+    ProductDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/CatalogProduct"
+        - type: object
+          required: [metadata, variants]
+          properties:
+            metadata:
+              type: object
+              additionalProperties: true
+            variants:
+              type: array
+              items:
+                $ref: "#/components/schemas/CatalogVariant"
+    CatalogVariant:
+      type: object
+      required: [id, product_id, price_min, price_max]
+      properties:
+        id:
+          type: string
+        product_id:
+          type: string
+        price_min:
+          type: number
+        price_max:
+          type: number
+        link:
+          type: string
+          nullable: true
+        image_url:
+          type: string
+          nullable: true
+        images:
+          allOf:
+            - $ref: "#/components/schemas/ProductImages"
+          nullable: true
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        sizes:
+          type: array
+          items:
+            type: string
+        inventory:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductInventory"
+    ProductImages:
+      type: object
+      properties:
+        thumbnail_url:
+          type: string
+          nullable: true
+        primary_url:
+          type: string
+          nullable: true
+        detail_urls:
+          type: array
+          items:
+            type: string
+    ProductInventorySummary:
+      type: object
+      required: [total_units, in_stock_units, preorder_units, store_count, in_stock_store_count, availability]
+      properties:
+        total_units:
+          type: integer
+        in_stock_units:
+          type: integer
+        preorder_units:
+          type: integer
+        store_count:
+          type: integer
+        in_stock_store_count:
+          type: integer
+        availability:
+          type: string
+    ProductInventory:
+      type: object
+      required: [store_id, availability, stock_state, inventory_qty]
+      properties:
+        store_id:
+          type: string
+        availability:
+          type: string
+        stock_state:
+          type: string
+        inventory_qty:
+          type: integer
+        size:
+          type: string
+          nullable: true
+    ProductFacetGroup:
+      type: object
+      required: [name, values]
+      properties:
+        name:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductFacetValue"
+    ProductFacetValue:
+      type: object
+      required: [value, count]
+      properties:
+        value:
+          type: string
+        count:
+          type: integer
+    ProductRecommendationRequest:
+      type: object
+      properties:
+        store_id:
+          type: string
+          nullable: true
+        customer_id:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        brand:
+          type: string
+          nullable: true
+        occasion:
+          type: string
+          nullable: true
+        budget_min:
+          type: number
+          nullable: true
+        budget_max:
+          type: number
+          nullable: true
+        include_preorder:
+          type: boolean
+          default: true
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 12
+    ProductRecommendationResponse:
+      type: object
+      required: [recommendations, strategy]
+      properties:
+        recommendations:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendedProduct"
+        strategy:
+          type: string
+    RecommendedProduct:
+      type: object
+      required: [product, score, reasons, strategy]
+      properties:
+        product:
+          $ref: "#/components/schemas/CatalogProduct"
+        score:
+          type: number
+        reasons:
+          type: array
+          items:
+            type: string
+        strategy:
+          type: string
+    StyleConstraints:
+      type: object
+      properties:
+        constraint_source:
+          type: string
+          nullable: true
+        target_categories:
+          type: array
+          items:
+            type: string
+        exclude_categories:
+          type: array
+          items:
+            type: string
+        target_genders:
+          type: array
+          items:
+            type: string
+        style_keywords:
+          type: array
+          items:
+            type: string
+    ImageAnalysisAttributes:
+      type: object
+      required:
+        - summary
+        - target_categories
+        - exclude_categories
+        - target_genders
+        - colors
+        - materials
+        - patterns
+        - style_keywords
+        - occasion_keywords
+        - confidence
+      properties:
+        summary:
+          type: string
+        target_categories:
+          type: array
+          items:
+            type: string
+        exclude_categories:
+          type: array
+          items:
+            type: string
+        target_genders:
+          type: array
+          items:
+            type: string
+        colors:
+          type: array
+          items:
+            type: string
+        materials:
+          type: array
+          items:
+            type: string
+        patterns:
+          type: array
+          items:
+            type: string
+        style_keywords:
+          type: array
+          items:
+            type: string
+        occasion_keywords:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+    ImageAnalysisResponse:
+      type: object
+      required: [analysis, style_constraints, model, image_discarded]
+      properties:
+        analysis:
+          $ref: "#/components/schemas/ImageAnalysisAttributes"
+        style_constraints:
+          $ref: "#/components/schemas/StyleConstraints"
+        model:
+          type: string
+        image_discarded:
+          type: boolean
+    ImageRecommendationResponse:
+      type: object
+      required: [analysis, recommendations, strategy]
+      properties:
+        analysis:
+          $ref: "#/components/schemas/ImageAnalysisAttributes"
+        recommendations:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendedProduct"
+        strategy:
+          type: string
+    ImageGenerationJobRequest:
+      type: object
+      properties:
+        run_id:
+          type: string
+          nullable: true
+        store_id:
+          type: string
+          nullable: true
+        product_id:
+          type: string
+          nullable: true
+        variant_id:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        brand:
+          type: string
+          nullable: true
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 20
+        detail_count:
+          type: integer
+          minimum: 1
+          maximum: 10
+          nullable: true
+        thumbnail_size:
+          type: integer
+          minimum: 96
+          maximum: 1024
+          nullable: true
+        overwrite:
+          type: boolean
+          default: false
+        missing_images_only:
+          type: boolean
+          default: true
+        model:
+          type: string
+          nullable: true
+        size:
+          type: string
+          nullable: true
+        quality:
+          type: string
+          nullable: true
+        output_format:
+          type: string
+          nullable: true
+    ImageGenerationJobResponse:
+      type: object
+      required:
+        - id
+        - limit
+        - detail_count
+        - thumbnail_size
+        - overwrite
+        - missing_images_only
+        - model
+        - size
+        - quality
+        - output_format
+        - status
+        - attempted
+        - generated
+        - skipped
+        - failed_count
+        - status_breakdown
+        - created_at
+      properties:
+        id:
+          type: string
+        run_id:
+          type: string
+          nullable: true
+        store_id:
+          type: string
+          nullable: true
+        product_id:
+          type: string
+          nullable: true
+        variant_id:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        brand:
+          type: string
+          nullable: true
+        limit:
+          type: integer
+        detail_count:
+          type: integer
+        thumbnail_size:
+          type: integer
+        overwrite:
+          type: boolean
+        missing_images_only:
+          type: boolean
+        model:
+          type: string
+        size:
+          type: string
+        quality:
+          type: string
+        output_format:
+          type: string
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        attempted:
+          type: integer
+        generated:
+          type: integer
+        skipped:
+          type: integer
+        failed_count:
+          type: integer
+        status_breakdown:
+          type: object
+          additionalProperties:
+            type: integer
+        result_sample:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        error_message:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+    ImageGenerationJobListResponse:
+      type: object
+      required: [jobs]
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageGenerationJobResponse"
