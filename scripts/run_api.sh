@@ -6,6 +6,34 @@ DB_PORT="${DB_PORT:-${PGPORT:-5432}}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-60}"
 UVICORN_RELOAD="${UVICORN_RELOAD:-false}"
 
+run_with_optional_datadog() {
+  if [ -n "${APP_BUILD_VERSION:-}" ] && [ -z "${DD_VERSION:-}" ]; then
+    export DD_VERSION="$APP_BUILD_VERSION"
+  fi
+
+  DATADOG_RUN_ENABLED="${DATADOG_RUN_ENABLED:-${DD_TRACE_ENABLED:-}}"
+  if [ -z "$DATADOG_RUN_ENABLED" ]; then
+    if [ -n "${DD_AGENT_HOST:-}" ] \
+      || [ -n "${DD_TRACE_AGENT_URL:-}" ] \
+      || [ -n "${DD_PROFILING_ENABLED:-}" ] \
+      || [ -n "${DD_DYNAMIC_INSTRUMENTATION_ENABLED:-}" ] \
+      || [ -n "${DD_LLMOBS_ENABLED:-}" ]; then
+      DATADOG_RUN_ENABLED=true
+    else
+      DATADOG_RUN_ENABLED=false
+    fi
+  fi
+
+  case "$DATADOG_RUN_ENABLED" in
+    true | 1 | yes | on)
+      exec ddtrace-run "$@"
+      ;;
+    *)
+      exec "$@"
+      ;;
+  esac
+}
+
 if [ -n "${PGHOST:-}" ] && [ -n "${PGDATABASE:-}" ] && [ -n "${PGUSER:-}" ] && [ -n "${PGPASSWORD:-}" ]; then
   DATABASE_URL="$(python <<'PY'
 from urllib.parse import quote_plus
@@ -77,7 +105,7 @@ fi
 
 alembic upgrade head
 if [ "$UVICORN_RELOAD" = "true" ]; then
-  exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips="*"
+  run_with_optional_datadog uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips="*"
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+run_with_optional_datadog uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"

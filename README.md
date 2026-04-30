@@ -62,6 +62,16 @@ Optional for vector cloud indexing:
 - `PINECONE_CLOUD` / `PINECONE_REGION` if your Pinecone project is not `aws/us-east-1`
 - `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` if you intentionally change embedding models
 
+Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic Instrumentation, and LLM Observability:
+- `DD_TRACE_ENABLED=true`
+- `DD_AGENT_HOST` and `DD_TRACE_AGENT_PORT` for the Datadog Agent reachable from the app container
+- `DD_ENV`, `DD_SERVICE`, and `DD_VERSION`
+- `DD_SITE`, `DD_API_KEY`, and `DD_APP_KEY`
+- `DD_PROFILING_ENABLED=true`
+- `DD_RUNTIME_METRICS_ENABLED=true`
+- `DD_LLMOBS_ENABLED=true`
+- `DD_LLMOBS_ML_APP=sterling-hollis-be`
+
 Optional for Twilio-assisted customer communication:
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_API_KEY_SID`
@@ -117,12 +127,42 @@ Deployment:
 - `DOCKERHUB_IMAGE`
 - `API_PORT`
 
+Datadog:
+- `DD_TRACE_ENABLED`
+- `DD_AGENT_HOST`
+- `DD_TRACE_AGENT_PORT`
+- `DD_TRACE_AGENT_URL`
+- `DD_ENV`
+- `DD_SERVICE`
+- `DD_VERSION`
+- `DD_SITE`
+- `DD_API_KEY`
+- `DD_APP_KEY`
+- `DD_PROFILING_ENABLED`
+- `DD_PROFILING_TIMELINE_ENABLED`
+- `DD_RUNTIME_METRICS_ENABLED`
+- `DD_LLMOBS_ENABLED`
+- `DD_LLMOBS_ML_APP`
+- `DD_LOGS_INJECTION`
+- `DD_DATA_STREAMS_ENABLED`
+- `DD_DBM_PROPAGATION_MODE`
+- `DD_DYNAMIC_INSTRUMENTATION_ENABLED`
+- `DD_REMOTE_CONFIGURATION_ENABLED`
+- `DD_CODE_ORIGIN_FOR_SPANS_ENABLED`
+- `DD_SYMBOL_DATABASE_UPLOAD_ENABLED`
+- `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED`
+- `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`
+- `DD_DOGSTATSD_DISABLE`
+
 Notes:
 - `DOCKERHUB_IMAGE` must be lowercase and include the Docker Hub namespace, for example `quickstark/sterling-hollis-be`, not just `sterling-hollis-be`.
 - Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
 - The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
 - FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
+- Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`.
+- `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.
+- Keep `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=true` unless you intentionally want SQL query values to appear in trace metadata.
 
 ### 2) Run with Docker Compose
 
@@ -428,6 +468,17 @@ The volume intentionally keeps the original Compose-created Docker volume name
 so previously generated image files remain attached after the backend container
 rename. The deploy workflow also copies any files from temporary rename-era
 volumes into `deploy_products_data` before recreating the stack.
+
+To audit whether the deployed container has all files referenced by the database:
+
+```bash
+python scripts/audit_product_image_files.py --image-dir /app/data/product-images
+```
+
+If the audit reports missing files, recover them by copying the original generated
+files into the deployed `/app/data/product-images` volume. Regeneration is not
+required when the files still exist on another Docker volume, host directory, or
+backup.
 
 To generate across the catalog by category, use the API orchestration script. It
 fetches `GET /api/categories`, enqueues one category batch at a time, polls each

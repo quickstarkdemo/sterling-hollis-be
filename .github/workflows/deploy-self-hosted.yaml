@@ -168,6 +168,30 @@ jobs:
           MCP_ALLOWED_ORIGINS=${{ secrets.MCP_ALLOWED_ORIGINS || 'http://127.0.0.1:*,http://localhost:*,http://[::1]:*' }}
           PUBLIC_BASE_URL=${{ secrets.PUBLIC_BASE_URL || 'http://localhost:8000' }}
           APP_BUILD_VERSION=${{ steps.version.outputs.version }}
+          DD_TRACE_ENABLED=${{ secrets.DD_TRACE_ENABLED || 'true' }}
+          DD_AGENT_HOST=${{ secrets.DD_AGENT_HOST || 'host.docker.internal' }}
+          DD_TRACE_AGENT_PORT=${{ secrets.DD_TRACE_AGENT_PORT || '8126' }}
+          DD_ENV=${{ secrets.DD_ENV || 'prod' }}
+          DD_SERVICE=${{ secrets.DD_SERVICE || 'sterling-hollis-be' }}
+          DD_VERSION=${{ steps.version.outputs.version }}
+          DD_SITE=${{ secrets.DD_SITE || 'datadoghq.com' }}
+          DD_API_KEY=${{ secrets.DD_API_KEY }}
+          DD_APP_KEY=${{ secrets.DD_APP_KEY }}
+          DD_PROFILING_ENABLED=${{ secrets.DD_PROFILING_ENABLED || 'true' }}
+          DD_PROFILING_TIMELINE_ENABLED=${{ secrets.DD_PROFILING_TIMELINE_ENABLED || 'true' }}
+          DD_RUNTIME_METRICS_ENABLED=${{ secrets.DD_RUNTIME_METRICS_ENABLED || 'true' }}
+          DD_LLMOBS_ENABLED=${{ secrets.DD_LLMOBS_ENABLED || 'true' }}
+          DD_LLMOBS_ML_APP=${{ secrets.DD_LLMOBS_ML_APP || 'sterling-hollis-be' }}
+          DD_LOGS_INJECTION=${{ secrets.DD_LOGS_INJECTION || 'true' }}
+          DD_DATA_STREAMS_ENABLED=${{ secrets.DD_DATA_STREAMS_ENABLED || 'true' }}
+          DD_DBM_PROPAGATION_MODE=${{ secrets.DD_DBM_PROPAGATION_MODE || 'full' }}
+          DD_DYNAMIC_INSTRUMENTATION_ENABLED=${{ secrets.DD_DYNAMIC_INSTRUMENTATION_ENABLED || 'true' }}
+          DD_REMOTE_CONFIGURATION_ENABLED=${{ secrets.DD_REMOTE_CONFIGURATION_ENABLED || 'true' }}
+          DD_CODE_ORIGIN_FOR_SPANS_ENABLED=${{ secrets.DD_CODE_ORIGIN_FOR_SPANS_ENABLED || 'true' }}
+          DD_SYMBOL_DATABASE_UPLOAD_ENABLED=${{ secrets.DD_SYMBOL_DATABASE_UPLOAD_ENABLED || 'true' }}
+          DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=${{ secrets.DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED || 'true' }}
+          DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED=${{ secrets.DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED || 'true' }}
+          DD_DOGSTATSD_DISABLE=${{ secrets.DD_DOGSTATSD_DISABLE || 'false' }}
           SES_REGION=${{ secrets.SES_REGION }}
           SES_FROM_EMAIL=${{ secrets.SES_FROM_EMAIL }}
           AMAZON_KEY_ID=${{ secrets.AMAZON_KEY_ID }}
@@ -200,6 +224,11 @@ jobs:
                 alpine sh -c 'mkdir -p /to/product-images; [ -d /from/product-images ] && cp -an /from/product-images/. /to/product-images/ || true'
             fi
           done
+
+          echo "Product image volume inventory:"
+          docker run --rm \
+            -v "${TARGET_VOLUME}:/data:ro" \
+            alpine sh -c 'find /data/product-images -maxdepth 1 -type f 2>/dev/null | wc -l'
 
       - name: Deploy compose stack
         env:
@@ -267,6 +296,18 @@ jobs:
             docker logs --tail 200 "${PRODUCT_API_CONTAINER_NAME}" 2>/dev/null || true
             exit 1
           fi
+
+      - name: Audit product image files
+        env:
+          PRODUCT_API_IMAGE: ${{ steps.deploy_image.outputs.ref }}
+        run: |
+          CONTAINER_ID="$(docker compose -f deploy/docker-compose.prod.yml ps -q api || true)"
+          if [ -z "$CONTAINER_ID" ]; then
+            echo "API container was not found; skipping image file audit."
+            exit 0
+          fi
+
+          docker exec "$CONTAINER_ID" python scripts/audit_product_image_files.py --image-dir /app/data/product-images --sample-limit 25
 
       - name: Show running container
         if: always()

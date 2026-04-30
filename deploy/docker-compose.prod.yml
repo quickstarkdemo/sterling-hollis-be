@@ -9,6 +9,8 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - products_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [
@@ -29,6 +31,8 @@ services:
       - ./runtime.env
     volumes:
       - products_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   products_data:

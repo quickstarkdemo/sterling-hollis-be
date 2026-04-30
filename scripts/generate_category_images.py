@@ -12,6 +12,7 @@ import httpx
 
 
 TERMINAL_STATUSES = {"succeeded", "failed"}
+TRANSIENT_POLL_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -112,8 +113,36 @@ def poll_image_job(
     job_timeout: float,
 ) -> CategoryImageJobSummary:
     deadline = time.monotonic() + job_timeout
+    transient_errors = 0
     while True:
-        payload = _request_json(client, "GET", f"/admin/product-images/jobs/{job_id}")
+        try:
+            payload = _request_json(client, "GET", f"/admin/product-images/jobs/{job_id}")
+            transient_errors = 0
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code not in TRANSIENT_POLL_STATUS_CODES:
+                raise
+            transient_errors += 1
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for image generation job {job_id} after transient HTTP {status_code}."
+                ) from exc
+            _log(
+                f"{job_id}: transient HTTP {status_code} while polling "
+                f"(retry {transient_errors}); continuing..."
+            )
+            time.sleep(poll_interval)
+            continue
+        except httpx.TransportError as exc:
+            transient_errors += 1
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for image generation job {job_id} after transport errors."
+                ) from exc
+            _log(f"{job_id}: transient transport error while polling (retry {transient_errors}): {exc}")
+            time.sleep(poll_interval)
+            continue
+
         status = str(payload.get("status") or "")
         if status in TERMINAL_STATUSES:
             return CategoryImageJobSummary(
