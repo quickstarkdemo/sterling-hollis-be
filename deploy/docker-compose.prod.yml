@@ -1,14 +1,14 @@
 services:
   api:
     image: ${PRODUCT_API_IMAGE}
-    container_name: products-api
+    container_name: ${PRODUCT_API_CONTAINER_NAME:-sterling-hollis-be}
     restart: unless-stopped
     env_file:
       - ./runtime.env
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      - products_data:/app/data
+      - sterling_hollis_be_data:/app/data
     healthcheck:
       test:
         [
@@ -22,13 +22,14 @@ services:
 
   index-worker:
     image: ${PRODUCT_API_IMAGE}
-    container_name: products-index-worker
+    container_name: ${PRODUCT_INDEX_WORKER_CONTAINER_NAME:-sterling-hollis-be-index-worker}
     restart: unless-stopped
     command: ./scripts/run_index_worker.sh
     env_file:
       - ./runtime.env
     volumes:
-      - products_data:/app/data
+      - sterling_hollis_be_data:/app/data
 
 volumes:
-  products_data:
+  sterling_hollis_be_data:
+    name: sterling_hollis_be_data

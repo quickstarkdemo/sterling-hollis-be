@@ -342,6 +342,42 @@ check_prerequisites() {
   fi
 }
 
+env_value() {
+  local env_file="$1"
+  local key="$2"
+  local value
+
+  value=$(grep "^${key}=" "$env_file" | tail -n 1 | cut -d '=' -f2-)
+  echo "$value" | sed 's/^["'\'']\|["'\'']$//g'
+}
+
+validate_dockerhub_image() {
+  local image="$1"
+  local lowercase_image
+
+  lowercase_image="$(printf '%s' "$image" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$image" != "$lowercase_image" ]]; then
+    print_error "DOCKERHUB_IMAGE must be lowercase for Docker image repositories: $image"
+    exit 1
+  fi
+
+  if [[ "$image" != */* ]]; then
+    print_error "DOCKERHUB_IMAGE must include the Docker Hub namespace, for example quickstark/sterling-hollis-be"
+    exit 1
+  fi
+
+  if [[ "$image" == *:* ]]; then
+    print_error "DOCKERHUB_IMAGE should not include a tag; the deploy workflow adds :latest and version tags."
+    exit 1
+  fi
+
+  if [[ ! "$image" =~ ^[a-z0-9]+([._-][a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+    print_error "DOCKERHUB_IMAGE has an invalid Docker Hub repository format: $image"
+    exit 1
+  fi
+}
+
 validate_env_file() {
   local env_file="$1"
   local required=(
@@ -363,13 +399,14 @@ validate_env_file() {
     fi
 
     local value
-    value=$(grep "^${key}=" "$env_file" | tail -n 1 | cut -d '=' -f2-)
-    value=$(echo "$value" | sed 's/^["'\'']\|["'\'']$//g')
+    value="$(env_value "$env_file" "$key")"
     if [[ -z "$value" ]]; then
       print_error "Required key is empty: $key"
       exit 1
     fi
   done
+
+  validate_dockerhub_image "$(env_value "$env_file" "DOCKERHUB_IMAGE")"
 }
 
 increment_version_by_bump() {
@@ -766,7 +803,7 @@ generate_commit_message() {
   staged_files="$(git diff --cached --name-only)"
 
   if [[ -z "$staged_files" ]]; then
-    echo "Deploy product-db"
+    echo "Deploy sterling-hollis-be"
     return
   fi
 

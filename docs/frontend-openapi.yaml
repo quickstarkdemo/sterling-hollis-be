@@ -8,7 +8,7 @@ info:
 servers:
   - url: http://localhost:8000
     description: Local development
-  - url: https://products-api.quickstark.com
+  - url: https://sterling-hollis-be.quickstark.com
     description: Production
 tags:
   - name: catalog

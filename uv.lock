@@ -1199,7 +1199,7 @@ wheels = [
 ]
 
 [[package]]
-name = "product-db"
+name = "sterling-hollis-be"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

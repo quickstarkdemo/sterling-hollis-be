@@ -1,4 +1,4 @@
-name: Product API
+name: Sterling Hollis BE
 
 on:
   push:
@@ -11,6 +11,8 @@ jobs:
     env:
       DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_IMAGE }}
       API_PORT: ${{ secrets.API_PORT || '8000' }}
+      PRODUCT_API_CONTAINER_NAME: sterling-hollis-be
+      PRODUCT_INDEX_WORKER_CONTAINER_NAME: sterling-hollis-be-index-worker
 
     steps:
       - name: Checkout code
@@ -31,6 +33,42 @@ jobs:
         run: |
           docker version
           docker compose version
+
+      - name: Validate Docker Hub image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LOWERCASE_IMAGE="$(printf '%s' "${DOCKERHUB_IMAGE}" | tr '[:upper:]' '[:lower:]')"
+
+          if [[ -z "${DOCKERHUB_IMAGE}" ]]; then
+            echo "DOCKERHUB_IMAGE is required."
+            exit 1
+          fi
+
+          if [[ "${DOCKERHUB_IMAGE}" != "${LOWERCASE_IMAGE}" ]]; then
+            echo "DOCKERHUB_IMAGE must be lowercase for Docker image repositories: ${DOCKERHUB_IMAGE}"
+            exit 1
+          fi
+
+          if [[ "${DOCKERHUB_IMAGE}" != */* ]]; then
+            echo "DOCKERHUB_IMAGE must include the Docker Hub namespace, for example quickstark/sterling-hollis-be."
+            exit 1
+          fi
+
+          if [[ "${DOCKERHUB_IMAGE}" == *:* ]]; then
+            echo "DOCKERHUB_IMAGE should not include a tag; the workflow adds :latest and version tags."
+            exit 1
+          fi
+
+          if [[ ! "${DOCKERHUB_IMAGE}" =~ ^[a-z0-9]+([._-][a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+            echo "DOCKERHUB_IMAGE has an invalid Docker Hub repository format: ${DOCKERHUB_IMAGE}"
+            exit 1
+          fi
+
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login --username "${{ secrets.DOCKERHUB_USER }}" --password-stdin
 
       - name: Detect image-affecting changes
         id: image_changes
@@ -72,9 +110,12 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
-          if echo "$CHANGED_FILES" | grep -Eq '^(app/|alembic/|scripts/|Dockerfile$|pyproject\.toml$|requirements[^/]*\.txt$|uv\.lock$)'; then
+          if echo "$CHANGED_FILES" | grep -Eq '^(app/|alembic/|scripts/|deploy/docker-compose\.prod\.yml$|Dockerfile$|pyproject\.toml$|requirements[^/]*\.txt$|uv\.lock$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Runtime image inputs changed."
+          elif ! docker manifest inspect "${DOCKERHUB_IMAGE}:latest" >/dev/null 2>&1; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "No existing ${DOCKERHUB_IMAGE}:latest image found. Forcing image rebuild."
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No runtime image inputs changed; reusing latest image."
@@ -83,7 +124,6 @@ jobs:
       - name: Build and push API image
         if: steps.image_changes.outputs.changed == 'true'
         run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login --username "${{ secrets.DOCKERHUB_USER }}" --password-stdin
           docker build \
             -t "${DOCKERHUB_IMAGE}:latest" \
             -t "${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}" \
@@ -193,7 +233,7 @@ jobs:
 
             echo "Health endpoint not ready yet. Current container state:"
             docker compose -f deploy/docker-compose.prod.yml ps || true
-            docker ps --filter "name=products-api" || true
+            docker ps --filter "name=${PRODUCT_API_CONTAINER_NAME}" || true
             sleep "$SLEEP_SECONDS"
           done
 
@@ -204,14 +244,14 @@ jobs:
             docker compose -f deploy/docker-compose.prod.yml ps || true
             echo ""
             echo "Container inspect:"
-            docker inspect products-api --format '{{json .State}}' 2>/dev/null || true
+            docker inspect "${PRODUCT_API_CONTAINER_NAME}" --format '{{json .State}}' 2>/dev/null || true
             echo ""
             echo "Recent container logs:"
-            docker logs --tail 200 products-api 2>/dev/null || true
+            docker logs --tail 200 "${PRODUCT_API_CONTAINER_NAME}" 2>/dev/null || true
             exit 1
           fi
 
       - name: Show running container
         if: always()
         run: |
-          docker ps --filter "name=products-api"
+          docker ps --filter "name=${PRODUCT_API_CONTAINER_NAME}"

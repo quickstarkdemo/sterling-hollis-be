@@ -35,6 +35,33 @@ SKIP_VARIABLES=("ENV_FILE_HASH")
 SECRET_COUNT=0
 SKIPPED_COUNT=0
 
+validate_dockerhub_image() {
+  local image="$1"
+  local lowercase_image
+
+  lowercase_image="$(printf '%s' "$image" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$image" != "$lowercase_image" ]]; then
+    echo -e "${RED}DOCKERHUB_IMAGE must be lowercase for Docker image repositories: $image${NC}"
+    exit 1
+  fi
+
+  if [[ "$image" != */* ]]; then
+    echo -e "${RED}DOCKERHUB_IMAGE must include the Docker Hub namespace, for example quickstark/sterling-hollis-be${NC}"
+    exit 1
+  fi
+
+  if [[ "$image" == *:* ]]; then
+    echo -e "${RED}DOCKERHUB_IMAGE should not include a tag; the deploy workflow adds :latest and version tags.${NC}"
+    exit 1
+  fi
+
+  if [[ ! "$image" =~ ^[a-z0-9]+([._-][a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+    echo -e "${RED}DOCKERHUB_IMAGE has an invalid Docker Hub repository format: $image${NC}"
+    exit 1
+  fi
+}
+
 while IFS= read -r line || [ -n "$line" ]; do
   if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
     continue
@@ -54,6 +81,10 @@ while IFS= read -r line || [ -n "$line" ]; do
       echo -e "${YELLOW}Skipping $KEY (empty or placeholder)${NC}"
       ((SKIPPED_COUNT+=1))
       continue
+    fi
+
+    if [[ "$KEY" == "DOCKERHUB_IMAGE" ]]; then
+      validate_dockerhub_image "$VALUE"
     fi
 
     echo -e "${GREEN}Setting secret: $KEY${NC}"

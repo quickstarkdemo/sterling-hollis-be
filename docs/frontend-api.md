@@ -40,7 +40,7 @@ http://localhost:8000
 Production:
 
 ```text
-https://products-api.quickstark.com
+https://sterling-hollis-be.quickstark.com
 ```
 
 Generated image files are served from:
@@ -177,12 +177,12 @@ Recommended sorts:
   "price_min": 690.0,
   "price_max": 750.0,
   "default_variant_id": "var_...",
-  "image_url": "https://products-api.quickstark.com/product-images/...",
+  "image_url": "https://sterling-hollis-be.quickstark.com/product-images/...",
   "images": {
-    "thumbnail_url": "https://products-api.quickstark.com/product-images/...-thumb.jpg",
-    "primary_url": "https://products-api.quickstark.com/product-images/...-detail-1.jpg",
+    "thumbnail_url": "https://sterling-hollis-be.quickstark.com/product-images/...-thumb.jpg",
+    "primary_url": "https://sterling-hollis-be.quickstark.com/product-images/...-detail-1.jpg",
     "detail_urls": [
-      "https://products-api.quickstark.com/product-images/...-detail-1.jpg"
+      "https://sterling-hollis-be.quickstark.com/product-images/...-detail-1.jpg"
     ]
   },
   "attributes": {
@@ -208,7 +208,7 @@ The background image API updates counts when a batch finishes, not per individua
 variant. A running job may show `attempted: 0` until it completes.
 
 ```bash
-curl -s "https://products-api.quickstark.com/admin/product-images/jobs?limit=20" \
+curl -s "https://sterling-hollis-be.quickstark.com/admin/product-images/jobs?limit=20" \
   | jq '.jobs[] | {id, category, status, attempted, generated, skipped, failed_count}'
 ```
 

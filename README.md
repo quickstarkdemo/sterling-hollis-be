@@ -1,4 +1,4 @@
-# product-db
+# sterling-hollis-be
 
 Synthetic fashion data platform with:
 - Postgres as source of truth
@@ -73,9 +73,9 @@ Optional for Twilio-assisted customer communication:
 Deployment-related values:
 - `DOCKERHUB_USER`
 - `DOCKERHUB_TOKEN`
-- `DOCKERHUB_IMAGE` such as `quickstark/product-api`
+- `DOCKERHUB_IMAGE` such as `quickstark/sterling-hollis-be`
 - `API_PORT` if you do not want to expose the API on `8000`
-- `PUBLIC_BASE_URL` for remote MCP/App widget deployment, for example `https://products-api.quickstark.com`
+- `PUBLIC_BASE_URL` for remote MCP/App widget deployment, for example `https://sterling-hollis-be.quickstark.com`
 
 ### Environment reference
 
@@ -118,7 +118,7 @@ Deployment:
 - `API_PORT`
 
 Notes:
-- `DOCKERHUB_IMAGE` must include the Docker Hub namespace, for example `quickstark/product-api`, not just `product-api`.
+- `DOCKERHUB_IMAGE` must be lowercase and include the Docker Hub namespace, for example `quickstark/sterling-hollis-be`, not just `sterling-hollis-be`.
 - Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
 - The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
 - FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
@@ -239,7 +239,7 @@ Postgres:
 - Postgres is the system of record.
 - The schema is managed by Alembic.
 - Startup runs `alembic upgrade head`, so an empty database is created automatically on first boot.
-- The initial schema migration lives in [alembic/versions/f790a40c397b_initial_schema.py](/Users/dirk.nielsen/Documents/Github/personal/product-db/alembic/versions/f790a40c397b_initial_schema.py).
+- The initial schema migration lives in [alembic/versions/f790a40c397b_initial_schema.py](alembic/versions/f790a40c397b_initial_schema.py).
 
 Key tables:
 - `synthetic_runs`
@@ -266,7 +266,7 @@ alembic upgrade head --sql > schema.sql
 
 Pinecone:
 - Pinecone is a hosted service, not a container in this repo.
-- The app talks to Pinecone through [app/services/pinecone_service.py](/Users/dirk.nielsen/Documents/Github/personal/product-db/app/services/pinecone_service.py).
+- The app talks to Pinecone through [app/services/pinecone_service.py](app/services/pinecone_service.py).
 - The Pinecone index is created on demand by the code when product indexing runs.
 - Product indexing writes both store-scoped `product:*` vectors and global
   `catalog:*` vectors in `PINECONE_CATALOG_NAMESPACE` for store-independent
@@ -409,9 +409,9 @@ curl http://localhost:8000/admin/product-images/jobs?limit=10
 
 The existing `index-worker` service now acts as the background worker for both
 indexing and image generation jobs. Keep it running with `OPENAI_API_KEY`
-configured. In production, the API and worker both mount `products_data:/app/data`,
-so worker-generated files under `/app/data/product-images` are served immediately
-from `/product-images/...`.
+configured. In production, the API and worker both mount
+`sterling_hollis_be_data:/app/data`, so worker-generated files under
+`/app/data/product-images` are served immediately from `/product-images/...`.
 
 To generate across the catalog by category, use the API orchestration script. It
 fetches `GET /api/categories`, enqueues one category batch at a time, polls each
@@ -419,7 +419,7 @@ job, and repeats a category until the API returns `attempted: 0`:
 
 ```bash
 python scripts/generate_category_images.py \
-  --base-url https://products-api.quickstark.com \
+  --base-url https://sterling-hollis-be.quickstark.com \
   --batch-size 50 \
   --detail-count 3
 ```
@@ -428,7 +428,7 @@ Preview the category plan without enqueueing jobs:
 
 ```bash
 python scripts/generate_category_images.py \
-  --base-url https://products-api.quickstark.com \
+  --base-url https://sterling-hollis-be.quickstark.com \
   --plan-only
 ```
 
@@ -614,7 +614,7 @@ Human-first examples:
 - `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
 - `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
 - `fashion_customer_message_history(customer_email="avery.parker.1@example-fashion.test", status="sent", limit=10)`
-- `fashion_twilio_smoke_test(body_text="Smoke test from product-db")`
+- `fashion_twilio_smoke_test(body_text="Smoke test from sterling-hollis-be")`
 - `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
 - `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", category="shoes", compare_mode="peer_and_prior_period", lookback_days=90)`
 - `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.", category="handbags", compare_mode="peer_and_prior_period")`
@@ -754,14 +754,15 @@ This repo includes a deployment path for a local self-hosted GitHub runner that:
 - connects to your external Postgres instance using `PG*` values or `DATABASE_URL`
 
 Tracked deployment assets:
-- [scripts/deploy.sh](/Users/dirk.nielsen/Documents/Github/personal/product-db/scripts/deploy.sh)
-- [scripts/setup-secrets.sh](/Users/dirk.nielsen/Documents/Github/personal/product-db/scripts/setup-secrets.sh)
-- [.github/workflows/deploy-self-hosted.yaml](/Users/dirk.nielsen/Documents/Github/personal/product-db/.github/workflows/deploy-self-hosted.yaml)
-- [deploy/docker-compose.prod.yml](/Users/dirk.nielsen/Documents/Github/personal/product-db/deploy/docker-compose.prod.yml)
+- [scripts/deploy.sh](scripts/deploy.sh)
+- [scripts/setup-secrets.sh](scripts/setup-secrets.sh)
+- [.github/workflows/deploy-self-hosted.yaml](.github/workflows/deploy-self-hosted.yaml)
+- [deploy/docker-compose.prod.yml](deploy/docker-compose.prod.yml)
 
 Production defaults:
-- Docker Hub image: `quickstark/product-api`
-- container name: `products-api`
+- Docker Hub image: `quickstark/sterling-hollis-be`
+- API container name: `sterling-hollis-be`
+- worker container name: `sterling-hollis-be-index-worker`
 - exposed host port: `8000`
 - Postgres: external instance, not a bundled container
 - transport: REST API and MCP served from the same container on port `8000`
@@ -786,11 +787,11 @@ If there are no tracked changes to commit, the script can dispatch the workflow 
 
 ### Production deployment assets
 
-- Workflow: [.github/workflows/deploy-self-hosted.yaml](/Users/dirk.nielsen/Documents/Github/personal/product-db/.github/workflows/deploy-self-hosted.yaml)
-- Runtime compose file: [deploy/docker-compose.prod.yml](/Users/dirk.nielsen/Documents/Github/personal/product-db/deploy/docker-compose.prod.yml)
-- Deploy script: [scripts/deploy.sh](/Users/dirk.nielsen/Documents/Github/personal/product-db/scripts/deploy.sh)
-- Secret uploader: [scripts/setup-secrets.sh](/Users/dirk.nielsen/Documents/Github/personal/product-db/scripts/setup-secrets.sh)
-- Version file: [VERSION](/Users/dirk.nielsen/Documents/Github/personal/product-db/VERSION)
+- Workflow: [.github/workflows/deploy-self-hosted.yaml](.github/workflows/deploy-self-hosted.yaml)
+- Runtime compose file: [deploy/docker-compose.prod.yml](deploy/docker-compose.prod.yml)
+- Deploy script: [scripts/deploy.sh](scripts/deploy.sh)
+- Secret uploader: [scripts/setup-secrets.sh](scripts/setup-secrets.sh)
+- Version file: [VERSION](VERSION)
 
 The workflow:
 - builds and pushes `latest`
@@ -843,14 +844,14 @@ Example Docker Hub settings:
 ```env
 DOCKERHUB_USER=quickstark
 DOCKERHUB_TOKEN=your-token
-DOCKERHUB_IMAGE=quickstark/product-api
+DOCKERHUB_IMAGE=quickstark/sterling-hollis-be
 API_PORT=8000
 ```
 
 Example remote MCP/Twilio settings:
 
 ```env
-PUBLIC_BASE_URL=https://products-api.quickstark.com
+PUBLIC_BASE_URL=https://sterling-hollis-be.quickstark.com
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_API_KEY_SID=SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_API_KEY_SECRET=your-secret

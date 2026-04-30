@@ -1,5 +1,5 @@
 [project]
-name = "product-db"
+name = "sterling-hollis-be"
 version = "0.1.0"
 description = "Synthetic fashion data platform with FastAPI, Postgres, and Pinecone"
 readme = "README.md"
