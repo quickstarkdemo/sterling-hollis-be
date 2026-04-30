@@ -376,6 +376,18 @@ The files are written to `PRODUCT_IMAGE_OUTPUT_DIR` (`data/product-images` by
 default), public URLs use `PRODUCT_IMAGE_URL_PATH` (`/product-images` by default),
 and the FastAPI app serves that directory from the same path.
 
+Changing `PUBLIC_BASE_URL` only affects newly generated image URLs. To rewrite
+previously stored image URLs after a hostname change, run:
+
+```bash
+python scripts/rewrite_product_image_urls.py --dry-run
+python scripts/rewrite_product_image_urls.py
+```
+
+The rewrite updates stored product image URLs under `PRODUCT_IMAGE_URL_PATH` from
+the old `https://products-api.quickstark.com` base to the current
+`PUBLIC_BASE_URL`.
+
 For deployed public URLs to work, run generation inside the deployed API container
 or copy generated files into the deployed `/app/data/product-images` volume. Running
 the script on a laptop can update DB URLs while leaving the actual image files only

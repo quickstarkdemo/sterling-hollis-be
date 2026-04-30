@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base
-from app.models import Product, Store, SyntheticRun
+from app.models import CatalogProduct, Product, ProductVariant, Store, SupplierProductOffer, SyntheticRun
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.product_images import (
     ProductImageGenerator,
@@ -19,6 +19,7 @@ from app.services.product_images import (
     product_variant_image_set,
     query_variants_for_image_generation,
 )
+from scripts.rewrite_product_image_urls import rewrite_product_image_urls
 
 _ONE_BY_ONE_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -199,3 +200,123 @@ def test_query_variants_for_image_generation_filters_by_category():
 
     assert len(variants) == 1
     assert variants[0].id.startswith("var_")
+
+
+def test_rewrite_product_image_urls_updates_stored_urls():
+    old_base = "https://products-api.quickstark.com"
+    new_base = "https://sterling-hollis-be.quickstark.com"
+    engine, session = _session()
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    product = _product(
+        image_link=f"{old_base}/product-images/prod_img_1-detail-1.jpg",
+    )
+    product.metadata_json = {
+        "image_set": {
+            "thumbnail_url": f"{old_base}/product-images/prod_img_1-thumb.jpg",
+            "primary_url": f"{old_base}/product-images/prod_img_1-detail-1.jpg",
+            "detail_urls": [f"{old_base}/product-images/prod_img_1-detail-1.jpg"],
+        }
+    }
+    catalog = CatalogProduct(
+        id="cat_img_1",
+        seed_run_id="run_images",
+        catalog_key="valentino|dress",
+        title="Valentino Rose Silk Dress",
+        description="Event-ready silk dress with soft rose color",
+        brand="Valentino",
+        category="womens_apparel",
+        metadata_json={},
+    )
+    variant = ProductVariant(
+        id="var_img_1",
+        seed_run_id="run_images",
+        catalog_product_id="cat_img_1",
+        variant_key="valentino|dress|rose",
+        color="Rose",
+        material="silk",
+        gender="women",
+        season="spring",
+        price_min=Decimal("750.00"),
+        price_max=Decimal("750.00"),
+        link="https://fashion.example/products/prod_img_1",
+        image_link=f"{old_base}/product-images/var_img_1-detail-1.jpg",
+        image_set={
+            "thumbnail_url": f"{old_base}/product-images/var_img_1-thumb.jpg",
+            "primary_url": f"{old_base}/product-images/var_img_1-detail-1.jpg",
+            "detail_urls": [
+                f"{old_base}/product-images/var_img_1-detail-1.jpg",
+                "https://cdn.example/other.jpg",
+            ],
+        },
+        metadata_json={"source_url": f"{old_base}/not-product-images/unchanged.jpg"},
+    )
+    supplier_offer = SupplierProductOffer(
+        id="offer_img_1",
+        seed_run_id="run_images",
+        brand="Valentino",
+        title="Supplier Dress",
+        category="womens_apparel",
+        price=Decimal("700.00"),
+        size="M",
+        season="spring",
+        status="candidate",
+        link="https://fashion.example/supplier/offer_img_1",
+        image_link=f"{old_base}/product-images/offer_img_1-detail-1.jpg",
+        metadata_json={"gallery": [f"{old_base}/product-images/offer_img_1-thumb.jpg"]},
+    )
+    session.add_all([product, catalog, variant, supplier_offer])
+    session.commit()
+
+    try:
+        stats = rewrite_product_image_urls(
+            old_base_url=old_base,
+            new_base_url=new_base,
+            url_path="/product-images",
+            dry_run=False,
+            session_factory=SessionLocal,
+        )
+        session.expire_all()
+        rewritten_product = session.get(Product, "prod_img_1")
+        rewritten_variant = session.get(ProductVariant, "var_img_1")
+        rewritten_offer = session.get(SupplierProductOffer, "offer_img_1")
+    finally:
+        session.close()
+        engine.dispose()
+
+    assert stats.touched_rows == 3
+    assert stats.rewritten_values == 10
+    assert rewritten_product.image_link.startswith(f"{new_base}/product-images/")
+    assert rewritten_product.metadata_json["image_set"]["thumbnail_url"].startswith(f"{new_base}/product-images/")
+    assert rewritten_variant.image_link.startswith(f"{new_base}/product-images/")
+    assert rewritten_variant.image_set["primary_url"].startswith(f"{new_base}/product-images/")
+    assert rewritten_variant.image_set["detail_urls"][1] == "https://cdn.example/other.jpg"
+    assert rewritten_variant.metadata_json["source_url"] == f"{old_base}/not-product-images/unchanged.jpg"
+    assert rewritten_offer.image_link.startswith(f"{new_base}/product-images/")
+    assert rewritten_offer.metadata_json["gallery"][0].startswith(f"{new_base}/product-images/")
+
+
+def test_rewrite_product_image_urls_dry_run_rolls_back():
+    old_base = "https://products-api.quickstark.com"
+    new_base = "https://sterling-hollis-be.quickstark.com"
+    engine, session = _session()
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    product = _product(image_link=f"{old_base}/product-images/prod_img_1-detail-1.jpg")
+    session.add(product)
+    session.commit()
+
+    try:
+        stats = rewrite_product_image_urls(
+            old_base_url=old_base,
+            new_base_url=new_base,
+            url_path="/product-images",
+            dry_run=True,
+            session_factory=SessionLocal,
+        )
+        session.expire_all()
+        rewritten_product = session.get(Product, "prod_img_1")
+    finally:
+        session.close()
+        engine.dispose()
+
+    assert stats.touched_rows == 1
+    assert rewritten_product.image_link == f"{old_base}/product-images/prod_img_1-detail-1.jpg"
