@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     pinecone_index_name: str = "fashion-products-v1"
     pinecone_catalog_namespace: str = "catalog_products_v1"
 
+    clerk_issuer: str | None = None
+    clerk_jwks_url: str | None = None
+    clerk_authorized_parties: str = "http://localhost:5173,http://127.0.0.1:5173"
+    clerk_demo_customer_id: str | None = None
+    clerk_demo_customer_email: str | None = None
+
     twilio_account_sid: str | None = None
     twilio_api_key_sid: str | None = None
     twilio_api_key_secret: str | None = None

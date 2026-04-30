@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import get_settings
 from app.routers.admin_synthetic import router as admin_router
 from app.routers.catalog import router as catalog_router
+from app.routers.chat import router as chat_router
 from app.routers.recommendations import router as rec_router
 
 
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
 
     app.include_router(admin_router)
     app.include_router(catalog_router)
+    app.include_router(chat_router)
     app.include_router(rec_router)
     app.mount(
         settings.product_image_url_path.rstrip("/") or "/product-images",
