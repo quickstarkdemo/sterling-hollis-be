@@ -422,8 +422,12 @@ curl http://localhost:8000/admin/product-images/jobs?limit=10
 The existing `index-worker` service now acts as the background worker for both
 indexing and image generation jobs. Keep it running with `OPENAI_API_KEY`
 configured. In production, the API and worker both mount
-`sterling_hollis_be_data:/app/data`, so worker-generated files under
+`deploy_products_data:/app/data`, so worker-generated files under
 `/app/data/product-images` are served immediately from `/product-images/...`.
+The volume intentionally keeps the original Compose-created Docker volume name
+so previously generated image files remain attached after the backend container
+rename. The deploy workflow also copies any files from temporary rename-era
+volumes into `deploy_products_data` before recreating the stack.
 
 To generate across the catalog by category, use the API orchestration script. It
 fetches `GET /api/categories`, enqueues one category batch at a time, polls each

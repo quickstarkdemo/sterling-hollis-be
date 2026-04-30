@@ -8,7 +8,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      - sterling_hollis_be_data:/app/data
+      - products_data:/app/data
     healthcheck:
       test:
         [
@@ -28,8 +28,8 @@ services:
     env_file:
       - ./runtime.env
     volumes:
-      - sterling_hollis_be_data:/app/data
+      - products_data:/app/data
 
 volumes:
-  sterling_hollis_be_data:
-    name: sterling_hollis_be_data
+  products_data:
+    name: deploy_products_data

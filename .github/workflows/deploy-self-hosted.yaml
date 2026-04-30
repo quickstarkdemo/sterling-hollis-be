@@ -184,6 +184,23 @@ jobs:
           UVICORN_RELOAD=false
           EOF
 
+      - name: Preserve product image volume
+        run: |
+          set -euo pipefail
+
+          TARGET_VOLUME="deploy_products_data"
+          docker volume inspect "$TARGET_VOLUME" >/dev/null 2>&1 || docker volume create "$TARGET_VOLUME" >/dev/null
+
+          for SOURCE_VOLUME in sterling_hollis_be_data products_data; do
+            if docker volume inspect "$SOURCE_VOLUME" >/dev/null 2>&1; then
+              echo "Copying missing product images from ${SOURCE_VOLUME} to ${TARGET_VOLUME}..."
+              docker run --rm \
+                -v "${SOURCE_VOLUME}:/from:ro" \
+                -v "${TARGET_VOLUME}:/to" \
+                alpine sh -c 'mkdir -p /to/product-images; [ -d /from/product-images ] && cp -an /from/product-images/. /to/product-images/ || true'
+            fi
+          done
+
       - name: Deploy compose stack
         env:
           PRODUCT_API_IMAGE: ${{ steps.deploy_image.outputs.ref }}
