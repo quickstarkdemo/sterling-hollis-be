@@ -4,18 +4,73 @@ info:
   version: 0.1.0
   description: >
     Curated frontend contract for retail catalog browsing, product details,
-    recommendations, generated product images, and image-generation job status.
+    recommendations, generated product images, image-generation job status,
+    and storefront chat.
 servers:
   - url: http://localhost:8000
     description: Local development
   - url: https://sterling-hollis-be.quickstark.com
     description: Production
 tags:
+  - name: chat
   - name: catalog
   - name: recommendations
   - name: images
   - name: admin
 paths:
+  /api/chat:
+    post:
+      tags: [chat]
+      summary: Storefront chat
+      description: >
+        Stable retail chat endpoint for product questions, catalog search,
+        related products, store contact information, approved service answers,
+        and authenticated account/order/personal recommendation requests.
+        Authentication is optional; sensitive requests are blocked unless the
+        bearer token resolves to a linked customer.
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            examples:
+              productQuestion:
+                summary: Product page question
+                value:
+                  message: Is this jacket available?
+                  context:
+                    page_type: product
+                    route: /product/cat_123
+                    current_product:
+                      id: cat_123
+                    store_id: "1001"
+              storePhone:
+                summary: Open store contact question
+                value:
+                  message: What phone number can I call?
+                  context:
+                    store_id: "1001"
+              orderStatus:
+                summary: Authenticated order request
+                value:
+                  message: What is my order status?
+                  context:
+                    store_id: "1001"
+      responses:
+        "200":
+          description: Chat assistant response. Sensitive requests may return route=blocked with sign-in/link actions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "401":
+          description: Invalid bearer token.
+        "422":
+          description: Invalid request shape.
   /api/catalog:
     get:
       tags: [catalog]
@@ -351,6 +406,11 @@ paths:
                   version:
                     type: string
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   parameters:
     ProductId:
       name: product_id
@@ -466,6 +526,156 @@ components:
         minimum: 0
         default: 0
   schemas:
+    ChatCurrentProduct:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        brand:
+          type: string
+          nullable: true
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+          default: {}
+    ChatContext:
+      type: object
+      additionalProperties: false
+      properties:
+        page_type:
+          type: string
+          nullable: true
+        route:
+          type: string
+          nullable: true
+        product_id:
+          type: string
+          nullable: true
+        current_product:
+          allOf:
+            - $ref: "#/components/schemas/ChatCurrentProduct"
+          nullable: true
+        category:
+          type: string
+          nullable: true
+        store_id:
+          type: string
+          nullable: true
+    ChatRequest:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        conversation_id:
+          type: string
+          maxLength: 64
+          nullable: true
+        context:
+          $ref: "#/components/schemas/ChatContext"
+    ChatResponse:
+      type: object
+      required: [conversation_id, message, identity_status, intent, route, cards, actions, tool_trace]
+      properties:
+        conversation_id:
+          type: string
+        message:
+          type: string
+        identity_status:
+          type: string
+          enum: [anonymous, authenticated_unlinked, authenticated_customer]
+        intent:
+          $ref: "#/components/schemas/ChatIntent"
+        route:
+          $ref: "#/components/schemas/ChatRoute"
+        cards:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogProduct"
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatAction"
+        tool_trace:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatToolTrace"
+        evaluator_confidence:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 1
+        selected_agent:
+          type: string
+          nullable: true
+          enum: [ProductAgent, PersonalShopperAgent, CustomerServiceAgent, OrderAgent, null]
+        selected_tool:
+          type: string
+          nullable: true
+          enum:
+            - product_detail
+            - semantic_catalog_search
+            - related_products
+            - customer_recommendations
+            - customer_summary
+            - store_info
+            - service_answer
+            - order_status
+            - chat_response
+            - null
+        requires_followup:
+          type: boolean
+          default: false
+        clarifying_question:
+          type: string
+          nullable: true
+    ChatIntent:
+      type: string
+      enum:
+        - catalog_search
+        - complementary_products
+        - product_question
+        - account_question
+        - customer_recommendation
+        - general_style
+    ChatRoute:
+      type: string
+      enum: [simple_tool, agentic_response, semantic_catalog_search, blocked]
+    ChatAction:
+      type: object
+      required: [type, label]
+      properties:
+        type:
+          type: string
+          enum: [view_product, sign_in, link_account]
+        label:
+          type: string
+        href:
+          type: string
+          nullable: true
+        product_id:
+          type: string
+          nullable: true
+    ChatToolTrace:
+      type: object
+      required: [name, decision]
+      properties:
+        name:
+          type: string
+        decision:
+          type: string
     ProductSort:
       type: string
       enum: [relevance, newest, price_asc, price_desc, inventory_desc]

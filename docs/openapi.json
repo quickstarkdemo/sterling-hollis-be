@@ -422,6 +422,348 @@
         "title": "CategoryListResponse",
         "type": "object"
       },
+      "ChatAction": {
+        "properties": {
+          "href": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Href"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "type": {
+            "enum": [
+              "view_product",
+              "sign_in",
+              "link_account"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "label"
+        ],
+        "title": "ChatAction",
+        "type": "object"
+      },
+      "ChatContext": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "current_product": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatCurrentProduct"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Type"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "store_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Id"
+          }
+        },
+        "title": "ChatContext",
+        "type": "object"
+      },
+      "ChatCurrentProduct": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Attributes",
+            "type": "object"
+          },
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ChatCurrentProduct",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ChatContext"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "message": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "ChatResponse": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogProduct"
+            },
+            "title": "Cards",
+            "type": "array"
+          },
+          "clarifying_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarifying Question"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "evaluator_confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator Confidence"
+          },
+          "identity_status": {
+            "enum": [
+              "anonymous",
+              "authenticated_unlinked",
+              "authenticated_customer"
+            ],
+            "title": "Identity Status",
+            "type": "string"
+          },
+          "intent": {
+            "enum": [
+              "catalog_search",
+              "complementary_products",
+              "product_question",
+              "account_question",
+              "customer_recommendation",
+              "general_style"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "requires_followup": {
+            "default": false,
+            "title": "Requires Followup",
+            "type": "boolean"
+          },
+          "route": {
+            "enum": [
+              "simple_tool",
+              "agentic_response",
+              "semantic_catalog_search",
+              "blocked"
+            ],
+            "title": "Route",
+            "type": "string"
+          },
+          "selected_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Agent"
+          },
+          "selected_tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Tool"
+          },
+          "tool_trace": {
+            "items": {
+              "$ref": "#/components/schemas/ChatToolTrace"
+            },
+            "title": "Tool Trace",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message",
+          "identity_status",
+          "intent",
+          "route"
+        ],
+        "title": "ChatResponse",
+        "type": "object"
+      },
+      "ChatToolTrace": {
+        "properties": {
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "decision"
+        ],
+        "title": "ChatToolTrace",
+        "type": "object"
+      },
       "CustomerRecommendationRequest": {
         "properties": {
           "budget_max": {
@@ -3151,6 +3493,47 @@
         "summary": "Category Products",
         "tags": [
           "catalog"
+        ]
+      }
+    },
+    "/api/chat": {
+      "post": {
+        "operationId": "chat_api_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat",
+        "tags": [
+          "chat"
         ]
       }
     },

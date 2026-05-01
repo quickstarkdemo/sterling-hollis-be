@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     image_analysis_model: str = "gpt-5.5"
     image_analysis_detail: str = "auto"
     image_upload_max_bytes: int = 8 * 1024 * 1024
+    chat_orchestration_model: str = "gpt-5.4-mini"
+    chat_orchestration_min_confidence: float = 0.55
 
     pinecone_api_key: str | None = None
     pinecone_cloud: str = "aws"

@@ -16,7 +16,8 @@ make openapi
 
 For frontend planning, use `docs/frontend-openapi.yaml` as the curated retail API
 surface. It excludes MCP/OpenAI Apps adapter concerns and focuses on catalog,
-product detail, recommendations, generated image URLs, and image-job progress.
+product detail, recommendations, generated image URLs, image-job progress, and
+the retail chat surface.
 
 ## Identity Model
 
@@ -66,6 +67,7 @@ Generated image files are served from:
 | Product recommendations | `POST` | `/api/recommendations/products` |
 | Image analysis | `POST` | `/api/image-analysis` |
 | Image recommendations | `POST` | `/api/recommendations/image` |
+| Storefront chat | `POST` | `/api/chat` |
 
 ## Admin/Operations Endpoints Useful During Buildout
 
@@ -92,6 +94,124 @@ frontend actions.
 7. Use `/api/recommendations/image` when a shopper uploads an inspiration image.
    The backend validates the image, extracts structured visual cues with OpenAI,
    discards the raw image, and returns product cards.
+8. Use `/api/chat` for open storefront chat: product questions, catalog search,
+   related products, store phone/contact information, approved service answers,
+   and signed-in order/account/personal recommendation requests.
+
+## Storefront Chat
+
+`POST /api/chat` is the stable frontend chat contract. Authentication is optional:
+
+- Anonymous shoppers can ask product, catalog, related-product, store contact,
+  and general customer-service questions.
+- Account, order-status, personal-size, personal-style, purchase-history, and
+  personalized recommendation requests require a valid `Authorization: Bearer
+  <Clerk token>` header.
+- The frontend must not send `customer_id`. The backend derives customer identity
+  only from the signed-in token and linked customer record.
+
+Request:
+
+```json
+{
+  "message": "What phone number can I call for this store?",
+  "conversation_id": "chat_abc123",
+  "context": {
+    "page_type": "product",
+    "route": "/product/cat_123",
+    "product_id": "cat_123",
+    "current_product": {
+      "id": "cat_123",
+      "title": "Ivory Leather Shoulder Bag",
+      "category": "handbags",
+      "brand": "Example Brand",
+      "attributes": {
+        "color": "ivory",
+        "material": "leather"
+      }
+    },
+    "category": "handbags",
+    "store_id": "1001"
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "conversation_id": "chat_abc123",
+  "message": "Dallas Downtown is at 1 Main St, Dallas, TX 75201. You can call 555-111-2222.",
+  "identity_status": "anonymous",
+  "intent": "general_style",
+  "route": "simple_tool",
+  "cards": [],
+  "actions": [],
+  "tool_trace": [
+    {"name": "triage", "decision": "store-info wording"},
+    {"name": "store_info", "decision": "resolved from backend store context"},
+    {"name": "ChatIntakeAgent", "decision": "deterministic_fallback_no_openai; confidence=0.50"},
+    {"name": "CustomerServiceAgent", "decision": "selected_tool=store_info"},
+    {"name": "auth_gate", "decision": "allowed; public store info"}
+  ],
+  "evaluator_confidence": 0.5,
+  "selected_agent": "CustomerServiceAgent",
+  "selected_tool": "store_info",
+  "requires_followup": false,
+  "clarifying_question": null
+}
+```
+
+Frontend handling rules:
+
+- Render `message` as the primary assistant text.
+- Render `cards[]` with the standard product-card component and `actions[]` as
+  CTA buttons. `view_product` actions link to product detail pages.
+- If `route` is `blocked`, render `message` plus the first `sign_in` or
+  `link_account` action.
+- If `requires_followup` is true, render `clarifying_question` as the assistant
+  prompt and keep the same `conversation_id` on the next turn.
+- Treat `tool_trace`, `evaluator_confidence`, `selected_agent`, and
+  `selected_tool` as diagnostics or analytics fields. The frontend should not
+  branch critical security behavior on them.
+
+Supported chat intents:
+
+- `catalog_search`
+- `complementary_products`
+- `product_question`
+- `account_question`
+- `customer_recommendation`
+- `general_style`
+
+Supported selected tools:
+
+- `product_detail`
+- `semantic_catalog_search`
+- `related_products`
+- `customer_recommendations`
+- `customer_summary`
+- `store_info`
+- `service_answer`
+- `order_status`
+- `chat_response`
+
+Blocked auth example:
+
+```json
+{
+  "message": "Please sign in before I look up account details or customer-specific recommendations.",
+  "identity_status": "anonymous",
+  "route": "blocked",
+  "intent": "account_question",
+  "cards": [],
+  "actions": [
+    {"type": "sign_in", "label": "Sign in", "href": "/sign-in"}
+  ],
+  "selected_agent": "OrderAgent",
+  "selected_tool": "order_status"
+}
+```
 
 ## Consumer Image Recommendation Uploads
 

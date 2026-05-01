@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import Customer, CustomerAuthIdentity, Store, SyntheticRun
+from app.models import Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
 from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from tests.test_catalog_api import _product
@@ -22,6 +22,7 @@ from tests.test_catalog_api import _product
 def _chat_client(monkeypatch):
     monkeypatch.setenv("ENABLE_MCP_ADAPTER", "false")
     monkeypatch.setenv("ENABLE_OPENAI_APPS_UI", "false")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     get_settings.cache_clear()
 
     engine = create_engine(
@@ -67,7 +68,7 @@ def _seed_chat_data(session):
             postal_code="75201",
             address_line1="1 Main St",
             address_line2=None,
-            phone=None,
+            phone="555-111-2222",
             latitude=Decimal("32.770000"),
             longitude=Decimal("-96.790000"),
             profile_type="texas_core",
@@ -97,6 +98,34 @@ def _seed_chat_data(session):
             pii_token="tok_customer",
         )
     )
+    session.add(
+        Order(
+            id="order_1",
+            seed_run_id="run_chat",
+            customer_id="cust_1",
+            store_id="1001",
+            ordered_at=now,
+            status="processing",
+            occasion="wedding",
+            channel="web",
+            subtotal=Decimal("595.00"),
+            discount_amount=Decimal("0.00"),
+            tax_amount=Decimal("49.09"),
+            total_amount=Decimal("644.09"),
+            returned=False,
+        )
+    )
+    session.add(
+        OrderItem(
+            id="oi_1",
+            order_id="order_1",
+            product_id="prod_2",
+            quantity=1,
+            unit_price=Decimal("595.00"),
+            discount_amount=Decimal("0.00"),
+            line_total=Decimal("595.00"),
+        )
+    )
     session.add_all(
         [
             _product("prod_1", seed_run_id="run_chat", title="Valentino Rose Jacket", category="womens_apparel"),
@@ -124,36 +153,211 @@ def _seed_chat_data(session):
                 size="S",
                 objective_weight=Decimal("0.6000"),
             ),
+            _product(
+                "prod_4",
+                seed_run_id="run_chat",
+                title="Riviera Foundry Black Moisturizer",
+                description="Hydrating moisturizer for daily skincare",
+                brand="Riviera Foundry",
+                category="beauty",
+                color="Black",
+                size="One Size",
+                material="botanical blend",
+                price=Decimal("90.00"),
+                inventory_qty=8,
+                objective_weight=Decimal("0.9500"),
+            ),
+            _product(
+                "prod_5",
+                seed_run_id="run_chat",
+                title="Example Brand Ivory Leather Shoulder Bag",
+                description="Ivory leather shoulder bag",
+                brand="Example Brand",
+                category="handbags",
+                color="Ivory",
+                size="One Size",
+                material="leather",
+                price=Decimal("1400.00"),
+                inventory_qty=5,
+                objective_weight=Decimal("0.8000"),
+            ),
         ]
     )
     session.commit()
     backfill_catalog_from_legacy_products(session, run_id="run_chat")
 
 
-def _chat_payload(message: str, **context):
+def _chat_payload(message: str, current_product_id: str = "prod_1", **context):
     return {
         "message": message,
         "context": {
             "page_type": "product",
-            "route": "/product/prod_1",
-            "product_id": "prod_1",
+            "route": f"/product/{current_product_id}",
             "store_id": "1001",
+            "current_product": {"id": current_product_id},
             **context,
         },
     }
 
 
-def test_product_context_question_works_anonymously(monkeypatch):
+def test_product_question_works_anonymously(monkeypatch):
     with _chat_client(monkeypatch) as (client, _):
-        response = client.post("/api/chat", json=_chat_payload("What goes with this jacket?"))
+        response = client.post("/api/chat", json=_chat_payload("Is this jacket available?"))
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["identity_status"] == "anonymous"
+    assert payload["intent"] == "product_question"
     assert payload["route"] == "simple_tool"
-    assert 1 <= len(payload["cards"]) <= 3
+    assert len(payload["cards"]) == 1
     assert payload["cards"][0]["id"].startswith("cat_")
     assert payload["actions"][0]["type"] == "view_product"
+
+
+def test_catalog_search_on_pdp_ignores_current_product_category(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload("do you have a moisturizer under $150", current_product_id="prod_5"),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity_status"] == "anonymous"
+    assert payload["intent"] == "catalog_search"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"beauty"}
+    assert all(card["price_min"] <= 150 for card in payload["cards"])
+    assert payload["tool_trace"][1]["name"] == "semantic_catalog_search"
+
+
+def test_pairing_search_excludes_current_category(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "find a blouse that goes with this purse",
+                current_product_id="prod_5",
+                current_product={
+                    "id": "prod_5",
+                    "title": "Ivory Leather Shoulder Bag",
+                    "category": "handbags",
+                    "brand": "Example Brand",
+                    "attributes": {"color": "ivory", "material": "leather"},
+                },
+                category="handbags",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "catalog_search"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"womens_apparel"}
+
+
+def test_outfit_pairing_prioritizes_apparel_not_current_category(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "What outfit goes with this?",
+                current_product_id="prod_5",
+                current_product={
+                    "id": "prod_5",
+                    "title": "Ivory Leather Shoulder Bag",
+                    "category": "handbags",
+                    "brand": "Example Brand",
+                    "attributes": {"color": "ivory", "material": "leather", "gender": "women"},
+                },
+                category="handbags",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "complementary_products"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert "handbags" not in {card["category"] for card in payload["cards"]}
+    assert payload["cards"][0]["category"] == "womens_apparel"
+    assert payload["tool_trace"][0]["decision"] == "outfit pairing request"
+
+
+def test_greeting_does_not_return_product_detail(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("Hello", current_product_id="prod_5"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "general_style"
+    assert payload["route"] == "agentic_response"
+    assert payload["cards"] == []
+    assert "Hello" in payload["message"]
+    assert payload["tool_trace"][0]["decision"] == "greeting"
+
+
+def test_store_phone_question_is_open_chat(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("What phone number can I call?"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity_status"] == "anonymous"
+    assert payload["intent"] == "general_style"
+    assert payload["route"] == "simple_tool"
+    assert payload["selected_agent"] == "CustomerServiceAgent"
+    assert payload["selected_tool"] == "store_info"
+    assert "555-111-2222" in payload["message"]
+    assert any(trace["name"] == "ChatIntakeAgent" for trace in payload["tool_trace"])
+
+
+def test_service_question_uses_approved_answer(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("What is your return policy?"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity_status"] == "anonymous"
+    assert payload["selected_agent"] == "CustomerServiceAgent"
+    assert payload["selected_tool"] == "service_answer"
+    assert "returns or exchanges" in payload["message"]
+
+
+def test_order_status_requires_authentication(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("What is my order status?"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity_status"] == "anonymous"
+    assert payload["route"] == "blocked"
+    assert payload["selected_agent"] == "OrderAgent"
+    assert payload["selected_tool"] == "order_status"
+    assert payload["actions"][0]["type"] == "sign_in"
+
+
+def test_authenticated_order_status_uses_backend_customer_id(monkeypatch):
+    def verify_token(token, settings=None):
+        return AuthenticatedPrincipal(provider="clerk", provider_user_id="user_123", email="avery@example.com")
+
+    monkeypatch.setattr("app.services.auth.clerk.verify_clerk_token", verify_token)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload("What is my order status?"),
+            headers={"Authorization": "Bearer valid"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["identity_status"] == "authenticated_customer"
+    assert payload["selected_agent"] == "OrderAgent"
+    assert payload["selected_tool"] == "order_status"
+    assert "order_1 is processing" in payload["message"]
+    assert any(trace["name"] == "auth_gate" and "backend-derived customer_id" in trace["decision"] for trace in payload["tool_trace"])
 
 
 def test_invalid_token_is_rejected(monkeypatch):
