@@ -167,6 +167,9 @@ jobs:
           MCP_ALLOWED_HOSTS=${{ secrets.MCP_ALLOWED_HOSTS || '127.0.0.1:*,localhost:*,[::1]:*' }}
           MCP_ALLOWED_ORIGINS=${{ secrets.MCP_ALLOWED_ORIGINS || 'http://127.0.0.1:*,http://localhost:*,http://[::1]:*' }}
           PUBLIC_BASE_URL=${{ secrets.PUBLIC_BASE_URL || 'http://localhost:8000' }}
+          CLERK_ISSUER=${{ secrets.CLERK_ISSUER }}
+          CLERK_JWKS_URL=${{ secrets.CLERK_JWKS_URL }}
+          CLERK_AUTHORIZED_PARTIES=${{ secrets.CLERK_AUTHORIZED_PARTIES || 'http://localhost:5173,http://127.0.0.1:5173,https://sterling-hollis.quickstark.com' }}
           APP_BUILD_VERSION=${{ steps.version.outputs.version }}
           DD_TRACE_ENABLED=${{ secrets.DD_TRACE_ENABLED || 'true' }}
           DD_AGENT_HOST=${{ secrets.DD_AGENT_HOST || 'host.docker.internal' }}
