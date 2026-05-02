@@ -17,9 +17,9 @@ from app.services.chat.tools import (
     order_status,
     product_detail,
     recommendation_cards,
-    related_product_cards,
     semantic_catalog_cards,
     service_answer,
+    store_scoped_related_product_cards,
     store_info,
 )
 from app.services.chat.triage import TriageDecision, triage_chat
@@ -115,6 +115,17 @@ def _persist_message(db: Session, session_id: str, role: str, content: str, payl
     return message
 
 
+def _recent_history(db: Session, session_id: str, *, limit: int = 8) -> list[dict[str, str]]:
+    rows = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [{"role": row.role, "content": row.content} for row in reversed(rows)]
+
+
 def _record_tool(db: Session, session_id: str, message_id: str | None, name: str, input_json: dict, cards: list[CatalogProduct]) -> None:
     _record_tool_output(
         db,
@@ -175,6 +186,8 @@ def _apply_orchestration_trace(
             ChatToolTrace(name="auth_gate", decision=auth_decision),
         ]
     )
+    if orchestration.evaluator_error:
+        response.tool_trace.append(ChatToolTrace(name="evaluator_error", decision=orchestration.evaluator_error))
     return response
 
 
@@ -336,7 +349,11 @@ def _product_context_response(db: Session, req: ChatRequest, identity: ChatIdent
 
 def _related_products_response(db: Session, req: ChatRequest, identity: ChatIdentity, session: ChatSession, decision: TriageDecision) -> ChatResponse:
     current_product_id = _current_product_id(req)
-    cards = related_product_cards(db, current_product_id, limit=3) if current_product_id else []
+    cards = (
+        store_scoped_related_product_cards(db, current_product_id, store_id=req.context.store_id, limit=3)
+        if current_product_id
+        else []
+    )
     if cards:
         message = "I found related products from the catalog."
     else:
@@ -470,45 +487,50 @@ def _recommendation_response(db: Session, req: ChatRequest, identity: ChatIdenti
 
 def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatResponse:
     req = _normalize_context(db, req)
-    orchestration = evaluate_chat(req.message, req.context)
-    decision = orchestration.decision
     session = _persist_session(db, req, identity)
+    history = _recent_history(db, session.id)
+    orchestration = evaluate_chat(req.message, req.context, history=history)
+    decision = orchestration.decision
     _persist_message(db, session.id, "user", req.message, {"context": summarize_context(req.context)})
 
     auth_required = _requires_auth(decision, orchestration)
-    if auth_required and identity.status != "authenticated_customer":
-        response = _blocked_response(req, identity, session, decision)
-        auth_decision = f"blocked; tool={orchestration.selected_tool}"
-    elif orchestration.requires_followup and orchestration.clarifying_question:
+    selected_tool = orchestration.selected_tool
+    if orchestration.requires_followup and orchestration.clarifying_question:
         response = _followup_response(req, identity, session, decision, orchestration.clarifying_question)
         auth_decision = "allowed; followup requested"
-    elif orchestration.selected_tool == "store_info":
+    elif auth_required and identity.status != "authenticated_customer":
+        response = _blocked_response(req, identity, session, decision)
+        auth_decision = f"blocked; tool={selected_tool}"
+    elif selected_tool == "store_info":
         response = _store_info_response(db, req, identity, session, decision)
         auth_decision = "allowed; public store info"
-    elif orchestration.selected_tool == "service_answer":
+    elif selected_tool == "service_answer":
         response = _service_answer_response(db, req, identity, session, decision)
         auth_decision = "allowed; approved service answer"
-    elif orchestration.selected_tool == "order_status":
+    elif selected_tool == "order_status":
         response = _order_status_response(db, req, identity, session, decision)
         auth_decision = "allowed; backend-derived customer_id"
-    elif orchestration.selected_tool == "related_products":
+    elif selected_tool == "related_products":
         response = _related_products_response(db, req, identity, session, decision)
         auth_decision = "allowed; public catalog"
-    elif decision.intent == "account_question":
+    elif selected_tool == "customer_summary":
         response = _account_response(db, identity, session, decision)
         auth_decision = "allowed; backend-derived customer_id"
-    elif decision.intent == "product_question":
+    elif selected_tool == "customer_recommendations":
+        response = _recommendation_response(db, req, identity, session, decision)
+        auth_decision = "allowed; backend-derived customer_id"
+    elif selected_tool == "product_detail":
         response = _product_context_response(db, req, identity, session, decision)
         auth_decision = "allowed; public product context"
-    elif decision.intent in {"catalog_search", "complementary_products"}:
+    elif selected_tool == "semantic_catalog_search":
         response = _semantic_catalog_response(db, req, identity, session, decision)
         auth_decision = "allowed; public catalog"
-    elif decision.intent == "general_style":
+    elif selected_tool == "chat_response":
         response = _general_response(req, identity, session, decision)
         auth_decision = "allowed; general response"
     else:
-        response = _recommendation_response(db, req, identity, session, decision)
-        auth_decision = "allowed; backend-derived customer_id" if identity.customer_id else "allowed; public catalog"
+        response = _general_response(req, identity, session, decision)
+        auth_decision = f"allowed; unrecognized selected_tool={selected_tool}"
 
     response = _apply_orchestration_trace(response, orchestration, auth_decision=auth_decision)
 

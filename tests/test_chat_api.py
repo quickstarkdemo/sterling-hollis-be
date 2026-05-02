@@ -15,6 +15,8 @@ from app.main import create_app
 from app.models import Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
 from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
+from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecision
+from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 from tests.test_catalog_api import _product
 
 
@@ -181,6 +183,21 @@ def _seed_chat_data(session):
                 inventory_qty=5,
                 objective_weight=Decimal("0.8000"),
             ),
+            _product(
+                "prod_6",
+                seed_run_id="run_chat",
+                title="Solenne Studio Satin Gown",
+                description="Out-of-stock satin evening gown",
+                brand="Solenne Studio",
+                category="womens_apparel",
+                color="Silver",
+                size="M",
+                material="satin",
+                price=Decimal("900.00"),
+                inventory_qty=0,
+                availability="out of stock",
+                objective_weight=Decimal("0.9900"),
+            ),
         ]
     )
     session.commit()
@@ -337,6 +354,186 @@ def test_order_status_requires_authentication(monkeypatch):
     assert payload["selected_agent"] == "OrderAgent"
     assert payload["selected_tool"] == "order_status"
     assert payload["actions"][0]["type"] == "sign_in"
+
+
+def test_contextless_pairing_shortcut_asks_for_product(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "What goes with this?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["route"] == "agentic_response"
+    assert payload["requires_followup"] is True
+    assert payload["selected_tool"] == "chat_response"
+    assert payload["actions"] == []
+    assert "Which item" in payload["message"]
+
+
+def test_contextless_availability_shortcut_asks_for_product(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "Is this available?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requires_followup"] is True
+    assert payload["selected_tool"] == "chat_response"
+    assert "Which product" in payload["message"]
+
+
+def test_contextless_pairing_guard_overrides_personalized_evaluator_route(monkeypatch):
+    class Result:
+        structured_output = ChatEvaluation(
+            intent="customer_recommendation",
+            target_agent="PersonalShopperAgent",
+            tool="customer_recommendations",
+            confidence=0.98,
+            requires_auth=True,
+            clarifying_question=None,
+            rationale="Treating contextless styling as personal shopping.",
+        )
+
+    def fake_agent(prompt, structured_output_model=None):
+        return Result()
+
+    monkeypatch.setattr("app.services.chat.evaluator.build_chat_intake_agent", lambda model_id=None: fake_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        get_settings.cache_clear()
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "What goes with this?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_tool"] == "chat_response"
+    assert payload["requires_followup"] is True
+    assert payload["actions"] == []
+    assert "Which item" in payload["message"]
+
+
+def test_selected_tool_dispatch_overrides_intent(monkeypatch):
+    def fake_evaluate_chat(message, context, *, history=None):
+        return ChatOrchestrationDecision(
+            decision=TriageDecision(
+                intent="general_style",
+                route="semantic_catalog_search",
+                reason="forced semantic tool",
+                constraints=SearchConstraints(query="moisturizer"),
+                target_categories=["beauty"],
+                tool="semantic_catalog_search",
+            ),
+            selected_agent="ProductAgent",
+            selected_tool="semantic_catalog_search",
+            evaluator_confidence=0.91,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "General wording that should still use semantic tool",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_tool"] == "semantic_catalog_search"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"beauty"}
+
+
+def test_store_scoped_chat_search_excludes_out_of_stock_cards(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "find satin pieces",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert all(card["inventory_summary"]["availability"] != "out_of_stock" for card in payload["cards"])
+
+
+def test_evaluator_error_trace_includes_exception_class(monkeypatch):
+    def explode(model_id=None):
+        raise RuntimeError("broken evaluator")
+
+    monkeypatch.setattr("app.services.chat.evaluator.build_chat_intake_agent", explode)
+    with _chat_client(monkeypatch) as (client, _):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        get_settings.cache_clear()
+        response = client.post("/api/chat", json=_chat_payload("Hello"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(
+        trace["name"] == "ChatIntakeAgent" and "RuntimeError" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
+    assert any(trace["name"] == "evaluator_error" and trace["decision"] == "RuntimeError" for trace in payload["tool_trace"])
+
+
+def test_evaluator_receives_recent_chat_history(monkeypatch):
+    captured = {}
+    with _chat_client(monkeypatch) as (client, _):
+        first_response = client.post(
+            "/api/chat",
+            json={
+                "message": "What goes with this?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+        conversation_id = first_response.json()["conversation_id"]
+
+        def fake_evaluate_chat(message, context, *, history=None):
+            captured["history"] = history or []
+            decision = triage_chat("find a blouse", context)
+            return ChatOrchestrationDecision(
+                decision=decision,
+                selected_agent="ProductAgent",
+                selected_tool="semantic_catalog_search",
+                evaluator_confidence=0.9,
+                evaluator_source="test",
+                requires_auth=False,
+            )
+
+        monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "The ivory bag",
+                "conversation_id": conversation_id,
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    assert any(turn["role"] == "assistant" and "Which item" in turn["content"] for turn in captured["history"])
 
 
 def test_authenticated_order_status_uses_backend_customer_id(monkeypatch):

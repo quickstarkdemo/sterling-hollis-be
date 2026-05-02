@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,6 +12,8 @@ from app.services.chat.context import summarize_context
 from app.services.chat.schemas import ChatContext
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 
+
+logger = logging.getLogger(__name__)
 
 TargetAgent = Literal["ProductAgent", "PersonalShopperAgent", "CustomerServiceAgent", "OrderAgent"]
 TargetTool = Literal[
@@ -69,6 +72,7 @@ class ChatOrchestrationDecision:
     requires_auth: bool
     requires_followup: bool = False
     clarifying_question: str | None = None
+    evaluator_error: str | None = None
 
 
 def _agent_for_tool(tool: str, fallback_intent: str) -> str:
@@ -83,11 +87,27 @@ def _agent_for_tool(tool: str, fallback_intent: str) -> str:
     return CHAT_AGENT_NAMES["customer_service"]
 
 
-def _fallback_decision(message: str, context: ChatContext, *, source: str, confidence: float = 0.5) -> ChatOrchestrationDecision:
+def _fallback_followup_question(decision: TriageDecision) -> str | None:
+    if decision.reason == "ambiguous pairing request":
+        return "Which item would you like styling suggestions for?"
+    if decision.reason == "ambiguous product question":
+        return "Which product would you like me to check?"
+    return None
+
+
+def _fallback_decision(
+    message: str,
+    context: ChatContext,
+    *,
+    source: str,
+    confidence: float = 0.5,
+    error: str | None = None,
+) -> ChatOrchestrationDecision:
     decision = triage_chat(message, context)
     selected_tool = decision.tool if decision.tool in CHAT_TOOL_NAMES else "chat_response"
     selected_agent = _agent_for_tool(selected_tool, decision.intent)
     requires_auth = decision.requires_customer or selected_tool in {"customer_recommendations", "customer_summary", "order_status"}
+    clarifying_question = _fallback_followup_question(decision)
     return ChatOrchestrationDecision(
         decision=decision,
         selected_agent=selected_agent,
@@ -95,6 +115,9 @@ def _fallback_decision(message: str, context: ChatContext, *, source: str, confi
         evaluator_confidence=confidence,
         evaluator_source=source,
         requires_auth=requires_auth,
+        requires_followup=bool(clarifying_question),
+        clarifying_question=clarifying_question,
+        evaluator_error=error,
     )
 
 
@@ -127,14 +150,25 @@ def _decision_from_evaluation(evaluation: ChatEvaluation, fallback: TriageDecisi
     )
 
 
-def evaluate_chat(message: str, context: ChatContext) -> ChatOrchestrationDecision:
+def evaluate_chat(
+    message: str,
+    context: ChatContext,
+    *,
+    history: list[dict[str, str]] | None = None,
+) -> ChatOrchestrationDecision:
     fallback = triage_chat(message, context)
     settings = get_settings()
     if not settings.openai_api_key:
         return _fallback_decision(message, context, source="deterministic_fallback_no_openai")
 
+    history_lines = "\n".join(
+        f"- {turn.get('role', 'unknown')}: {turn.get('content', '')}"
+        for turn in (history or [])[-8:]
+        if turn.get("content")
+    )
     prompt = (
         "Evaluate this storefront chat turn.\n"
+        f"Recent conversation turns:\n{history_lines or '- (none)'}\n"
         f"Message: {message}\n"
         f"Context: {summarize_context(context)}\n"
         "Return the best route using the provided schema."
@@ -152,6 +186,18 @@ def evaluate_chat(message: str, context: ChatContext) -> ChatOrchestrationDecisi
                 source="deterministic_fallback_low_confidence",
                 confidence=evaluation.confidence,
             )
+        fallback_question = _fallback_followup_question(fallback)
+        if fallback_question:
+            return ChatOrchestrationDecision(
+                decision=fallback,
+                selected_agent=CHAT_AGENT_NAMES["customer_service"],
+                selected_tool="chat_response",
+                evaluator_confidence=evaluation.confidence,
+                evaluator_source="ChatIntakeAgent",
+                requires_auth=False,
+                requires_followup=True,
+                clarifying_question=evaluation.clarifying_question or fallback_question,
+            )
         decision = _decision_from_evaluation(evaluation, fallback)
         return ChatOrchestrationDecision(
             decision=decision,
@@ -163,5 +209,12 @@ def evaluate_chat(message: str, context: ChatContext) -> ChatOrchestrationDecisi
             requires_followup=bool(evaluation.clarifying_question),
             clarifying_question=evaluation.clarifying_question,
         )
-    except Exception:
-        return _fallback_decision(message, context, source="deterministic_fallback_strands_error")
+    except Exception as exc:
+        error = type(exc).__name__
+        logger.exception("Chat evaluator failed; falling back to deterministic triage")
+        return _fallback_decision(
+            message,
+            context,
+            source=f"deterministic_fallback_strands_error:{error}",
+            error=error,
+        )

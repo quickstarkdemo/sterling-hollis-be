@@ -305,6 +305,22 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
             tool="customer_recommendations",
         )
 
+    if pairing and not current_product_id:
+        return TriageDecision(
+            intent="general_style",
+            route="agentic_response",
+            reason="ambiguous pairing request",
+            tool="chat_response",
+        )
+
+    if not current_product_id and (_contains_any(normalized, PRODUCT_QUESTION_TERMS) or "this" in normalized or "it" in normalized):
+        return TriageDecision(
+            intent="general_style",
+            route="agentic_response",
+            reason="ambiguous product question",
+            tool="chat_response",
+        )
+
     if product_term and (search or pairing or budget_max is not None):
         query, category = product_term
         colors = _colors(normalized, context, include_current=pairing)

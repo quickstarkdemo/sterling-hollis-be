@@ -23,6 +23,29 @@ def related_product_cards(db: Session, product_id: str, *, limit: int = 3) -> li
     return response.items if response else []
 
 
+def store_scoped_related_product_cards(
+    db: Session,
+    product_id: str,
+    *,
+    store_id: str | None = None,
+    limit: int = 3,
+) -> list[CatalogProduct]:
+    response = related_products(db, product_id, limit=max(limit * 4, 12))
+    if not response:
+        return []
+    if not store_id:
+        return response.items[:limit]
+
+    scoped: list[CatalogProduct] = []
+    for card in response.items:
+        detail = product_detail(db, card.id, store_id=store_id)
+        if detail and detail.inventory_summary.availability != "out_of_stock":
+            scoped.append(detail)
+        if len(scoped) >= limit:
+            break
+    return scoped
+
+
 def catalog_cards(
     db: Session,
     *,
@@ -85,6 +108,7 @@ def _card_allowed(
     exclude_categories: list[str],
     budget_max: float | None,
     current_product_id: str | None,
+    require_available: bool,
 ) -> bool:
     if current_product_id and card.id == current_product_id:
         return False
@@ -93,6 +117,8 @@ def _card_allowed(
     if exclude_categories and card.category in exclude_categories:
         return False
     if budget_max is not None and card.price_min > budget_max:
+        return False
+    if require_available and card.inventory_summary.availability == "out_of_stock":
         return False
     return True
 
@@ -105,6 +131,7 @@ def _filter_cards(
     budget_max: float | None,
     colors: list[str],
     current_product_id: str | None,
+    require_available: bool,
     limit: int,
 ) -> list[CatalogProduct]:
     filtered = []
@@ -118,6 +145,7 @@ def _filter_cards(
             exclude_categories=exclude_categories,
             budget_max=budget_max,
             current_product_id=current_product_id,
+            require_available=require_available,
         ):
             filtered.append(card)
             seen.add(card.id)
@@ -162,6 +190,7 @@ def _semantic_vector_cards(
         budget_max=budget_max,
         colors=colors,
         current_product_id=current_product_id,
+        require_available=bool(store_id),
         limit=limit,
     )
 
@@ -214,6 +243,7 @@ def _sql_search_cards(
         budget_max=budget_max,
         colors=colors,
         current_product_id=current_product_id,
+        require_available=bool(store_id),
         limit=limit,
     )
 
