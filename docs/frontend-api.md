@@ -167,8 +167,9 @@ Frontend handling rules:
 - Render `message` as the primary assistant text.
 - Render `cards[]` with the standard product-card component and `actions[]` as
   CTA buttons. `view_product` actions link to product detail pages.
-- If `route` is `blocked`, render `message` plus the first `sign_in` or
-  `link_account` action.
+- If `route` is `blocked`, render `message` plus the first `sign_in` action
+  when present. Signed-in users whose email does not match a customer profile
+  can receive a blocked response with no action.
 - If `requires_followup` is true, render `clarifying_question` as the assistant
   prompt and keep the same `conversation_id` on the next turn.
 - Treat `tool_trace`, `evaluator_confidence`, `selected_agent`, and

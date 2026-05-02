@@ -516,6 +516,7 @@ class ImageGenerationJobResponse(BaseModel):
     error_message: str | None = None
     created_at: datetime
     started_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
     finished_at: datetime | None = None
 
 

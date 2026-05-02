@@ -37,7 +37,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatAction(BaseModel):
-    type: Literal["view_product", "sign_in", "link_account"]
+    type: Literal["view_product", "sign_in"]
     label: str
     href: str | None = None
     product_id: str | None = None

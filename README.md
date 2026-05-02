@@ -80,6 +80,11 @@ Optional for Twilio-assisted customer communication:
 - `TWILIO_TEST_TO_NUMBER`
 - `INDEX_WORKER_POLL_SECONDS` if you want a non-default worker poll interval
 
+Optional for Clerk storefront authentication:
+- `CLERK_ISSUER`
+- `CLERK_JWKS_URL`
+- `CLERK_AUTHORIZED_PARTIES`, for example `http://localhost:5173,http://127.0.0.1:5173,https://sterling-hollis.quickstark.com`
+
 Deployment-related values:
 - `DOCKERHUB_USER`
 - `DOCKERHUB_TOKEN`
@@ -103,6 +108,9 @@ Runtime / database:
 - `MCP_ALLOWED_HOSTS`
 - `MCP_ALLOWED_ORIGINS`
 - `PUBLIC_BASE_URL`
+- `CLERK_ISSUER`
+- `CLERK_JWKS_URL`
+- `CLERK_AUTHORIZED_PARTIES`
 
 Vector / recommendation:
 - `OPENAI_API_KEY`
@@ -160,6 +168,7 @@ Notes:
 - The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
 - FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
+- `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add the production storefront origin.
 - Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`.
 - `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.
 - Keep `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=true` unless you intentionally want SQL query values to appear in trace metadata.
@@ -890,6 +899,9 @@ Optional:
 - `EMBEDDING_MODEL`
 - `EMBEDDING_DIMENSION`
 - `PUBLIC_BASE_URL`
+- `CLERK_ISSUER`
+- `CLERK_JWKS_URL`
+- `CLERK_AUTHORIZED_PARTIES`
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_API_KEY_SID`
 - `TWILIO_API_KEY_SECRET`

@@ -193,11 +193,14 @@ def _apply_orchestration_trace(
 
 def _blocked_response(req: ChatRequest, identity: ChatIdentity, session: ChatSession, decision: TriageDecision) -> ChatResponse:
     if identity.status == "authenticated_unlinked":
-        message = "You are signed in, but I cannot link this login to a Sterling Hollis customer account yet."
-        action = ChatAction(type="link_account", label="Link account", href="/account/link")
+        message = (
+            "You are signed in, but I cannot link this login to a Sterling Hollis customer account yet. "
+            "Use the same email address as your Sterling Hollis customer profile."
+        )
+        actions = []
     else:
         message = "Please sign in before I look up account details or customer-specific recommendations."
-        action = ChatAction(type="sign_in", label="Sign in", href="/sign-in")
+        actions = [ChatAction(type="sign_in", label="Sign in", href="/sign-in")]
     return ChatResponse(
         conversation_id=session.id,
         message=message,
@@ -205,7 +208,7 @@ def _blocked_response(req: ChatRequest, identity: ChatIdentity, session: ChatSes
         route="blocked",
         intent=decision.intent,
         cards=[],
-        actions=[action],
+        actions=actions,
         tool_trace=[ChatToolTrace(name="triage", decision=decision.reason)],
     )
 

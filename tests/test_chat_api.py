@@ -611,7 +611,8 @@ def test_unlinked_user_cannot_call_account_tools(monkeypatch):
     payload = response.json()
     assert payload["identity_status"] == "authenticated_unlinked"
     assert payload["route"] == "blocked"
-    assert payload["actions"][0]["type"] == "link_account"
+    assert "same email address" in payload["message"]
+    assert payload["actions"] == []
 
 
 def test_spoofed_customer_id_in_request_body_is_rejected(monkeypatch):

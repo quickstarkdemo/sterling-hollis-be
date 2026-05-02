@@ -453,8 +453,7 @@
           "type": {
             "enum": [
               "view_product",
-              "sign_in",
-              "link_account"
+              "sign_in"
             ],
             "title": "Type",
             "type": "string"

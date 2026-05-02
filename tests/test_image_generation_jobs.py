@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -12,10 +12,14 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import Product, Store, SyntheticRun
+from app.models import ImageGenerationJob, Product, Store, SyntheticRun
 from app.schemas import ImageGenerationJobRequest
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
-from app.services.image_jobs import enqueue_image_generation_job, process_next_image_generation_job
+from app.services.image_jobs import (
+    enqueue_image_generation_job,
+    process_next_image_generation_job,
+    recover_stale_image_generation_jobs,
+)
 from app.services.product_images import ProductImageGenerationResult
 
 
@@ -164,6 +168,7 @@ def test_image_generation_job_processes_normalized_variants(monkeypatch):
         assert result.status_breakdown == {"generated": 2}
         assert result.result_sample[0]["variant_id"].startswith("var_")
         assert result.result_sample[0]["thumbnail_link"].endswith("-thumb.jpg")
+        assert result.last_heartbeat_at is not None
 
         with TestingSessionLocal() as session:
             enqueue_image_generation_job(
@@ -173,6 +178,7 @@ def test_image_generation_job_processes_normalized_variants(monkeypatch):
         second_result = process_next_image_generation_job(TestingSessionLocal)
         assert second_result is not None
         assert second_result.attempted == 0
+        assert second_result.last_heartbeat_at is not None
     finally:
         engine.dispose()
 
@@ -218,5 +224,39 @@ def test_image_generation_job_can_complete_with_no_matching_variants(monkeypatch
         assert result.attempted == 0
         assert result.generated == 0
         assert result.result_sample == []
+    finally:
+        engine.dispose()
+
+
+def test_stale_running_image_generation_job_is_failed(monkeypatch):
+    engine, TestingSessionLocal = _session_factory()
+    try:
+        now = datetime(2026, 5, 2, 18, 0, tzinfo=timezone.utc)
+        stale_at = now - timedelta(minutes=30)
+        with TestingSessionLocal() as session:
+            queued = enqueue_image_generation_job(
+                session,
+                ImageGenerationJobRequest(category="womens_apparel", limit=10),
+            )
+            job = session.get(ImageGenerationJob, queued.id)
+            assert job is not None
+            job.status = "running"
+            job.started_at = stale_at
+            job.last_heartbeat_at = stale_at
+            session.add(job)
+            session.commit()
+
+            recovered = recover_stale_image_generation_jobs(
+                session,
+                stale_after_seconds=60,
+                now=now,
+            )
+            refreshed = session.get(ImageGenerationJob, queued.id)
+
+        assert recovered == 1
+        assert refreshed is not None
+        assert refreshed.status == "failed"
+        assert refreshed.finished_at == now
+        assert "No heartbeat since" in (refreshed.error_message or "")
     finally:
         engine.dispose()

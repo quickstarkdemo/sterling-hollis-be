@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     product_image_url_path: str = "/product-images"
     product_image_detail_count: int = 3
     product_image_thumbnail_size: int = 320
+    product_image_request_timeout_seconds: float = 300.0
+    product_image_job_stale_seconds: float = 900.0
 
     exec_auto_optimize_enabled: bool = False
     strategy_packet_enabled: bool = False

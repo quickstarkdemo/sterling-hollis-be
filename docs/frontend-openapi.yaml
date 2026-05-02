@@ -659,7 +659,7 @@ components:
       properties:
         type:
           type: string
-          enum: [view_product, sign_in, link_account]
+          enum: [view_product, sign_in]
         label:
           type: string
         href:

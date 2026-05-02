@@ -32,6 +32,7 @@ class ProductImageGenerationOptions:
     url_path: str
     detail_count: int = 3
     thumbnail_size: int = 320
+    request_timeout_seconds: float = 300.0
     overwrite: bool = False
     dry_run: bool = False
 
@@ -77,6 +78,7 @@ def product_image_options(
         url_path=(url_path or settings.product_image_url_path).strip() or "/product-images",
         detail_count=max(1, min(int(detail_count or settings.product_image_detail_count), 10)),
         thumbnail_size=max(96, min(int(thumbnail_size or settings.product_image_thumbnail_size), 1024)),
+        request_timeout_seconds=max(1.0, float(settings.product_image_request_timeout_seconds)),
         overwrite=overwrite,
         dry_run=dry_run,
     )
@@ -350,7 +352,7 @@ class ProductImageGenerator:
         if self.client is None and not options.dry_run:
             if OpenAI is None:
                 raise RuntimeError("The openai package is not available.")
-            self.client = OpenAI()
+            self.client = OpenAI(timeout=options.request_timeout_seconds)
 
     def generate_for_variant(self, db: Session, variant: ProductVariant) -> ProductImageGenerationResult:
         product = db.get(CatalogProduct, variant.catalog_product_id)

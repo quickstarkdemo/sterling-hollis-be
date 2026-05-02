@@ -510,11 +510,13 @@ class ImageGenerationJob(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         Index("ix_image_generation_jobs_status_created", "status", "created_at"),
         Index("ix_image_generation_jobs_category_brand", "category", "brand"),
+        Index("ix_image_generation_jobs_status_heartbeat", "status", "last_heartbeat_at"),
     )
 
 

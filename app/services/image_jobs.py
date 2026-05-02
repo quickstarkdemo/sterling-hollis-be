@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import get_settings
 from app.models import CatalogProduct, ImageGenerationJob, ProductVariant, Store, SyntheticRun
 from app.schemas import (
     ImageGenerationJobListResponse,
@@ -53,6 +54,7 @@ def _to_response(job: ImageGenerationJob) -> ImageGenerationJobResponse:
         error_message=job.error_message,
         created_at=job.created_at,
         started_at=job.started_at,
+        last_heartbeat_at=job.last_heartbeat_at,
         finished_at=job.finished_at,
     )
 
@@ -119,6 +121,7 @@ def enqueue_image_generation_job(db: Session, req: ImageGenerationJobRequest) ->
 
 
 def get_image_generation_job(db: Session, job_id: str) -> ImageGenerationJobResponse:
+    recover_stale_image_generation_jobs(db)
     job = db.get(ImageGenerationJob, job_id)
     if not job:
         raise ValueError(f"Image generation job {job_id} was not found.")
@@ -131,6 +134,7 @@ def list_image_generation_jobs(
     status: IndexJobStatus | None = None,
     limit: int = 20,
 ) -> ImageGenerationJobListResponse:
+    recover_stale_image_generation_jobs(db)
     query = select(ImageGenerationJob)
     if status:
         query = query.where(ImageGenerationJob.status == status.value)
@@ -138,7 +142,54 @@ def list_image_generation_jobs(
     return ImageGenerationJobListResponse(jobs=[_to_response(job) for job in jobs])
 
 
+def _aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def recover_stale_image_generation_jobs(
+    db: Session,
+    *,
+    stale_after_seconds: float | None = None,
+    now: datetime | None = None,
+) -> int:
+    settings = get_settings()
+    stale_after = (
+        float(stale_after_seconds)
+        if stale_after_seconds is not None
+        else float(settings.product_image_job_stale_seconds)
+    )
+    if stale_after <= 0:
+        return 0
+
+    current_time = now or datetime.now(timezone.utc)
+    deadline = current_time - timedelta(seconds=stale_after)
+    running_jobs = db.scalars(
+        select(ImageGenerationJob).where(ImageGenerationJob.status == IndexJobStatus.running.value)
+    ).all()
+    recovered = 0
+    for job in running_jobs:
+        activity_at = _aware_utc(job.last_heartbeat_at) or _aware_utc(job.started_at)
+        if activity_at is None or activity_at >= deadline:
+            continue
+        job.status = IndexJobStatus.failed.value
+        job.error_message = (
+            "Image generation job became stale while running. "
+            f"No heartbeat since {activity_at.isoformat()}."
+        )
+        job.finished_at = current_time
+        db.add(job)
+        recovered += 1
+    if recovered:
+        db.commit()
+    return recovered
+
+
 def claim_next_image_generation_job(db: Session) -> ImageGenerationJob | None:
+    recover_stale_image_generation_jobs(db)
     candidate_id = db.scalar(
         select(ImageGenerationJob.id)
         .where(ImageGenerationJob.status == IndexJobStatus.queued.value)
@@ -152,7 +203,12 @@ def claim_next_image_generation_job(db: Session) -> ImageGenerationJob | None:
     updated = db.execute(
         update(ImageGenerationJob)
         .where(ImageGenerationJob.id == candidate_id, ImageGenerationJob.status == IndexJobStatus.queued.value)
-        .values(status=IndexJobStatus.running.value, started_at=started_at, error_message=None)
+        .values(
+            status=IndexJobStatus.running.value,
+            started_at=started_at,
+            last_heartbeat_at=started_at,
+            error_message=None,
+        )
     )
     db.commit()
     if not updated.rowcount:
@@ -177,6 +233,36 @@ def _final_status(results: list[ProductImageGenerationResult]) -> str:
     if results and all(result.status == "failed" for result in results):
         return IndexJobStatus.failed.value
     return IndexJobStatus.succeeded.value
+
+
+def _status_counts(results: list[ProductImageGenerationResult]) -> Counter:
+    return Counter(result.status for result in results)
+
+
+def _update_running_job_progress(
+    db: Session,
+    *,
+    job_id: str,
+    results: list[ProductImageGenerationResult],
+) -> ImageGenerationJob | None:
+    job = db.scalar(
+        select(ImageGenerationJob)
+        .where(ImageGenerationJob.id == job_id)
+        .execution_options(populate_existing=True)
+    )
+    if not job or job.status != IndexJobStatus.running.value:
+        return job
+    status_counts = _status_counts(results)
+    job.last_heartbeat_at = datetime.now(timezone.utc)
+    job.attempted = len(results)
+    job.generated = status_counts.get("generated", 0)
+    job.skipped = sum(count for status, count in status_counts.items() if status.startswith("skipped"))
+    job.failed_count = status_counts.get("failed", 0)
+    job.status_breakdown = dict(status_counts)
+    job.result_sample = [_sample_result(result) for result in results[:25]]
+    db.add(job)
+    db.commit()
+    return job
 
 
 def process_image_generation_job(SessionLocal: sessionmaker, job_id: str) -> ImageGenerationJobResponse:
@@ -210,13 +296,25 @@ def process_image_generation_job(SessionLocal: sessionmaker, job_id: str) -> Ima
                     dry_run=False,
                 )
                 generator = ProductImageGenerator(options)
-                results = [generator.generate_for_variant(db, variant) for variant in variants]
+                _update_running_job_progress(db, job_id=job_id, results=results)
+                for variant in variants:
+                    _update_running_job_progress(db, job_id=job_id, results=results)
+                    results.append(generator.generate_for_variant(db, variant))
+                    job = _update_running_job_progress(db, job_id=job_id, results=results)
+                    if job and job.status != IndexJobStatus.running.value:
+                        return _to_response(job)
 
-            status_counts = Counter(result.status for result in results)
+            status_counts = _status_counts(results)
             failed_count = status_counts.get("failed", 0)
-            job = db.get(ImageGenerationJob, job_id)
+            job = db.scalar(
+                select(ImageGenerationJob)
+                .where(ImageGenerationJob.id == job_id)
+                .execution_options(populate_existing=True)
+            )
             if not job:
                 raise ValueError(f"Image generation job {job_id} was not found.")
+            if job.status != IndexJobStatus.running.value:
+                return _to_response(job)
             job.status = _final_status(results)
             job.attempted = len(results)
             job.generated = status_counts.get("generated", 0)
@@ -225,6 +323,7 @@ def process_image_generation_job(SessionLocal: sessionmaker, job_id: str) -> Ima
             job.status_breakdown = dict(status_counts)
             job.result_sample = [_sample_result(result) for result in results[:25]]
             job.error_message = "All image generations failed." if results and failed_count == len(results) else None
+            job.last_heartbeat_at = datetime.now(timezone.utc)
             job.finished_at = datetime.now(timezone.utc)
             db.add(job)
             db.commit()
