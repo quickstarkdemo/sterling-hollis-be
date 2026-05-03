@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from typing import Literal
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -18,6 +19,9 @@ from app.database import get_db
 from app.models import Customer, CustomerAuthIdentity, Store
 from app.schemas import ResolvedCustomer
 from app.services.lookup import _resolved_customer
+
+
+logger = logging.getLogger(__name__)
 
 
 class ClerkAuthError(ValueError):
@@ -112,6 +116,11 @@ def verify_clerk_token(token: str, settings: Settings | None = None) -> Authenti
     authorized_parties = _csv_values(settings.clerk_authorized_parties)
     azp = claims.get("azp")
     if not _authorized_party_allowed(azp, authorized_parties):
+        logger.warning(
+            "Rejected Clerk session token with unauthorized azp=%r allowed_parties=%s",
+            azp,
+            sorted(authorized_parties),
+        )
         raise ClerkAuthError("Clerk token authorized party is not allowed.")
 
     subject = claims.get("sub")

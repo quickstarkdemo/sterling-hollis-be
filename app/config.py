@@ -54,7 +54,11 @@ class Settings(BaseSettings):
 
     clerk_issuer: str | None = None
     clerk_jwks_url: str | None = None
-    clerk_authorized_parties: str = "http://localhost:5173,http://127.0.0.1:5173"
+    clerk_authorized_parties: str = (
+        "http://localhost,http://127.0.0.1,"
+        "https://sterling-hollis-fe.quickstark.com,"
+        "https://sterling-hollis.quickstark.com"
+    )
     clerk_demo_customer_id: str | None = None
     clerk_demo_customer_email: str | None = None
 

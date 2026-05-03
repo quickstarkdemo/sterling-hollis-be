@@ -86,7 +86,7 @@ Optional for Twilio-assisted customer communication:
 Optional for Clerk storefront authentication:
 - `CLERK_ISSUER`
 - `CLERK_JWKS_URL`
-- `CLERK_AUTHORIZED_PARTIES`, for example `http://localhost:5173,http://127.0.0.1:5173,https://sterling-hollis.quickstark.com`
+- `CLERK_AUTHORIZED_PARTIES`, for example `http://localhost,http://127.0.0.1,https://sterling-hollis-fe.quickstark.com,https://sterling-hollis.quickstark.com`
 
 Deployment-related values:
 - `DOCKERHUB_USER`
@@ -176,7 +176,7 @@ Notes:
 - The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
 - FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
-- `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add the production storefront origin.
+- `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add every production storefront origin, including the deployed FE host.
 - Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`.
 - LLM Observability enrichment for Strands chat orchestration uses OpenTelemetry GenAI spans. If `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
 - `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.

@@ -169,7 +169,7 @@ jobs:
           PUBLIC_BASE_URL=${{ secrets.PUBLIC_BASE_URL || 'http://localhost:8000' }}
           CLERK_ISSUER=${{ secrets.CLERK_ISSUER }}
           CLERK_JWKS_URL=${{ secrets.CLERK_JWKS_URL }}
-          CLERK_AUTHORIZED_PARTIES=${{ secrets.CLERK_AUTHORIZED_PARTIES || 'http://localhost:5173,http://127.0.0.1:5173,https://sterling-hollis.quickstark.com' }}
+          CLERK_AUTHORIZED_PARTIES=${{ secrets.CLERK_AUTHORIZED_PARTIES || 'http://localhost,http://127.0.0.1,https://sterling-hollis-fe.quickstark.com,https://sterling-hollis.quickstark.com' }}
           APP_BUILD_VERSION=${{ steps.version.outputs.version }}
           DD_TRACE_ENABLED=${{ secrets.DD_TRACE_ENABLED || 'true' }}
           DD_AGENT_HOST=${{ secrets.DD_AGENT_HOST || 'host.docker.internal' }}
