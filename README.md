@@ -71,6 +71,9 @@ Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic I
 - `DD_RUNTIME_METRICS_ENABLED=true`
 - `DD_LLMOBS_ENABLED=true`
 - `DD_LLMOBS_ML_APP=sterling-hollis-be`
+- `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`
+- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://otlp.datadoghq.com/v1/traces`
 
 Optional for Twilio-assisted customer communication:
 - `TWILIO_ACCOUNT_SID`
@@ -161,6 +164,11 @@ Datadog:
 - `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED`
 - `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`
 - `DD_DOGSTATSD_DISABLE`
+- `OTEL_SERVICE_NAME`
+- `OTEL_SEMCONV_STABILITY_OPT_IN`
+- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+- `OTEL_EXPORTER_OTLP_TRACES_HEADERS`
 
 Notes:
 - `DOCKERHUB_IMAGE` must be lowercase and include the Docker Hub namespace, for example `quickstark/sterling-hollis-be`, not just `sterling-hollis-be`.
@@ -170,6 +178,7 @@ Notes:
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
 - `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add the production storefront origin.
 - Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`.
+- LLM Observability enrichment for Strands chat orchestration uses OpenTelemetry GenAI spans. If `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
 - `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.
 - Keep `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=true` unless you intentionally want SQL query values to appear in trace metadata.
 

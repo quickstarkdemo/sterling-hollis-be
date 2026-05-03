@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import get_settings
+from app.observability.llm_otel import trace_chat_agent_evaluation
 from app.services.chat.agents import CHAT_AGENT_NAMES, CHAT_TOOL_NAMES, build_chat_intake_agent
 from app.services.chat.context import summarize_context
 from app.services.chat.schemas import ChatContext
@@ -150,6 +151,7 @@ def _decision_from_evaluation(evaluation: ChatEvaluation, fallback: TriageDecisi
     )
 
 
+@trace_chat_agent_evaluation
 def evaluate_chat(
     message: str,
     context: ChatContext,

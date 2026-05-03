@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.observability.llm_otel import initialize_llm_otel
 from app.routers.admin_synthetic import router as admin_router
 from app.routers.catalog import router as catalog_router
 from app.routers.chat import router as chat_router
@@ -46,6 +47,7 @@ def _widget_cors_headers(origin: str | None, public_base_url: str) -> dict[str, 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    initialize_llm_otel()
     fashion_mcp = None
     if settings.enable_mcp_adapter:
         from app.mcp_server import mcp as fashion_mcp
