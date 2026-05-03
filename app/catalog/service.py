@@ -559,14 +559,18 @@ def _image_vector_recommendations(
     req: ProductRecommendationRequest,
     analysis: ImageAnalysisAttributes,
 ) -> list[RecommendedProduct]:
-    embedding_service = EmbeddingService()
-    pinecone = PineconeService()
-    if not (embedding_service.enabled and pinecone.enabled):
+    try:
+        embedding_service = EmbeddingService()
+        pinecone = PineconeService()
+        if not (embedding_service.enabled and pinecone.enabled):
+            return []
+
+        vector = embedding_service.embed_text(image_analysis_query_text(analysis))
+        namespace = pinecone.settings.pinecone_catalog_namespace
+        matches = pinecone.query(namespace=namespace, vector=vector, top_k=max(req.top_k * 5, 50))
+    except Exception:
         return []
 
-    vector = embedding_service.embed_text(image_analysis_query_text(analysis))
-    namespace = pinecone.settings.pinecone_catalog_namespace
-    matches = pinecone.query(namespace=namespace, vector=vector, top_k=max(req.top_k * 5, 50))
     product_ids = [
         str(match.get("metadata", {}).get("catalog_product_id") or match.get("id", "").replace("catalog:", ""))
         for match in matches

@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     mcp_allowed_hosts: str = "127.0.0.1:*,localhost:*,[::1]:*"
     mcp_allowed_origins: str = "http://127.0.0.1:*,http://localhost:*,http://[::1]:*"
     public_base_url: str = "http://localhost:8000"
+    cors_allowed_origins: str = (
+        "http://localhost:8000,"
+        "http://127.0.0.1:8000,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "https://sterling-hollis-fe.quickstark.com,"
+        "https://sterling-hollis.quickstark.com"
+    )
 
     openai_api_key: str | None = None
     embedding_model: str = "text-embedding-3-small"

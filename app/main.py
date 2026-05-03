@@ -20,6 +20,17 @@ from app.routers.recommendations import router as rec_router
 OAI_SANDBOX_ORIGIN_RE = re.compile(r"^https://.*\.oaiusercontent\.com$")
 
 
+def _split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip().rstrip("/") for item in value.split(",") if item.strip()]
+
+
+def _cors_allowed_origins(settings) -> list[str]:
+    origins = [*_split_csv(settings.cors_allowed_origins), settings.public_base_url.rstrip("/")]
+    return list(dict.fromkeys(origin for origin in origins if origin))
+
+
 def get_widget_state(token: str) -> dict:
     from app.services.apps_ui import get_widget_state as _get_widget_state
 
@@ -64,15 +75,7 @@ def create_app() -> FastAPI:
     allow_origin_regex = r"https://.*\.oaiusercontent\.com" if settings.enable_openai_apps_ui else None
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:8000",
-            "http://127.0.0.1:8000",
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-            settings.public_base_url.rstrip("/"),
-        ],
+        allow_origins=_cors_allowed_origins(settings),
         allow_origin_regex=allow_origin_regex,
         allow_credentials=False,
         allow_methods=["*"],

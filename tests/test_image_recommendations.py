@@ -340,3 +340,28 @@ def test_image_recommendations_fall_back_to_sql_when_vectors_disabled(monkeypatc
     payload = response.json()
     assert payload["strategy"] == "sql_catalog_image_rules"
     assert payload["recommendations"][0]["product"]["title"] == "Valentino Rose Silk Dress"
+
+
+def test_image_recommendations_fall_back_to_sql_when_vector_query_fails(monkeypatch):
+    import app.catalog.service as catalog_service
+    import app.routers.catalog as catalog_router
+
+    class _BoomPineconeService(_FakePineconeService):
+        def query(self, namespace: str, vector: list[float], top_k: int, filters: dict | None = None) -> list[dict]:
+            raise RuntimeError("pinecone unavailable")
+
+    monkeypatch.setattr(catalog_router, "ImageAnalysisService", lambda: _FakeAnalysisService())
+    monkeypatch.setattr(catalog_service, "EmbeddingService", _FakeEmbeddingService)
+    monkeypatch.setattr(catalog_service, "PineconeService", _BoomPineconeService)
+
+    with _client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/recommendations/image",
+            files={"image": ("style.png", _ONE_BY_ONE_PNG, "image/png")},
+            data={"top_k": "3"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["strategy"] == "sql_catalog_image_rules"
+    assert payload["recommendations"][0]["product"]["title"] == "Valentino Rose Silk Dress"
