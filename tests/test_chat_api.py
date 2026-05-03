@@ -198,6 +198,50 @@ def _seed_chat_data(session):
                 availability="out of stock",
                 objective_weight=Decimal("0.9900"),
             ),
+            _product(
+                "prod_7",
+                seed_run_id="run_chat",
+                title="Jimmy Choo Silver Pump",
+                description="Occasion heel in silver satin",
+                brand="Jimmy Choo",
+                category="shoes",
+                color="Silver",
+                size="8",
+                material="satin",
+                price=Decimal("625.00"),
+                inventory_qty=6,
+                objective_weight=Decimal("0.8500"),
+            ),
+            _product(
+                "prod_8",
+                seed_run_id="run_chat",
+                title="Jimmy Choo Black Lace Up",
+                description="Formal lace-up shoe in black leather",
+                brand="Jimmy Choo",
+                category="shoes",
+                color="Black",
+                size="10",
+                material="leather",
+                gender="men",
+                price=Decimal("650.00"),
+                inventory_qty=7,
+                objective_weight=Decimal("0.9000"),
+            ),
+            _product(
+                "prod_9",
+                seed_run_id="run_chat",
+                title="Noir Harbor Wool Work Shirt",
+                description="Men's Apparel workwear shirt in navy wool",
+                brand="Noir Harbor",
+                category="mens_apparel",
+                color="Navy",
+                size="M",
+                material="wool",
+                gender="men",
+                price=Decimal("350.00"),
+                inventory_qty=9,
+                objective_weight=Decimal("0.8800"),
+            ),
         ]
     )
     session.commit()
@@ -301,6 +345,83 @@ def test_outfit_pairing_prioritizes_apparel_not_current_category(monkeypatch):
     assert "handbags" not in {card["category"] for card in payload["cards"]}
     assert payload["cards"][0]["category"] == "womens_apparel"
     assert payload["tool_trace"][0]["decision"] == "outfit pairing request"
+
+
+def test_pairing_policy_overrides_related_products_for_womens_shoe(monkeypatch):
+    def fake_evaluate_chat(message, context, *, history=None):
+        return ChatOrchestrationDecision(
+            decision=TriageDecision(
+                intent="general_style",
+                route="simple_tool",
+                reason="strands chose related products",
+                use_current_product=True,
+                tool="related_products",
+            ),
+            selected_agent="ProductAgent",
+            selected_tool="related_products",
+            evaluator_confidence=0.97,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("What goes with this?", current_product_id="prod_2"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "complementary_products"
+    assert payload["selected_tool"] == "semantic_catalog_search"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert "shoes" not in {card["category"] for card in payload["cards"]}
+    assert all(card["attributes"].get("gender") != "men" for card in payload["cards"])
+    assert any("policy_override=pairing_semantic" in trace["decision"] for trace in payload["tool_trace"])
+
+
+def test_outfit_starter_routes_to_complementary_search(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload("Build an outfit around this", current_product_id="prod_2"),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "complementary_products"
+    assert payload["selected_tool"] == "semantic_catalog_search"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert "shoes" not in {card["category"] for card in payload["cards"]}
+
+
+def test_explicit_similar_request_can_use_gender_filtered_related_products(monkeypatch):
+    def fake_evaluate_chat(message, context, *, history=None):
+        return ChatOrchestrationDecision(
+            decision=TriageDecision(
+                intent="product_question",
+                route="simple_tool",
+                reason="explicit similar products",
+                use_current_product=True,
+                tool="related_products",
+            ),
+            selected_agent="ProductAgent",
+            selected_tool="related_products",
+            evaluator_confidence=0.92,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("Show me similar shoes", current_product_id="prod_2"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_tool"] == "related_products"
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"shoes"}
+    assert all(card["attributes"].get("gender") == "women" for card in payload["cards"])
 
 
 def test_greeting_does_not_return_product_detail(monkeypatch):
@@ -477,6 +598,75 @@ def test_store_scoped_chat_search_excludes_out_of_stock_cards(monkeypatch):
     payload = response.json()
     assert payload["cards"]
     assert all(card["inventory_summary"]["availability"] != "out_of_stock" for card in payload["cards"])
+
+
+def test_chat_search_normalizes_evaluator_category_aliases(monkeypatch):
+    def fake_evaluate_chat(message, context, *, history=None):
+        return ChatOrchestrationDecision(
+            decision=TriageDecision(
+                intent="catalog_search",
+                route="semantic_catalog_search",
+                reason="llm chose retail category label",
+                constraints=SearchConstraints(query="satin evening pieces"),
+                target_categories=["evening wear"],
+                tool="semantic_catalog_search",
+            ),
+            selected_agent="ProductAgent",
+            selected_tool="semantic_catalog_search",
+            evaluator_confidence=0.98,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "Find satin evening pieces",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert any("satin" in card["title"].lower() or "satin" in card["description"].lower() for card in payload["cards"])
+    assert all(card["inventory_summary"]["availability"] != "out_of_stock" for card in payload["cards"])
+
+
+def test_chat_search_workwear_alias_browses_mens_apparel(monkeypatch):
+    def fake_evaluate_chat(message, context, *, history=None):
+        return ChatOrchestrationDecision(
+            decision=TriageDecision(
+                intent="catalog_search",
+                route="semantic_catalog_search",
+                reason="llm chose workwear label",
+                constraints=SearchConstraints(query="men's workwear"),
+                target_categories=["workwear"],
+                tool="semantic_catalog_search",
+            ),
+            selected_agent="ProductAgent",
+            selected_tool="semantic_catalog_search",
+            evaluator_confidence=0.98,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "Men's workwear?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"mens_apparel"}
 
 
 def test_evaluator_error_trace_includes_exception_class(monkeypatch):

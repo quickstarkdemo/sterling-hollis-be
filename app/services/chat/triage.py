@@ -106,6 +106,8 @@ PAIRING_TERMS = {
     "matching",
     "complement",
     "wear with",
+    "style with",
+    "around this",
 }
 
 OUTFIT_TERMS = {
@@ -152,12 +154,12 @@ PRODUCT_TERMS: tuple[tuple[tuple[str, ...], str, str], ...] = (
 )
 
 COMPLEMENTARY_CATEGORIES = {
-    "handbags": "womens_apparel",
-    "shoes": "womens_apparel",
-    "jewelry_accessories": "womens_apparel",
-    "womens_apparel": "shoes",
-    "mens_apparel": "shoes",
-    "beauty": "jewelry_accessories",
+    "handbags": ["womens_apparel", "shoes", "jewelry_accessories"],
+    "shoes": ["womens_apparel", "handbags", "jewelry_accessories"],
+    "jewelry_accessories": ["womens_apparel", "shoes", "handbags"],
+    "womens_apparel": ["shoes", "handbags", "jewelry_accessories"],
+    "mens_apparel": ["shoes", "jewelry_accessories"],
+    "beauty": ["jewelry_accessories", "womens_apparel"],
 }
 
 COLORS = {
@@ -238,7 +240,15 @@ def _current_product_gender(context: ChatContext) -> str | None:
 def _outfit_categories(context: ChatContext, current_category: str | None) -> list[str]:
     gender = _current_product_gender(context)
     apparel_category = "mens_apparel" if gender in {"men", "mens", "male"} else "womens_apparel"
-    categories = [apparel_category, "shoes", "jewelry_accessories"]
+    categories = [apparel_category, "shoes", "handbags", "jewelry_accessories"]
+    return [category for category in categories if category != current_category]
+
+
+def _complementary_categories(context: ChatContext, current_category: str) -> list[str]:
+    gender = _current_product_gender(context)
+    categories = COMPLEMENTARY_CATEGORIES.get(current_category, [])
+    if current_category == "shoes" and gender in {"men", "mens", "male"}:
+        categories = ["mens_apparel", "jewelry_accessories"]
     return [category for category in categories if category != current_category]
 
 
@@ -270,7 +280,9 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
     current_category = _current_product_category(context)
     current_product_id = context.current_product.id if context.current_product else context.product_id
     product_term = _product_term(normalized)
-    pairing = _contains_any(normalized, PAIRING_TERMS)
+    pairing = _contains_any(normalized, PAIRING_TERMS) or (
+        bool(current_product_id) and _contains_any(normalized, OUTFIT_TERMS)
+    )
     search = _contains_any(normalized, SEARCH_TERMS)
     budget_max = _budget_max(normalized)
 
@@ -340,7 +352,7 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
         target_categories = (
             _outfit_categories(context, current_category)
             if outfit_pairing
-            else [category for category in [COMPLEMENTARY_CATEGORIES.get(current_category)] if category]
+            else _complementary_categories(context, current_category)
         )
         colors = _colors(normalized, context, include_current=not outfit_pairing)
         return _semantic_decision(

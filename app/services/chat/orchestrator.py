@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
+import re
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -22,7 +24,7 @@ from app.services.chat.tools import (
     store_scoped_related_product_cards,
     store_info,
 )
-from app.services.chat.triage import TriageDecision, triage_chat
+from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, triage_chat
 
 
 def _id(prefix: str) -> str:
@@ -37,10 +39,42 @@ def _actions_for_cards(cards: list[CatalogProduct]) -> list[ChatAction]:
 
 
 AUTH_REQUIRED_TOOLS = {"customer_recommendations", "customer_summary", "order_status"}
+SIMILAR_PRODUCT_TERMS = {
+    "similar",
+    "more like this",
+    "another",
+    "alternatives",
+    "alternative",
+    "same style",
+    "same shoe",
+    "other colors",
+    "other color",
+    "more colors",
+}
 
 
 def _current_product_id(req: ChatRequest) -> str | None:
     return req.context.current_product.id if req.context.current_product else req.context.product_id
+
+
+def _normalized_message(message: str) -> str:
+    return " ".join(re.sub(r"[^\w\s$.]", " ", message.lower()).split())
+
+
+def _contains_any(message: str, terms: set[str]) -> bool:
+    return any(term in message for term in terms)
+
+
+def _current_product_gender(req: ChatRequest) -> str | None:
+    if not req.context.current_product:
+        return None
+    gender = req.context.current_product.attributes.get("gender")
+    return gender.lower() if gender else None
+
+
+def _current_product_target_genders(req: ChatRequest) -> list[str]:
+    gender = _current_product_gender(req)
+    return [gender] if gender else []
 
 
 def _normalize_context(db: Session, req: ChatRequest) -> ChatRequest:
@@ -162,6 +196,33 @@ def _requires_auth(decision: TriageDecision, orchestration: ChatOrchestrationDec
         decision.requires_customer
         or orchestration.requires_auth
         or orchestration.selected_tool in AUTH_REQUIRED_TOOLS
+    )
+
+
+def _apply_pairing_route_policy(req: ChatRequest, orchestration: ChatOrchestrationDecision) -> ChatOrchestrationDecision:
+    normalized = _normalized_message(req.message)
+    if not _current_product_id(req):
+        return orchestration
+    if not (_contains_any(normalized, PAIRING_TERMS) or _contains_any(normalized, OUTFIT_TERMS)):
+        return orchestration
+    if _contains_any(normalized, SIMILAR_PRODUCT_TERMS):
+        return orchestration
+
+    policy_decision = triage_chat(req.message, req.context)
+    if policy_decision.route != "semantic_catalog_search":
+        return orchestration
+    if orchestration.selected_tool == "semantic_catalog_search" and orchestration.decision == policy_decision:
+        return orchestration
+
+    return replace(
+        orchestration,
+        decision=policy_decision,
+        selected_agent="ProductAgent",
+        selected_tool="semantic_catalog_search",
+        requires_auth=policy_decision.requires_customer,
+        requires_followup=False,
+        clarifying_question=None,
+        evaluator_source=f"{orchestration.evaluator_source}; policy_override=pairing_semantic",
     )
 
 
@@ -353,7 +414,13 @@ def _product_context_response(db: Session, req: ChatRequest, identity: ChatIdent
 def _related_products_response(db: Session, req: ChatRequest, identity: ChatIdentity, session: ChatSession, decision: TriageDecision) -> ChatResponse:
     current_product_id = _current_product_id(req)
     cards = (
-        store_scoped_related_product_cards(db, current_product_id, store_id=req.context.store_id, limit=3)
+        store_scoped_related_product_cards(
+            db,
+            current_product_id,
+            store_id=req.context.store_id,
+            target_genders=_current_product_target_genders(req),
+            limit=3,
+        )
         if current_product_id
         else []
     )
@@ -384,6 +451,7 @@ def _semantic_catalog_response(db: Session, req: ChatRequest, identity: ChatIden
         query=decision.constraints.query,
         target_categories=decision.target_categories,
         exclude_categories=decision.exclude_categories,
+        target_genders=_current_product_target_genders(req),
         budget_max=decision.constraints.budget_max,
         colors=decision.constraints.colors,
         current_product_id=current_product_id,
@@ -493,6 +561,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
     session = _persist_session(db, req, identity)
     history = _recent_history(db, session.id)
     orchestration = evaluate_chat(req.message, req.context, history=history)
+    orchestration = _apply_pairing_route_policy(req, orchestration)
     decision = orchestration.decision
     _persist_message(db, session.id, "user", req.message, {"context": summarize_context(req.context)})
 

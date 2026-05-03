@@ -14,8 +14,120 @@ from app.services.embeddings import EmbeddingService
 from app.services.pinecone_service import PineconeService
 
 
+VALID_CATEGORIES = {
+    "beauty",
+    "handbags",
+    "home",
+    "jewelry_accessories",
+    "mens_apparel",
+    "shoes",
+    "womens_apparel",
+}
+
+CATEGORY_ALIASES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("men", "mens", "men s", "men's", "male", "workwear", "suiting"), ("mens_apparel",)),
+    (("women", "womens", "women s", "women's", "female", "dress", "dresses", "apparel"), ("womens_apparel",)),
+    (("evening", "occasion", "formal", "wedding", "cocktail"), ("womens_apparel", "shoes", "handbags", "jewelry_accessories")),
+    (("shoe", "shoes", "heel", "heels", "pump", "pumps", "boot", "boots", "sneaker", "sneakers"), ("shoes",)),
+    (("bag", "bags", "handbag", "handbags", "purse", "purses", "clutch", "clutches"), ("handbags",)),
+    (("jewelry", "jewellery", "accessory", "accessories", "watch", "bracelet", "necklace", "ring"), ("jewelry_accessories",)),
+    (("beauty", "serum", "makeup", "skincare", "fragrance", "perfume"), ("beauty",)),
+    (("home", "decor", "chair", "vase", "dinnerware"), ("home",)),
+)
+
+QUERY_STOPWORDS = {
+    "any",
+    "do",
+    "find",
+    "for",
+    "have",
+    "looking",
+    "me",
+    "need",
+    "piece",
+    "pieces",
+    "product",
+    "products",
+    "search",
+    "show",
+    "you",
+}
+
+
 def product_detail(db: Session, product_id: str, store_id: str | None = None) -> CatalogProduct | None:
     return get_product_detail(db, product_id, store_id=store_id)
+
+
+def _normalized_text(value: str | None) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", (value or "").lower().replace("&", " and ")).split())
+
+
+def _append_unique(values: list[str], next_values: Iterable[str]) -> None:
+    for value in next_values:
+        if value and value not in values:
+            values.append(value)
+
+
+def _categories_for_text(value: str | None) -> list[str]:
+    normalized = _normalized_text(value)
+    compact = normalized.replace(" ", "_")
+    categories: list[str] = []
+    if compact in VALID_CATEGORIES:
+        categories.append(compact)
+    for aliases, mapped_categories in CATEGORY_ALIASES:
+        if any(f" {alias} " in f" {normalized} " for alias in aliases):
+            _append_unique(categories, mapped_categories)
+    return categories
+
+
+def _normalized_categories(raw_categories: list[str], query: str | None) -> list[str]:
+    categories: list[str] = []
+    for category in raw_categories:
+        normalized = _normalized_text(category).replace(" ", "_")
+        if normalized in VALID_CATEGORIES:
+            _append_unique(categories, [normalized])
+        else:
+            _append_unique(categories, _categories_for_text(category))
+    _append_unique(categories, _categories_for_text(query))
+    return categories
+
+
+def _query_variants(query: str | None) -> list[str]:
+    clean = _normalized_text(query)
+    if not clean:
+        return []
+    tokens = [token for token in clean.split() if token not in QUERY_STOPWORDS]
+    variants = [clean]
+    if tokens:
+        compact = " ".join(tokens)
+        if compact != clean:
+            variants.append(compact)
+        for token in tokens:
+            if len(token) >= 4 and token not in variants:
+                variants.append(token)
+    return variants
+
+
+def _normalized_gender(gender: str | None) -> str | None:
+    clean = (gender or "").strip().lower()
+    if clean in {"women", "woman", "womens", "female", "girls"}:
+        return "female"
+    if clean in {"men", "man", "mens", "male", "boys"}:
+        return "male"
+    if clean == "unisex":
+        return "unisex"
+    return clean or None
+
+
+def _gender_allowed(card: CatalogProduct, target_genders: list[str]) -> bool:
+    normalized_targets = {_normalized_gender(gender) for gender in target_genders}
+    normalized_targets.discard(None)
+    if not normalized_targets:
+        return True
+    card_gender = _normalized_gender(card.attributes.get("gender"))
+    if not card_gender:
+        return True
+    return card_gender == "unisex" or card_gender in normalized_targets
 
 
 def related_product_cards(db: Session, product_id: str, *, limit: int = 3) -> list[CatalogProduct]:
@@ -28,18 +140,20 @@ def store_scoped_related_product_cards(
     product_id: str,
     *,
     store_id: str | None = None,
+    target_genders: list[str] | None = None,
     limit: int = 3,
 ) -> list[CatalogProduct]:
     response = related_products(db, product_id, limit=max(limit * 4, 12))
     if not response:
         return []
+    gender_filters = target_genders or []
     if not store_id:
-        return response.items[:limit]
+        return [card for card in response.items if _gender_allowed(card, gender_filters)][:limit]
 
     scoped: list[CatalogProduct] = []
     for card in response.items:
         detail = product_detail(db, card.id, store_id=store_id)
-        if detail and detail.inventory_summary.availability != "out_of_stock":
+        if detail and detail.inventory_summary.availability != "out_of_stock" and _gender_allowed(detail, gender_filters):
             scoped.append(detail)
         if len(scoped) >= limit:
             break
@@ -106,6 +220,7 @@ def _card_allowed(
     *,
     target_categories: list[str],
     exclude_categories: list[str],
+    target_genders: list[str],
     budget_max: float | None,
     current_product_id: str | None,
     require_available: bool,
@@ -115,6 +230,8 @@ def _card_allowed(
     if target_categories and card.category not in target_categories:
         return False
     if exclude_categories and card.category in exclude_categories:
+        return False
+    if not _gender_allowed(card, target_genders):
         return False
     if budget_max is not None and card.price_min > budget_max:
         return False
@@ -128,6 +245,7 @@ def _filter_cards(
     *,
     target_categories: list[str],
     exclude_categories: list[str],
+    target_genders: list[str],
     budget_max: float | None,
     colors: list[str],
     current_product_id: str | None,
@@ -143,6 +261,7 @@ def _filter_cards(
             card,
             target_categories=target_categories,
             exclude_categories=exclude_categories,
+            target_genders=target_genders,
             budget_max=budget_max,
             current_product_id=current_product_id,
             require_available=require_available,
@@ -160,6 +279,7 @@ def _semantic_vector_cards(
     query: str,
     target_categories: list[str],
     exclude_categories: list[str],
+    target_genders: list[str],
     budget_max: float | None,
     colors: list[str],
     current_product_id: str | None,
@@ -187,6 +307,7 @@ def _semantic_vector_cards(
         cards,
         target_categories=target_categories,
         exclude_categories=exclude_categories,
+        target_genders=target_genders,
         budget_max=budget_max,
         colors=colors,
         current_product_id=current_product_id,
@@ -201,6 +322,7 @@ def _sql_search_cards(
     query: str | None,
     target_categories: list[str],
     exclude_categories: list[str],
+    target_genders: list[str],
     budget_max: float | None,
     colors: list[str],
     current_product_id: str | None,
@@ -240,6 +362,7 @@ def _sql_search_cards(
         cards,
         target_categories=target_categories,
         exclude_categories=exclude_categories,
+        target_genders=target_genders,
         budget_max=budget_max,
         colors=colors,
         current_product_id=current_product_id,
@@ -258,17 +381,22 @@ def semantic_catalog_cards(
     colors: list[str] | None,
     current_product_id: str | None,
     store_id: str | None,
+    target_genders: list[str] | None = None,
     limit: int = 3,
 ) -> tuple[list[CatalogProduct], str]:
     clean_query = " ".join((query or "").split())
     color_filters = colors or []
-    if clean_query:
+    gender_filters = target_genders or []
+    normalized_target_categories = _normalized_categories(target_categories, clean_query)
+    normalized_exclude_categories = _normalized_categories(exclude_categories, None)
+    for query_variant in _query_variants(clean_query):
         try:
             cards = _semantic_vector_cards(
                 db,
-                query=clean_query,
-                target_categories=target_categories,
-                exclude_categories=exclude_categories,
+                query=query_variant,
+                target_categories=normalized_target_categories,
+                exclude_categories=normalized_exclude_categories,
+                target_genders=gender_filters,
                 budget_max=budget_max,
                 colors=color_filters,
                 current_product_id=current_product_id,
@@ -282,9 +410,10 @@ def semantic_catalog_cards(
 
         cards = _sql_search_cards(
             db,
-            query=clean_query,
-            target_categories=target_categories,
-            exclude_categories=exclude_categories,
+            query=query_variant,
+            target_categories=normalized_target_categories,
+            exclude_categories=normalized_exclude_categories,
+            target_genders=gender_filters,
             budget_max=budget_max,
             colors=color_filters,
             current_product_id=current_product_id,
@@ -297,8 +426,9 @@ def semantic_catalog_cards(
     cards = _sql_search_cards(
         db,
         query=None,
-        target_categories=target_categories,
-        exclude_categories=exclude_categories,
+        target_categories=normalized_target_categories,
+        exclude_categories=normalized_exclude_categories,
+        target_genders=gender_filters,
         budget_max=budget_max,
         colors=color_filters,
         current_product_id=current_product_id,
