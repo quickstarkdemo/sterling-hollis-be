@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import jwt
@@ -50,6 +51,39 @@ def _csv_values(raw: str | None) -> set[str]:
     return {item.strip().rstrip("/") for item in (raw or "").split(",") if item.strip()}
 
 
+def _origin_parts(value: str | None) -> tuple[str, str | None, int | None] | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parsed = urlparse(value.strip())
+    if not parsed.scheme or not parsed.hostname:
+        return None
+    return parsed.scheme.lower(), parsed.hostname.lower(), parsed.port
+
+
+def _authorized_party_allowed(azp: str | None, authorized_parties: set[str]) -> bool:
+    if not authorized_parties:
+        return True
+    azp_parts = _origin_parts(azp)
+    if not azp_parts:
+        return False
+    azp_scheme, azp_host, azp_port = azp_parts
+
+    for allowed in authorized_parties:
+        allowed_parts = _origin_parts(allowed)
+        if not allowed_parts:
+            continue
+        allowed_scheme, allowed_host, allowed_port = allowed_parts
+        if allowed_scheme != azp_scheme:
+            continue
+        if allowed_host.startswith("*.") and azp_host.endswith(allowed_host[1:]):
+            return True
+        if allowed_host != azp_host:
+            continue
+        if allowed_port is None or allowed_port == azp_port:
+            return True
+    return False
+
+
 def _email_from_claims(claims: dict) -> str | None:
     for key in ("email", "primary_email_address", "email_address"):
         value = claims.get(key)
@@ -77,7 +111,7 @@ def verify_clerk_token(token: str, settings: Settings | None = None) -> Authenti
 
     authorized_parties = _csv_values(settings.clerk_authorized_parties)
     azp = claims.get("azp")
-    if authorized_parties and (not isinstance(azp, str) or azp.rstrip("/") not in authorized_parties):
+    if not _authorized_party_allowed(azp, authorized_parties):
         raise ClerkAuthError("Clerk token authorized party is not allowed.")
 
     subject = claims.get("sub")
