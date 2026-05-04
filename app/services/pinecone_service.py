@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from app.config import get_settings
 
+from app.observability.genai_otel import (
+    current_genai_span,
+    record_tool_call,
+    set_span_attributes,
+    trace_genai_tool,
+)
+
 try:
     from pinecone import Pinecone, ServerlessSpec
 except Exception:  # pragma: no cover
@@ -45,6 +52,18 @@ class PineconeService:
         assert self.index is not None
         self.index.upsert(vectors=vectors, namespace=namespace)
 
+
+    @trace_genai_tool(
+        "pinecone_catalog_query",
+        tool_type="vector_search",
+        attributes=lambda self, namespace, vector, top_k, filters=None: {
+            "app.pinecone.index": self.settings.pinecone_index_name,
+            "app.pinecone.namespace": namespace,
+            "app.pinecone.top_k": top_k,
+            "app.pinecone.vector_dimension": len(vector),
+            "app.pinecone.enabled": self.enabled,
+        },
+    )
     def query(
         self,
         namespace: str,
@@ -52,8 +71,36 @@ class PineconeService:
         top_k: int,
         filters: dict | None = None,
     ) -> list[dict]:
+        span = current_genai_span()
+
+        record_tool_call(
+            span,
+            arguments={
+                "namespace": namespace,
+                "top_k": top_k,
+                "filters": filters or {},
+                "vector_dimension": len(vector),
+            },
+            description="Query Pinecone for catalog products similar to the image-derived style vector.",
+        )
+
         if not self.enabled:
+            set_span_attributes(
+                span,
+                {
+                    "app.pinecone.result_count": 0,
+                    "app.pinecone.disabled": True,
+                },
+            )
+            record_tool_call(
+                span,
+                result={
+                    "match_count": 0,
+                    "disabled": True,
+                },
+            )
             return []
+
         assert self.index is not None
         resp = self.index.query(
             namespace=namespace,
@@ -62,9 +109,9 @@ class PineconeService:
             include_metadata=True,
             filter=filters,
         )
-        resp_matches = (
-            resp.matches if hasattr(resp, "matches") else resp.get("matches", [])
-        )
+
+        resp_matches = resp.matches if hasattr(resp, "matches") else resp.get("matches", [])
+
         matches = []
         for m in resp_matches:
             matches.append(
@@ -78,6 +125,30 @@ class PineconeService:
                     ),
                 }
             )
+
+        set_span_attributes(
+            span,
+            {
+                "app.pinecone.result_count": len(matches),
+            },
+        )
+
+        record_tool_call(
+            span,
+            result={
+                "match_count": len(matches),
+                "matches": [
+                    {
+                        "id": match["id"],
+                        "score": match["score"],
+                        "title": match["metadata"].get("title"),
+                        "category": match["metadata"].get("category"),
+                        "brand": match["metadata"].get("brand"),
+                    }
+                    for match in matches[:10]
+                ],
+            },
+        )
 
         return matches
 

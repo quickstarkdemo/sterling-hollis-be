@@ -13,6 +13,14 @@ from app.config import get_settings
 from app.schemas import StyleConstraints
 from app.services.taxonomy import CATEGORY_TAXONOMY
 
+from app.observability.genai_otel import (
+    current_genai_span,
+    record_genai_input,
+    record_genai_output,
+    set_span_attributes,
+    trace_genai_llm,
+)
+
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
@@ -226,7 +234,15 @@ class ImageAnalysisService:
     @property
     def enabled(self) -> bool:
         return self.client is not None
-
+    @trace_genai_llm(
+        "openai_image_analysis",
+        model=lambda self, *args, **kwargs: self.model,
+        provider="openai",
+        attributes=lambda self, *args, **kwargs: {
+            "app.image_analysis.detail": self.detail,
+            "app.image_analysis.schema": "consumer_image_analysis",
+        },
+    )
     def analyze(
         self, image_bytes: bytes, mime_type: str, *, context: str | None = None
     ) -> ImageAnalysisResponse:
@@ -246,6 +262,37 @@ class ImageAnalysisService:
         )
         image_url = (
             f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        )
+        span = current_genai_span()
+        set_span_attributes(
+            span,
+            {
+                "app.image.mime_type": mime_type,
+                "app.image.bytes": len(image_bytes),
+                "app.image.has_context": bool(context),
+                "app.image.context_length": len(context or ""),
+            },
+        )
+
+        record_genai_input(
+            span,
+            [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "content": prompt,
+                        },
+                        {
+                            "type": "image",
+                            "mime_type": mime_type,
+                            "bytes": len(image_bytes),
+                            "detail": self.detail,
+                        },
+                    ],
+                }
+            ],
         )
 
         response = self.client.responses.create(
@@ -276,6 +323,31 @@ class ImageAnalysisService:
         if not raw_text:
             raise RuntimeError("OpenAI image analysis returned no text output.")
         analysis = _normalize_analysis(json.loads(raw_text))
+        record_genai_output(
+            span,
+            [
+                {
+                    "role": "assistant",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "content": {
+                                "summary": analysis.summary,
+                                "target_categories": analysis.target_categories,
+                                "exclude_categories": analysis.exclude_categories,
+                                "target_genders": analysis.target_genders,
+                                "colors": analysis.colors,
+                                "materials": analysis.materials,
+                                "patterns": analysis.patterns,
+                                "style_keywords": analysis.style_keywords,
+                                "occasion_keywords": analysis.occasion_keywords,
+                                "confidence": analysis.confidence,
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
 
         return ImageAnalysisResponse(
             analysis=analysis,
