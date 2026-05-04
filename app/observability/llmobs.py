@@ -5,9 +5,15 @@ from typing import Any
 from ddtrace.llmobs import LLMObs
 
 
-def annotate_safe(**kwargs: Any) -> None:
+def annotate_safe(span: Any | None = None, **kwargs: Any) -> None:
     try:
-        if LLMObs.enabled:
+        if not LLMObs.enabled:
+            return
+
+        if span is not None:
+            LLMObs.annotate(span=span, **kwargs)
+        else:
             LLMObs.annotate(**kwargs)
     except Exception:
         pass
+
