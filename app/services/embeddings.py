@@ -44,30 +44,24 @@ class EmbeddingService:
         model_provider="openai",
     )
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        annotate_safe(
-            input_data=[{"text_length": len(text)} for text in texts],
-            metadata={
-                "text_count": len(texts),
-                "model": self.model,
-                "dimension": self.dimension,
-                "provider_enabled": self.enabled,
-            },
-        )
+        annotate_safe(...)
 
         if not texts:
-            return []
-        if self.client is None:
-            return [self._deterministic_vector(t) for t in texts]
+            vectors = []
+        elif self.client is None:
+            vectors = [self._deterministic_vector(t) for t in texts]
+        else:
+            resp = self.client.embeddings.create(model=self.model, input=list(texts))
+            vectors = [item.embedding for item in resp.data]
 
-        resp = self.client.embeddings.create(model=self.model, input=list(texts))
         annotate_safe(
             output_data={
                 "vector_count": len(vectors),
                 "dimension": len(vectors[0]) if vectors else 0,
             },
         )
+        return vectors
 
-        return [item.embedding for item in resp.data]
 
     def embed_text(self, text: str) -> list[float]:
         return self.embed_texts([text])[0]

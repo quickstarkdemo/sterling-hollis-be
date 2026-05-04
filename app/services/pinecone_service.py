@@ -48,9 +48,7 @@ class PineconeService:
         assert self.index is not None
         self.index.upsert(vectors=vectors, namespace=namespace)
 
-    @retrieval(
-        name="pinecone_catalog_query", model_name="pinecone", model_provider="pinecone"
-    )
+    @retrieval(name="pinecone_catalog_query", _automatic_io_annotation=False)
     def query(
         self,
         namespace: str,
