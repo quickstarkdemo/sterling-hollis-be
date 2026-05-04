@@ -262,6 +262,97 @@ def _chat_payload(message: str, current_product_id: str = "prod_1", **context):
     }
 
 
+class _FakeLLMObsSpan:
+    def __init__(self, fake, kind: str, name: str | None, kwargs: dict):
+        self.fake = fake
+        self.kind = kind
+        self.name = name
+        self.kwargs = kwargs
+        self.record = {"kind": kind, "name": name, "kwargs": kwargs}
+
+    def __enter__(self):
+        self.fake.spans.append(self.record)
+        return self.record
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeLLMObs:
+    enabled = True
+    spans: list[dict] = []
+    annotations: list[dict] = []
+    exports: list[dict] = []
+    evaluations: list[dict] = []
+
+    @classmethod
+    def reset(cls):
+        cls.spans = []
+        cls.annotations = []
+        cls.exports = []
+        cls.evaluations = []
+
+    @classmethod
+    def _span(cls, kind: str, name: str | None = None, **kwargs):
+        return _FakeLLMObsSpan(cls, kind, name, kwargs)
+
+    @classmethod
+    def agent(cls, name=None, **kwargs):
+        return cls._span("agent", name, **kwargs)
+
+    @classmethod
+    def workflow(cls, name=None, **kwargs):
+        return cls._span("workflow", name, **kwargs)
+
+    @classmethod
+    def tool(cls, name=None, **kwargs):
+        return cls._span("tool", name, **kwargs)
+
+    @classmethod
+    def task(cls, name=None, **kwargs):
+        return cls._span("task", name, **kwargs)
+
+    @classmethod
+    def llm(cls, name=None, **kwargs):
+        return cls._span("llm", name, **kwargs)
+
+    @classmethod
+    def annotate(cls, **kwargs):
+        cls.annotations.append(kwargs)
+
+    @classmethod
+    def export_span(cls, span=None):
+        exported = {"exported_span": span}
+        cls.exports.append(exported)
+        return exported
+
+    @classmethod
+    def submit_evaluation(cls, **kwargs):
+        cls.evaluations.append(kwargs)
+
+
+class _FailingLLMObs(_FakeLLMObs):
+    @classmethod
+    def annotate(cls, **kwargs):
+        raise RuntimeError("annotate failed")
+
+    @classmethod
+    def export_span(cls, span=None):
+        raise RuntimeError("export failed")
+
+    @classmethod
+    def submit_evaluation(cls, **kwargs):
+        raise RuntimeError("submit failed")
+
+
+def _patch_chat_llmobs(monkeypatch, fake=_FakeLLMObs):
+    fake.reset()
+    monkeypatch.setattr("app.services.chat.orchestrator.LLMObs", fake)
+    monkeypatch.setattr("app.services.chat.evaluator.LLMObs", fake)
+    monkeypatch.setattr("app.services.chat.tools.LLMObs", fake)
+    return fake
+
+
 def test_product_question_works_anonymously(monkeypatch):
     with _chat_client(monkeypatch) as (client, _):
         response = client.post("/api/chat", json=_chat_payload("Is this jacket available?"))
@@ -922,3 +1013,56 @@ def test_spoofed_customer_id_in_request_body_is_rejected(monkeypatch):
         response = client.post("/api/chat", json=payload)
 
     assert response.status_code == 422
+
+
+def test_chat_llmobs_records_root_workflow_tool_spans_and_evaluations(monkeypatch):
+    fake = _patch_chat_llmobs(monkeypatch)
+
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    span_pairs = [(span["kind"], span["name"]) for span in fake.spans]
+    assert ("agent", "sterling_hollis_chat") in span_pairs
+    assert ("workflow", "chat_turn") in span_pairs
+    assert ("tool", "normalize_context") in span_pairs
+    assert ("workflow", "chat_history") in span_pairs
+    assert ("workflow", "chat_intake") in span_pairs
+    assert ("tool", "execute_selected_tool") in span_pairs
+    assert ("tool", payload["selected_tool"]) in span_pairs
+    assert fake.exports
+
+    evaluations = {item["label"]: item for item in fake.evaluations}
+    assert evaluations["chat_route_confidence"]["value"] == 0.5
+    assert evaluations["chat_auth_blocked"]["value"] == 0.0
+    assert evaluations["chat_followup_required"]["value"] == 0.0
+    assert evaluations["chat_result_card_count"]["value"] == len(payload["cards"])
+    assert evaluations["chat_semantic_search_used"]["value"] == 1.0
+    assert evaluations["chat_fallback_used"]["value"] == 1.0
+
+
+def test_chat_llmobs_auth_blocked_evaluation(monkeypatch):
+    fake = _patch_chat_llmobs(monkeypatch)
+
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("What is my order status?"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["route"] == "blocked"
+    evaluations = {item["label"]: item for item in fake.evaluations}
+    assert evaluations["chat_auth_blocked"]["value"] == 1.0
+    assert evaluations["chat_result_card_count"]["value"] == 0.0
+
+
+def test_chat_llmobs_failures_do_not_break_chat(monkeypatch):
+    _patch_chat_llmobs(monkeypatch, _FailingLLMObs)
+
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post("/api/chat", json=_chat_payload("Hello"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["route"] == "agentic_response"
+    assert "Hello" in payload["message"]
