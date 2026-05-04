@@ -120,10 +120,10 @@ def _query_variants(query: str | None) -> list[str]:
 
 
 def _normalized_gender(gender: str | None) -> str | None:
-    clean = (gender or "").strip().lower()
-    if clean in {"women", "woman", "womens", "female", "girls"}:
+    clean = _normalized_text(gender)
+    if clean in {"women", "woman", "womens", "women s", "female", "girls"}:
         return "female"
-    if clean in {"men", "man", "mens", "male", "boys"}:
+    if clean in {"men", "man", "mens", "men s", "male", "boys"}:
         return "male"
     if clean == "unisex":
         return "unisex"

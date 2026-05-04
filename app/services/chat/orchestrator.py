@@ -12,6 +12,7 @@ from app.models import ChatMessage, ChatSession, ChatToolCall
 from app.services.auth.clerk import ChatIdentity
 from app.services.chat.context import summarize_context
 from app.services.chat.evaluator import ChatOrchestrationDecision, evaluate_chat
+from app.services.chat.intent_frame import ChatIntentFrame, build_chat_intent_frame
 from app.services.chat.schemas import ChatAction, ChatCurrentProduct, ChatRequest, ChatResponse, ChatToolTrace
 from app.services.chat.tools import (
     catalog_cards,
@@ -24,7 +25,7 @@ from app.services.chat.tools import (
     store_scoped_related_product_cards,
     store_info,
 )
-from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, gender_targets_from_text, triage_chat
+from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, triage_chat
 from ddtrace.llmobs import LLMObs
 
 def _llmobs_annotate_safe(**kwargs) -> None:
@@ -72,22 +73,6 @@ def _normalized_message(message: str) -> str:
 
 def _contains_any(message: str, terms: set[str]) -> bool:
     return any(term in message for term in terms)
-
-
-def _current_product_gender(req: ChatRequest) -> str | None:
-    if not req.context.current_product:
-        return None
-    gender = req.context.current_product.attributes.get("gender")
-    return gender.lower() if gender else None
-
-
-def _current_product_target_genders(req: ChatRequest) -> list[str]:
-    gender = _current_product_gender(req)
-    return [gender] if gender else []
-
-
-def _target_genders_for_search(req: ChatRequest, decision: TriageDecision) -> list[str]:
-    return decision.constraints.target_genders or gender_targets_from_text(req.message) or _current_product_target_genders(req)
 
 
 def _normalize_context(db: Session, req: ChatRequest) -> ChatRequest:
@@ -242,6 +227,7 @@ def _apply_pairing_route_policy(req: ChatRequest, orchestration: ChatOrchestrati
 def _apply_orchestration_trace(
     response: ChatResponse,
     orchestration: ChatOrchestrationDecision,
+    frame: ChatIntentFrame,
     *,
     auth_decision: str,
 ) -> ChatResponse:
@@ -256,6 +242,7 @@ def _apply_orchestration_trace(
                 name="ChatIntakeAgent",
                 decision=f"{orchestration.evaluator_source}; confidence={orchestration.evaluator_confidence:.2f}",
             ),
+            ChatToolTrace(name="intent_frame", decision=frame.trace_decision()),
             ChatToolTrace(name=orchestration.selected_agent, decision=f"selected_tool={orchestration.selected_tool}"),
             ChatToolTrace(name="auth_gate", decision=auth_decision),
         ]
@@ -424,14 +411,21 @@ def _product_context_response(db: Session, req: ChatRequest, identity: ChatIdent
     )
 
 
-def _related_products_response(db: Session, req: ChatRequest, identity: ChatIdentity, session: ChatSession, decision: TriageDecision) -> ChatResponse:
-    current_product_id = _current_product_id(req)
+def _related_products_response(
+    db: Session,
+    req: ChatRequest,
+    identity: ChatIdentity,
+    session: ChatSession,
+    decision: TriageDecision,
+    frame: ChatIntentFrame,
+) -> ChatResponse:
+    current_product_id = frame.current_product_id
     cards = (
         store_scoped_related_product_cards(
             db,
             current_product_id,
             store_id=req.context.store_id,
-            target_genders=_target_genders_for_search(req, decision),
+            target_genders=frame.target_genders,
             limit=3,
         )
         if current_product_id
@@ -457,21 +451,27 @@ def _related_products_response(db: Session, req: ChatRequest, identity: ChatIden
     )
 
 
-def _semantic_catalog_response(db: Session, req: ChatRequest, identity: ChatIdentity, session: ChatSession, decision: TriageDecision) -> ChatResponse:
-    current_product_id = _current_product_id(req)
+def _semantic_catalog_response(
+    db: Session,
+    req: ChatRequest,
+    identity: ChatIdentity,
+    session: ChatSession,
+    decision: TriageDecision,
+    frame: ChatIntentFrame,
+) -> ChatResponse:
     cards, strategy = semantic_catalog_cards(
         db,
-        query=decision.constraints.query,
-        target_categories=decision.target_categories,
-        exclude_categories=decision.exclude_categories,
-        target_genders=_target_genders_for_search(req, decision),
-        budget_max=decision.constraints.budget_max,
-        colors=decision.constraints.colors,
-        current_product_id=current_product_id,
+        query=frame.query,
+        target_categories=frame.target_categories,
+        exclude_categories=frame.exclude_categories,
+        target_genders=frame.target_genders,
+        budget_max=frame.budget_max,
+        colors=frame.colors,
+        current_product_id=frame.current_product_id,
         store_id=req.context.store_id,
         limit=3,
     )
-    if cards and decision.intent == "complementary_products":
+    if cards and frame.intent == "complementary_products":
         current_label = "item"
         if req.context.current_product and req.context.current_product.title:
             current_label = req.context.current_product.title
@@ -482,9 +482,10 @@ def _semantic_catalog_response(db: Session, req: ChatRequest, identity: ChatIden
         message = "I could not find matching catalog products for that request."
 
     trace_decision = (
-        f"target_category={','.join(decision.target_categories) or 'any'}, "
-        f"budget_max={decision.constraints.budget_max or 'none'}, "
-        f"exclude_category={','.join(decision.exclude_categories) or 'none'}, "
+        f"target_category={','.join(frame.target_categories) or 'any'}, "
+        f"target_gender={','.join(frame.target_genders) or 'any'}, "
+        f"budget_max={frame.budget_max or 'none'}, "
+        f"exclude_category={','.join(frame.exclude_categories) or 'none'}, "
         f"strategy={strategy}"
     )
     _record_tool(
@@ -493,10 +494,11 @@ def _semantic_catalog_response(db: Session, req: ChatRequest, identity: ChatIden
         None,
         "semantic_catalog_search",
         {
-            "query": decision.constraints.query,
-            "target_categories": decision.target_categories,
-            "exclude_categories": decision.exclude_categories,
-            "budget_max": decision.constraints.budget_max,
+            "query": frame.query,
+            "target_categories": frame.target_categories,
+            "exclude_categories": frame.exclude_categories,
+            "target_genders": frame.target_genders,
+            "budget_max": frame.budget_max,
             "strategy": strategy,
         },
         cards,
@@ -505,7 +507,7 @@ def _semantic_catalog_response(db: Session, req: ChatRequest, identity: ChatIden
         conversation_id=session.id,
         message=message,
         identity_status=identity.status,
-        intent=decision.intent,
+        intent=frame.intent,
         route="semantic_catalog_search",
         cards=cards,
         actions=_actions_for_cards(cards),
@@ -596,6 +598,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
         )
         orchestration = _apply_pairing_route_policy(req, orchestration)
         decision = orchestration.decision
+        frame = build_chat_intent_frame(req, orchestration)
         _persist_message(
             db,
             session.id,
@@ -647,7 +650,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 response = _order_status_response(db, req, identity, session, decision)
                 auth_decision = "allowed; backend-derived customer_id"
             elif selected_tool == "related_products":
-                response = _related_products_response(db, req, identity, session, decision)
+                response = _related_products_response(db, req, identity, session, decision, frame)
                 auth_decision = "allowed; public catalog"
             elif selected_tool == "customer_summary":
                 response = _account_response(db, identity, session, decision)
@@ -659,7 +662,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 response = _product_context_response(db, req, identity, session, decision)
                 auth_decision = "allowed; public product context"
             elif selected_tool == "semantic_catalog_search":
-                response = _semantic_catalog_response(db, req, identity, session, decision)
+                response = _semantic_catalog_response(db, req, identity, session, decision, frame)
                 auth_decision = "allowed; public catalog"
             elif selected_tool == "chat_response":
                 response = _general_response(req, identity, session, decision)
@@ -688,6 +691,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
         response = _apply_orchestration_trace(
             response,
             orchestration,
+            frame,
             auth_decision=auth_decision,
         )
 
