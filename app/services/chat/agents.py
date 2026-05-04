@@ -38,6 +38,7 @@ Use OrderAgent for order status, recent order, purchase, delivery, or return sta
 
 Security is not your job. Set requires_auth=true for account, order, personal, size, preference, or purchase-history requests.
 Do not invent customer_id, order_id, or store_id values. Extract only explicit non-sensitive constraints from the message.
+For list constraint fields, return an empty array [] when there are no values. Never return null for list fields.
 If the request is ambiguous but answerable with a safe general response, choose the closest safe route.
 """.strip()
 

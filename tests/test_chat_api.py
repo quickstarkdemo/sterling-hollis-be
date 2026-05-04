@@ -16,6 +16,7 @@ from app.models import Customer, CustomerAuthIdentity, Order, OrderItem, Store, 
 from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecision
+from app.services.chat.evaluator import ChatEvaluationConstraints
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 from tests.test_catalog_api import _product
 
@@ -546,6 +547,20 @@ def test_contextless_pairing_guard_overrides_personalized_evaluator_route(monkey
     assert payload["requires_followup"] is True
     assert payload["actions"] == []
     assert "Which item" in payload["message"]
+
+
+def test_chat_evaluation_constraints_normalize_null_lists():
+    constraints = ChatEvaluationConstraints(
+        colors=None,
+        exclude_categories=None,
+        materials=None,
+        target_categories=None,
+    )
+
+    assert constraints.colors == []
+    assert constraints.exclude_categories == []
+    assert constraints.materials == []
+    assert constraints.target_categories == []
 
 
 def test_selected_tool_dispatch_overrides_intent(monkeypatch):

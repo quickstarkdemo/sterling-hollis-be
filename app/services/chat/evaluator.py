@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import logging
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import get_settings
 from app.services.chat.agents import (
@@ -58,6 +58,22 @@ class ChatEvaluationConstraints(BaseModel):
     target_categories: list[str] = Field(default_factory=list)
     exclude_categories: list[str] = Field(default_factory=list)
     order_id: str | None = None
+
+    @field_validator(
+        "colors",
+        "materials",
+        "target_categories",
+        "exclude_categories",
+        mode="before",
+    )
+    @classmethod
+    def _empty_list_for_null(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            clean = value.strip()
+            return [clean] if clean else []
+        return value
 
 
 class ChatEvaluation(BaseModel):
