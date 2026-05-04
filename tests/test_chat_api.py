@@ -606,8 +606,8 @@ def test_contextless_availability_shortcut_asks_for_product(monkeypatch):
 
 
 def test_contextless_pairing_guard_overrides_personalized_evaluator_route(monkeypatch):
-    class Result:
-        structured_output = ChatEvaluation(
+    def fake_chat_intake_llm(prompt, *, model):
+        return ChatEvaluation(
             intent="customer_recommendation",
             target_agent="PersonalShopperAgent",
             tool="customer_recommendations",
@@ -617,10 +617,7 @@ def test_contextless_pairing_guard_overrides_personalized_evaluator_route(monkey
             rationale="Treating contextless styling as personal shopping.",
         )
 
-    def fake_agent(prompt, structured_output_model=None):
-        return Result()
-
-    monkeypatch.setattr("app.services.chat.evaluator.build_chat_intake_agent", lambda model_id=None: fake_agent)
+    monkeypatch.setattr("app.services.chat.evaluator._run_chat_intake_llm", fake_chat_intake_llm)
     with _chat_client(monkeypatch) as (client, _):
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         get_settings.cache_clear()
@@ -871,10 +868,10 @@ def test_chat_search_workwear_alias_browses_mens_apparel(monkeypatch):
 
 
 def test_evaluator_error_trace_includes_exception_class(monkeypatch):
-    def explode(model_id=None):
+    def explode(prompt, *, model):
         raise RuntimeError("broken evaluator")
 
-    monkeypatch.setattr("app.services.chat.evaluator.build_chat_intake_agent", explode)
+    monkeypatch.setattr("app.services.chat.evaluator._run_chat_intake_llm", explode)
     with _chat_client(monkeypatch) as (client, _):
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         get_settings.cache_clear()

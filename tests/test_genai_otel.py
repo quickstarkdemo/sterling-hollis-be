@@ -117,6 +117,21 @@ def test_trace_genai_workflow_decorator_supports_async_functions(monkeypatch):
     assert recorded.attributes["app.workflow"] == "style_finder"
 
 
+def test_suppress_genai_otel_prevents_custom_spans(monkeypatch):
+    tracer = _install_fake_tracer(monkeypatch)
+
+    @genai_otel.trace_genai_tool("pinecone_catalog_query")
+    def query() -> str:
+        span = genai_otel.current_genai_span()
+        genai_otel.record_tool_call(span, arguments={"top_k": 3})
+        return "ok"
+
+    with genai_otel.suppress_genai_otel():
+        assert query() == "ok"
+
+    assert tracer.spans == []
+
+
 def test_genai_span_records_exceptions(monkeypatch):
     tracer = _install_fake_tracer(monkeypatch)
 

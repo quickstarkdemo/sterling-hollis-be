@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.catalog.schemas import CatalogProduct
 from app.models import ChatMessage, ChatSession, ChatToolCall
+from app.observability.genai_otel import suppress_genai_otel
 from app.services.auth.clerk import ChatIdentity
 from app.services.chat.context import summarize_context
 from app.services.chat.evaluator import ChatOrchestrationDecision, evaluate_chat
@@ -657,7 +658,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
     orchestration: ChatOrchestrationDecision | None = None
     auth_decision = "not_evaluated"
 
-    with LLMObs.agent(name="sterling_hollis_chat", session_id=session.id) as root_span:
+    with suppress_genai_otel(), LLMObs.agent(name="sterling_hollis_chat", session_id=session.id) as root_span:
         _llmobs_annotate_safe(
             span=root_span,
             input_data={

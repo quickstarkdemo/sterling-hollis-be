@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.services.chat.agents import (
     CHAT_AGENT_NAMES,
     CHAT_TOOL_NAMES,
-    build_chat_intake_agent,
+    INTAKE_SYSTEM_PROMPT,
 )
 from app.services.chat.context import summarize_context
 from app.services.chat.schemas import ChatContext
@@ -159,6 +159,28 @@ class ChatEvaluation(BaseModel):
     )
     clarifying_question: str | None = None
     rationale: str
+
+
+def _run_chat_intake_llm(prompt: str, *, model: str) -> ChatEvaluation:
+    try:
+        from openai import OpenAI
+    except Exception as exc:  # pragma: no cover - dependency import guard
+        raise RuntimeError("OpenAI SDK is not available for chat orchestration.") from exc
+
+    settings = get_settings()
+    client = OpenAI(api_key=settings.openai_api_key)
+    completion = client.beta.chat.completions.parse(
+        model=model,
+        messages=[
+            {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        response_format=ChatEvaluation,
+    )
+    parsed = completion.choices[0].message.parsed
+    if not isinstance(parsed, ChatEvaluation):
+        raise RuntimeError("OpenAI chat intake returned no parsed ChatEvaluation.")
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -313,8 +335,6 @@ def evaluate_chat(
             )
         else:
             try:
-                agent_client = build_chat_intake_agent(settings.chat_orchestration_model)
-
                 with LLMObs.llm(
                     name="chat_intake_llm_call",
                     model_name=settings.chat_orchestration_model,
@@ -342,8 +362,10 @@ def evaluate_chat(
                         },
                     )
 
-                    result = agent_client(prompt, structured_output_model=ChatEvaluation)
-                    evaluation = result.structured_output
+                    evaluation = _run_chat_intake_llm(
+                        prompt,
+                        model=settings.chat_orchestration_model,
+                    )
 
                     if isinstance(evaluation, ChatEvaluation):
                         _llmobs_annotate_safe(

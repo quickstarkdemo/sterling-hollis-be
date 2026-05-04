@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from contextlib import contextmanager, nullcontext
+import contextvars
 from functools import wraps
 import inspect
 import json
@@ -26,6 +27,24 @@ R = TypeVar("R")
 SpanValue = Any | Callable[..., Any]
 SpanAttributes = Mapping[str, Any] | Callable[..., Mapping[str, Any] | None] | None
 
+_SUPPRESS_GENAI_OTEL: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "suppress_genai_otel",
+    default=False,
+)
+
+
+@contextmanager
+def suppress_genai_otel() -> Iterator[None]:
+    token = _SUPPRESS_GENAI_OTEL.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESS_GENAI_OTEL.reset(token)
+
+
+def genai_otel_suppressed() -> bool:
+    return _SUPPRESS_GENAI_OTEL.get()
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), default=str)
@@ -48,6 +67,8 @@ def _get_tracer() -> Any:
 
 
 def current_genai_span() -> Any:
+    if genai_otel_suppressed():
+        return None
     try:
         from opentelemetry import trace
 
@@ -168,6 +189,10 @@ def genai_span(
     operation: str,
     attributes: Mapping[str, Any] | None = None,
 ) -> Iterator[Any]:
+    if genai_otel_suppressed():
+        yield None
+        return
+
     try:
         from opentelemetry import trace
 
