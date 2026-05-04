@@ -757,6 +757,31 @@ def test_chat_search_mens_shoes_filters_gender(monkeypatch):
         trace["name"] == "intent_frame" and "target_genders=men" in trace["decision"]
         for trace in payload["tool_trace"]
     )
+    assert any(
+        trace["name"] == "intent_frame" and "target_categories=shoes" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
+
+
+def test_chat_search_mens_casual_shoes_does_not_include_apparel(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "Suggest men's casual shoes",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"shoes"}
+    assert all(card["attributes"].get("gender") == "men" for card in payload["cards"])
+    assert any(
+        trace["name"] == "intent_frame" and "target_categories=shoes" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
 
 
 def test_chat_search_mens_shoes_uses_message_gender_when_evaluator_omits_it(monkeypatch):

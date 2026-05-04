@@ -29,6 +29,20 @@ CATEGORY_ALIASES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("home", "decor", "chair", "vase", "dinnerware"), ("home",)),
 )
 
+APPAREL_CONTEXT_TERMS = {
+    "apparel",
+    "clothes",
+    "clothing",
+    "dress",
+    "dresses",
+    "shirt",
+    "shirts",
+    "suiting",
+    "suit",
+    "suits",
+    "workwear",
+}
+
 
 @dataclass(frozen=True)
 class ChatIntentFrame:
@@ -79,6 +93,8 @@ def _categories_for_text(value: str | None) -> list[str]:
     for aliases, mapped_categories in CATEGORY_ALIASES:
         if any(f" {alias} " in f" {normalized} " for alias in aliases):
             _append_unique(categories, mapped_categories)
+    if "shoes" in categories and not any(f" {term} " in f" {normalized} " for term in APPAREL_CONTEXT_TERMS):
+        categories = [category for category in categories if category not in {"mens_apparel", "womens_apparel"}]
     return categories
 
 
@@ -90,7 +106,8 @@ def normalize_categories(raw_categories: list[str], query: str | None = None) ->
             _append_unique(categories, [normalized])
         else:
             _append_unique(categories, _categories_for_text(category))
-    _append_unique(categories, _categories_for_text(query))
+    if not categories:
+        _append_unique(categories, _categories_for_text(query))
     return categories
 
 
