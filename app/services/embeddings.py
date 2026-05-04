@@ -6,6 +6,9 @@ from typing import Sequence
 
 from app.config import get_settings
 
+from ddtrace.llmobs.decorators import embedding
+from app.observability.llmobs import annotate_safe
+
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
@@ -35,13 +38,35 @@ class EmbeddingService:
         norm = math.sqrt(sum(v * v for v in values)) or 1.0
         return [v / norm for v in values]
 
+    @embedding(
+        name="openai_text_embeddings",
+        model_name="text-embedding-3-small",
+        model_provider="openai",
+    )
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
+        annotate_safe(
+            input_data=[{"text_length": len(text)} for text in texts],
+            metadata={
+                "text_count": len(texts),
+                "model": self.model,
+                "dimension": self.dimension,
+                "provider_enabled": self.enabled,
+            },
+        )
+
         if not texts:
             return []
         if self.client is None:
             return [self._deterministic_vector(t) for t in texts]
 
         resp = self.client.embeddings.create(model=self.model, input=list(texts))
+        annotate_safe(
+            output_data={
+                "vector_count": len(vectors),
+                "dimension": len(vectors[0]) if vectors else 0,
+            },
+        )
+
         return [item.embedding for item in resp.data]
 
     def embed_text(self, text: str) -> list[float]:
@@ -65,7 +90,9 @@ class EmbeddingService:
             vector = self.embed_text("vector status probe")
             status["probe_ok"] = len(vector) == self.dimension
             if not status["probe_ok"]:
-                status["probe_error"] = f"expected dimension {self.dimension}, got {len(vector)}"
+                status["probe_error"] = (
+                    f"expected dimension {self.dimension}, got {len(vector)}"
+                )
         except Exception as exc:  # pragma: no cover - external dependency
             status["probe_ok"] = False
             status["probe_error"] = str(exc)[:500]

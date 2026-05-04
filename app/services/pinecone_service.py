@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from app.config import get_settings
 
+from ddtrace.llmobs.decorators import retrieval
+from app.observability.llmobs import annotate_safe
+
 try:
     from pinecone import Pinecone, ServerlessSpec
 except Exception:  # pragma: no cover
@@ -32,7 +35,10 @@ class PineconeService:
                 name=name,
                 dimension=self.settings.embedding_dimension,
                 metric="cosine",
-                spec=ServerlessSpec(cloud=self.settings.pinecone_cloud, region=self.settings.pinecone_region),
+                spec=ServerlessSpec(
+                    cloud=self.settings.pinecone_cloud,
+                    region=self.settings.pinecone_region,
+                ),
             )
         self.index = self.client.Index(name)
 
@@ -42,7 +48,30 @@ class PineconeService:
         assert self.index is not None
         self.index.upsert(vectors=vectors, namespace=namespace)
 
-    def query(self, namespace: str, vector: list[float], top_k: int, filters: dict | None = None) -> list[dict]:
+    @retrieval(
+        name="pinecone_catalog_query", model_name="pinecone", model_provider="pinecone"
+    )
+    def query(
+        self,
+        namespace: str,
+        vector: list[float],
+        top_k: int,
+        filters: dict | None = None,
+    ) -> list[dict]:
+
+        annotate_safe(
+            input_data={
+                "namespace": namespace,
+                "top_k": top_k,
+                "filters": filters or {},
+                "vector_dimension": len(vector),
+            },
+            metadata={
+                "index_name": self.settings.pinecone_index_name,
+                "enabled": self.enabled,
+            },
+        )
+
         if not self.enabled:
             return []
         assert self.index is not None
@@ -53,16 +82,34 @@ class PineconeService:
             include_metadata=True,
             filter=filters,
         )
-        resp_matches = resp.matches if hasattr(resp, "matches") else resp.get("matches", [])
+        resp_matches = (
+            resp.matches if hasattr(resp, "matches") else resp.get("matches", [])
+        )
         matches = []
         for m in resp_matches:
             matches.append(
                 {
                     "id": m.id if hasattr(m, "id") else m.get("id"),
-                    "score": float(m.score) if hasattr(m, "score") else m.get("score", 0.0),
-                    "metadata": m.metadata if hasattr(m, "metadata") else m.get("metadata", {}),
+                    "score": (
+                        float(m.score) if hasattr(m, "score") else m.get("score", 0.0)
+                    ),
+                    "metadata": (
+                        m.metadata if hasattr(m, "metadata") else m.get("metadata", {})
+                    ),
                 }
             )
+            annotate_safe(
+                output_data=[
+                    {
+                        "id": match["id"],
+                        "score": match["score"],
+                        "name": match["metadata"].get("title") or match["id"],
+                    }
+                    for match in matches[:10]
+                ],
+                metadata={"match_count": len(matches)},
+            )
+
         return matches
 
     def status(self, probe: bool = False) -> dict:
@@ -90,7 +137,9 @@ class PineconeService:
                 indexes = {idx["name"] for idx in raw_indexes}
             status["probe_ok"] = self.settings.pinecone_index_name in indexes
             if not status["probe_ok"]:
-                status["probe_error"] = f"index {self.settings.pinecone_index_name} not found"
+                status["probe_error"] = (
+                    f"index {self.settings.pinecone_index_name} not found"
+                )
         except Exception as exc:  # pragma: no cover - external dependency
             status["probe_ok"] = False
             status["probe_error"] = str(exc)[:500]

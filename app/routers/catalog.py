@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
+from ddtrace.llmobs.decorators import workflow
+from app.observability.llmobs import annotate_safe
 
 from app.catalog.schemas import (
     CatalogIndexResponse,
@@ -25,7 +27,11 @@ from app.catalog.service import (
     related_products,
 )
 from app.database import get_db
-from app.services.image_analysis import ImageAnalysisService, ImageUploadError, read_validated_image
+from app.services.image_analysis import (
+    ImageAnalysisService,
+    ImageUploadError,
+    read_validated_image,
+)
 
 
 router = APIRouter(prefix="/api", tags=["catalog"])
@@ -38,17 +44,29 @@ router = APIRouter(prefix="/api", tags=["catalog"])
     description="Store-independent catalog entry point for retail frontends. Returns category IDs and product IDs without requiring a store.",
 )
 def catalog_index(
-    category: str | None = Query(default=None, description="Optional catalog category id."),
-    brand: str | None = Query(default=None, description="Optional product brand filter."),
-    q: str | None = Query(default=None, min_length=1, description="Optional text search over catalog product fields."),
-    sort: ProductSort = Query(default=ProductSort.relevance, description="Catalog product sort order."),
+    category: str | None = Query(
+        default=None, description="Optional catalog category id."
+    ),
+    brand: str | None = Query(
+        default=None, description="Optional product brand filter."
+    ),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        description="Optional text search over catalog product fields.",
+    ),
+    sort: ProductSort = Query(
+        default=ProductSort.relevance, description="Catalog product sort order."
+    ),
     limit: int = Query(default=24, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     products = list_products(
         db,
-        ProductFilters(q=q, category=category, brand=brand, sort=sort, limit=limit, offset=offset),
+        ProductFilters(
+            q=q, category=category, brand=brand, sort=sort, limit=limit, offset=offset
+        ),
     )
     return CatalogIndexResponse(
         categories=list_categories(db).categories,
@@ -76,9 +94,17 @@ def catalog_categories(db: Session = Depends(get_db)):
     description="Store-independent product browsing. Returns catalog product IDs; store-specific inventory is summarized, not used as product identity.",
 )
 def catalog_products(
-    category: str | None = Query(default=None, description="Optional catalog category id."),
-    brand: str | None = Query(default=None, description="Optional product brand filter."),
-    q: str | None = Query(default=None, min_length=1, description="Optional text search over catalog product fields."),
+    category: str | None = Query(
+        default=None, description="Optional catalog category id."
+    ),
+    brand: str | None = Query(
+        default=None, description="Optional product brand filter."
+    ),
+    q: str | None = Query(
+        default=None,
+        min_length=1,
+        description="Optional text search over catalog product fields.",
+    ),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     sort: ProductSort = Query(default=ProductSort.relevance),
@@ -124,8 +150,13 @@ def store_categories(store_id: str, db: Session = Depends(get_db)):
 @router.get("/categories/{category}/products", response_model=ProductListResponse)
 def category_products(
     category: str,
-    store_id: str | None = Query(default=None, description="Optional inventory filter. Does not change product identity."),
-    brand: str | None = Query(default=None, description="Optional product brand filter."),
+    store_id: str | None = Query(
+        default=None,
+        description="Optional inventory filter. Does not change product identity.",
+    ),
+    brand: str | None = Query(
+        default=None, description="Optional product brand filter."
+    ),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     in_stock_only: bool = False,
@@ -152,12 +183,25 @@ def category_products(
 
 @router.get("/products", response_model=ProductListResponse)
 def products(
-    store_id: str | None = Query(default=None, description="Optional inventory filter. Does not change product identity."),
-    category: str | None = Query(default=None, description="Optional catalog category id."),
-    brand: str | None = Query(default=None, description="Optional product brand filter."),
-    size: str | None = Query(default=None, description="Optional inventory size filter."),
-    color: str | None = Query(default=None, description="Optional variant color filter."),
-    availability: str | None = Query(default=None, description="Optional inventory availability filter."),
+    store_id: str | None = Query(
+        default=None,
+        description="Optional inventory filter. Does not change product identity.",
+    ),
+    category: str | None = Query(
+        default=None, description="Optional catalog category id."
+    ),
+    brand: str | None = Query(
+        default=None, description="Optional product brand filter."
+    ),
+    size: str | None = Query(
+        default=None, description="Optional inventory size filter."
+    ),
+    color: str | None = Query(
+        default=None, description="Optional variant color filter."
+    ),
+    availability: str | None = Query(
+        default=None, description="Optional inventory availability filter."
+    ),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     in_stock_only: bool = False,
@@ -190,7 +234,9 @@ def products(
 @router.get("/products/{product_id}", response_model=ProductDetailResponse)
 def product_detail(
     product_id: str,
-    store_id: str | None = Query(default=None, description="Optional inventory filter for variant availability."),
+    store_id: str | None = Query(
+        default=None, description="Optional inventory filter for variant availability."
+    ),
     db: Session = Depends(get_db),
 ):
     product = get_product_detail(db, product_id, store_id=store_id)
@@ -214,9 +260,16 @@ def product_related(
 @router.get("/search/products", response_model=ProductListResponse)
 def search_products(
     q: str = Query(min_length=1),
-    store_id: str | None = Query(default=None, description="Optional inventory filter. Does not change product identity."),
-    category: str | None = Query(default=None, description="Optional catalog category id."),
-    brand: str | None = Query(default=None, description="Optional product brand filter."),
+    store_id: str | None = Query(
+        default=None,
+        description="Optional inventory filter. Does not change product identity.",
+    ),
+    category: str | None = Query(
+        default=None, description="Optional catalog category id."
+    ),
+    brand: str | None = Query(
+        default=None, description="Optional product brand filter."
+    ),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
     limit: int = Query(default=24, ge=1, le=100),
@@ -239,7 +292,9 @@ def search_products(
 
 
 @router.post("/recommendations/products", response_model=ProductRecommendationResponse)
-def product_recommendations(req: ProductRecommendationRequest, db: Session = Depends(get_db)):
+def product_recommendations(
+    req: ProductRecommendationRequest, db: Session = Depends(get_db)
+):
     return recommend_products(db, req)
 
 
@@ -253,8 +308,12 @@ def _http_error_for_image_exception(exc: Exception) -> HTTPException:
 
 @router.post("/image-analysis", response_model=ImageAnalysisResponse)
 async def image_analysis(
-    image: UploadFile = File(..., description="Consumer image to analyze. JPEG, PNG, or WebP."),
-    context: str | None = Form(default=None, description="Optional frontend context to guide analysis."),
+    image: UploadFile = File(
+        ..., description="Consumer image to analyze. JPEG, PNG, or WebP."
+    ),
+    context: str | None = Form(
+        default=None, description="Optional frontend context to guide analysis."
+    ),
 ):
     try:
         image_bytes, mime_type = await read_validated_image(image)
@@ -264,6 +323,7 @@ async def image_analysis(
 
 
 @router.post("/recommendations/image", response_model=ImageRecommendationResponse)
+@workflow(name="style_finder_image_recommendations", _automatic_io_annotation=False)
 async def image_recommendations(
     image: UploadFile = File(..., description="Consumer image to analyze for recommendations. JPEG, PNG, or WebP."),
     context: str | None = Form(default=None, description="Optional frontend context to guide analysis."),
@@ -291,8 +351,48 @@ async def image_recommendations(
 
     try:
         image_bytes, mime_type = await read_validated_image(image)
-        analysis_response = ImageAnalysisService().analyze(image_bytes, mime_type, context=context)
+
+        annotate_safe(
+            input_data={
+                "mime_type": mime_type,
+                "image_bytes": len(image_bytes),
+                "store_id": store_id,
+                "category": category,
+                "brand": brand,
+                "budget_min": budget_min,
+                "budget_max": budget_max,
+                "top_k": top_k,
+                "include_preorder": include_preorder,
+            },
+            tags={"workflow": "style_finder"},
+        )
+
+        analysis_response = ImageAnalysisService().analyze(
+            image_bytes,
+            mime_type,
+            context=context,
+        )
+
+        response = recommend_products_from_image_analysis(
+            db,
+            req,
+            analysis_response.analysis,
+        )
+
+        annotate_safe(
+            output_data={
+                "strategy": response.strategy,
+                "recommendation_count": len(response.recommendations),
+                "product_ids": [row.product.id for row in response.recommendations],
+                "analysis_confidence": response.analysis.confidence,
+                "target_categories": response.analysis.target_categories,
+            },
+            metadata={
+                "analysis_summary": response.analysis.summary[:300],
+            },
+        )
+
+        return response
+
     except Exception as exc:
         raise _http_error_for_image_exception(exc) from exc
-
-    return recommend_products_from_image_analysis(db, req, analysis_response.analysis)

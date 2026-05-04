@@ -13,6 +13,9 @@ from app.config import get_settings
 from app.schemas import StyleConstraints
 from app.services.taxonomy import CATEGORY_TAXONOMY
 
+from ddtrace.llmobs.decorators import llm
+from app.observability.llmobs import annotate_safe
+
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
@@ -77,14 +80,20 @@ def _clean_string_list(values: list[str], *, limit: int = 8) -> list[str]:
     return cleaned
 
 
-def validate_image_bytes(image_bytes: bytes, content_type: str | None, *, max_bytes: int) -> str:
+def validate_image_bytes(
+    image_bytes: bytes, content_type: str | None, *, max_bytes: int
+) -> str:
     mime_type = str(content_type or "").split(";")[0].strip().lower()
     if mime_type not in ALLOWED_IMAGE_MIME_TYPES:
-        raise ImageUploadError("Unsupported image type. Use JPEG, PNG, or WebP.", status_code=415)
+        raise ImageUploadError(
+            "Unsupported image type. Use JPEG, PNG, or WebP.", status_code=415
+        )
     if not image_bytes:
         raise ImageUploadError("Image upload is empty.")
     if len(image_bytes) > max_bytes:
-        raise ImageUploadError(f"Image exceeds the {max_bytes} byte upload limit.", status_code=413)
+        raise ImageUploadError(
+            f"Image exceeds the {max_bytes} byte upload limit.", status_code=413
+        )
 
     try:
         with Image.open(BytesIO(image_bytes)) as image:
@@ -95,11 +104,15 @@ def validate_image_bytes(image_bytes: bytes, content_type: str | None, *, max_by
 
     expected_formats = _MIME_TO_PIL_FORMAT.get(mime_type, set())
     if expected_formats and detected_format not in expected_formats:
-        raise ImageUploadError("Uploaded image content does not match its content type.")
+        raise ImageUploadError(
+            "Uploaded image content does not match its content type."
+        )
     return mime_type
 
 
-async def read_validated_image(upload: UploadFile, *, max_bytes: int | None = None) -> tuple[bytes, str]:
+async def read_validated_image(
+    upload: UploadFile, *, max_bytes: int | None = None
+) -> tuple[bytes, str]:
     settings = get_settings()
     limit = max_bytes or settings.image_upload_max_bytes
     image_bytes = await upload.read(limit + 1)
@@ -135,14 +148,30 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _normalize_analysis(payload: dict) -> ImageAnalysisAttributes:
-    raw_categories = _clean_string_list(list(payload.get("target_categories") or []), limit=5)
-    target_categories = [category for category in raw_categories if category in CATEGORY_TAXONOMY]
-    raw_excluded = _clean_string_list(list(payload.get("exclude_categories") or []), limit=5)
-    exclude_categories = [category for category in raw_excluded if category in CATEGORY_TAXONOMY]
-    style_keywords = _clean_string_list(list(payload.get("style_keywords") or []), limit=8)
-    style_keywords.extend(_clean_string_list(list(payload.get("colors") or []), limit=4))
-    style_keywords.extend(_clean_string_list(list(payload.get("materials") or []), limit=4))
-    style_keywords.extend(_clean_string_list(list(payload.get("patterns") or []), limit=4))
+    raw_categories = _clean_string_list(
+        list(payload.get("target_categories") or []), limit=5
+    )
+    target_categories = [
+        category for category in raw_categories if category in CATEGORY_TAXONOMY
+    ]
+    raw_excluded = _clean_string_list(
+        list(payload.get("exclude_categories") or []), limit=5
+    )
+    exclude_categories = [
+        category for category in raw_excluded if category in CATEGORY_TAXONOMY
+    ]
+    style_keywords = _clean_string_list(
+        list(payload.get("style_keywords") or []), limit=8
+    )
+    style_keywords.extend(
+        _clean_string_list(list(payload.get("colors") or []), limit=4)
+    )
+    style_keywords.extend(
+        _clean_string_list(list(payload.get("materials") or []), limit=4)
+    )
+    style_keywords.extend(
+        _clean_string_list(list(payload.get("patterns") or []), limit=4)
+    )
 
     return ImageAnalysisAttributes(
         summary=str(payload.get("summary") or "").strip(),
@@ -153,12 +182,16 @@ def _normalize_analysis(payload: dict) -> ImageAnalysisAttributes:
         materials=_clean_string_list(list(payload.get("materials") or []), limit=8),
         patterns=_clean_string_list(list(payload.get("patterns") or []), limit=8),
         style_keywords=_clean_string_list(style_keywords, limit=12),
-        occasion_keywords=_clean_string_list(list(payload.get("occasion_keywords") or []), limit=8),
+        occasion_keywords=_clean_string_list(
+            list(payload.get("occasion_keywords") or []), limit=8
+        ),
         confidence=float(payload.get("confidence") or 0.0),
     )
 
 
-def style_constraints_from_analysis(analysis: ImageAnalysisAttributes) -> StyleConstraints:
+def style_constraints_from_analysis(
+    analysis: ImageAnalysisAttributes,
+) -> StyleConstraints:
     return StyleConstraints(
         constraint_source="consumer_image",
         target_categories=analysis.target_categories,
@@ -197,18 +230,40 @@ class ImageAnalysisService:
     def enabled(self) -> bool:
         return self.client is not None
 
-    def analyze(self, image_bytes: bytes, mime_type: str, *, context: str | None = None) -> ImageAnalysisResponse:
+    @llm(name="openai_image_analysis", model_name="gpt-5.5", model_provider="openai")
+    def analyze(
+        self, image_bytes: bytes, mime_type: str, *, context: str | None = None
+    ) -> ImageAnalysisResponse:
         if self.client is None:
             raise RuntimeError("OpenAI image analysis is not configured.")
 
         categories = ", ".join(sorted(CATEGORY_TAXONOMY))
-        context_text = f"\nFrontend context: {context.strip()}" if context and context.strip() else ""
+        context_text = (
+            f"\nFrontend context: {context.strip()}"
+            if context and context.strip()
+            else ""
+        )
         prompt = (
             "Analyze the uploaded consumer fashion or retail inspiration image for product recommendation. "
             "Extract only visible, product-search useful attributes. Use category IDs from this list when applicable: "
             f"{categories}. Keep keywords concise and avoid personal or biometric identification.{context_text}"
         )
-        image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        image_url = (
+            f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        )
+        annotate_safe(
+            input_data={
+                "mime_type": mime_type,
+                "image_bytes": len(image_bytes),
+                "has_context": bool(context),
+                "context_length": len(context or ""),
+                "detail": self.detail,
+            },
+            metadata={
+                "schema_name": "consumer_image_analysis",
+            },
+        )
+
         response = self.client.responses.create(
             model=self.model,
             input=[
@@ -216,7 +271,11 @@ class ImageAnalysisService:
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": image_url, "detail": self.detail},
+                        {
+                            "type": "input_image",
+                            "image_url": image_url,
+                            "detail": self.detail,
+                        },
                     ],
                 }
             ],
@@ -233,6 +292,20 @@ class ImageAnalysisService:
         if not raw_text:
             raise RuntimeError("OpenAI image analysis returned no text output.")
         analysis = _normalize_analysis(json.loads(raw_text))
+        
+        annotate_safe(
+            output_data={
+                "summary": analysis.summary[:300],
+                "target_categories": analysis.target_categories,
+                "exclude_categories": analysis.exclude_categories,
+                "colors": analysis.colors,
+                "materials": analysis.materials,
+                "style_keywords": analysis.style_keywords,
+                "confidence": analysis.confidence,
+            },
+            metadata={"model": self.model},
+        )
+
         return ImageAnalysisResponse(
             analysis=analysis,
             style_constraints=style_constraints_from_analysis(analysis),
