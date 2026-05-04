@@ -13,6 +13,17 @@ from app.models import Customer, Order, OrderItem, Product, Store
 from app.services.embeddings import EmbeddingService
 from app.services.pinecone_service import PineconeService
 
+from ddtrace.llmobs import LLMObs
+from ddtrace.llmobs.decorators import tool
+
+def _llmobs_annotate_safe(**kwargs) -> None:
+    try:
+        if not LLMObs.enabled:
+            return
+        LLMObs.annotate(**kwargs)
+    except Exception:
+        pass
+
 
 VALID_CATEGORIES = {
     "beauty",
@@ -273,6 +284,7 @@ def _filter_cards(
     return filtered
 
 
+@tool(name="semantic_vector_cards")
 def _semantic_vector_cards(
     db: Session,
     *,
@@ -286,24 +298,68 @@ def _semantic_vector_cards(
     store_id: str | None,
     limit: int,
 ) -> list[CatalogProduct]:
+    _llmobs_annotate_safe(
+        input_data={
+            "query": query,
+            "target_categories": target_categories,
+            "exclude_categories": exclude_categories,
+            "target_genders": target_genders,
+            "budget_max": budget_max,
+            "colors": colors,
+            "current_product_id": current_product_id,
+            "store_id": store_id,
+            "limit": limit,
+        },
+        tags={
+            "workflow": "chat",
+            "tool": "semantic_vector_cards",
+        },
+    )
+
     embedding_service = EmbeddingService()
     pinecone = PineconeService()
+
     if not (embedding_service.enabled and pinecone.enabled):
+        _llmobs_annotate_safe(
+            output_data={
+                "card_count": 0,
+                "disabled": True,
+                "embedding_enabled": embedding_service.enabled,
+                "pinecone_enabled": pinecone.enabled,
+            },
+        )
         return []
+
     vector = embedding_service.embed_text(query)
-    pinecone_filter = {"category": {"$in": target_categories}} if target_categories else None
+
+    pinecone_filter = (
+        {"category": {"$in": target_categories}}
+        if target_categories
+        else None
+    )
+
     matches = pinecone.query(
         namespace=pinecone.settings.pinecone_catalog_namespace,
         vector=vector,
         top_k=max(limit * 10, 50),
         filters=pinecone_filter,
     )
+
     product_ids = [
-        str(match.get("metadata", {}).get("catalog_product_id") or match.get("id", "").replace("catalog:", ""))
+        str(
+            match.get("metadata", {}).get("catalog_product_id")
+            or match.get("id", "").replace("catalog:", "")
+        )
         for match in matches
     ]
-    cards = _ordered_catalog_cards(db, product_ids, store_id=store_id)
-    return _filter_cards(
+
+    cards = _ordered_catalog_cards(
+        db,
+        product_ids,
+        store_id=store_id,
+    )
+
+    result_cards = _filter_cards(
         cards,
         target_categories=target_categories,
         exclude_categories=exclude_categories,
@@ -315,7 +371,21 @@ def _semantic_vector_cards(
         limit=limit,
     )
 
+    _llmobs_annotate_safe(
+        output_data={
+            "match_count": len(matches),
+            "candidate_product_ids": product_ids[:20],
+            "card_count": len(result_cards),
+            "product_ids": [card.id for card in result_cards],
+            "pinecone_filter": pinecone_filter,
+        },
+    )
 
+    return result_cards
+
+
+
+@tool(name="sql_search_cards")
 def _sql_search_cards(
     db: Session,
     *,
@@ -329,8 +399,27 @@ def _sql_search_cards(
     store_id: str | None,
     limit: int,
 ) -> list[CatalogProduct]:
+    _llmobs_annotate_safe(
+        input_data={
+            "query": query,
+            "target_categories": target_categories,
+            "exclude_categories": exclude_categories,
+            "target_genders": target_genders,
+            "budget_max": budget_max,
+            "colors": colors,
+            "current_product_id": current_product_id,
+            "store_id": store_id,
+            "limit": limit,
+        },
+        tags={
+            "workflow": "chat",
+            "tool": "sql_search_cards",
+        },
+    )
+
     categories = target_categories or [None]
     cards: list[CatalogProduct] = []
+
     for category in categories:
         color_attempts = colors or [None]
         category_cards: list[CatalogProduct] = []
@@ -358,7 +447,8 @@ def _sql_search_cards(
                 )
             )
         cards.extend(category_cards)
-    return _filter_cards(
+
+    result_cards = _filter_cards(
         cards,
         target_categories=target_categories,
         exclude_categories=exclude_categories,
@@ -370,7 +460,27 @@ def _sql_search_cards(
         limit=limit,
     )
 
+    _llmobs_annotate_safe(
+        output_data={
+            "candidate_count": len(cards),
+            "card_count": len(result_cards),
+            "product_ids": [card.id for card in result_cards],
+            "top_cards": [
+                {
+                    "id": card.id,
+                    "title": card.title,
+                    "brand": card.brand,
+                    "category": card.category,
+                }
+                for card in result_cards[:10]
+            ],
+        },
+    )
 
+    return result_cards
+
+
+@tool(name="semantic_catalog_cards")
 def semantic_catalog_cards(
     db: Session,
     *,
@@ -387,8 +497,36 @@ def semantic_catalog_cards(
     clean_query = " ".join((query or "").split())
     color_filters = colors or []
     gender_filters = target_genders or []
-    normalized_target_categories = _normalized_categories(target_categories, clean_query)
-    normalized_exclude_categories = _normalized_categories(exclude_categories, None)
+    normalized_target_categories = _normalized_categories(
+        target_categories,
+        clean_query,
+    )
+    normalized_exclude_categories = _normalized_categories(
+        exclude_categories,
+        None,
+    )
+
+    _llmobs_annotate_safe(
+        input_data={
+            "query": clean_query,
+            "target_categories": normalized_target_categories,
+            "exclude_categories": normalized_exclude_categories,
+            "budget_max": budget_max,
+            "colors": color_filters,
+            "current_product_id": current_product_id,
+            "store_id": store_id,
+            "target_genders": gender_filters,
+            "limit": limit,
+        },
+        tags={
+            "workflow": "chat",
+            "tool": "semantic_catalog_cards",
+        },
+    )
+
+    result_cards: list[CatalogProduct] = []
+    strategy = "category_browse_fallback"
+
     for query_variant in _query_variants(clean_query):
         try:
             cards = _semantic_vector_cards(
@@ -404,7 +542,9 @@ def semantic_catalog_cards(
                 limit=limit,
             )
             if cards:
-                return cards, "semantic_catalog_search"
+                result_cards = cards
+                strategy = "semantic_catalog_search"
+                break
         except Exception:
             pass
 
@@ -421,23 +561,47 @@ def semantic_catalog_cards(
             limit=limit,
         )
         if cards:
-            return cards, "sql_text_search_fallback"
+            result_cards = cards
+            strategy = "sql_text_search_fallback"
+            break
 
-    cards = _sql_search_cards(
-        db,
-        query=None,
-        target_categories=normalized_target_categories,
-        exclude_categories=normalized_exclude_categories,
-        target_genders=gender_filters,
-        budget_max=budget_max,
-        colors=color_filters,
-        current_product_id=current_product_id,
-        store_id=store_id,
-        limit=limit,
+    if not result_cards:
+        result_cards = _sql_search_cards(
+            db,
+            query=None,
+            target_categories=normalized_target_categories,
+            exclude_categories=normalized_exclude_categories,
+            target_genders=gender_filters,
+            budget_max=budget_max,
+            colors=color_filters,
+            current_product_id=current_product_id,
+            store_id=store_id,
+            limit=limit,
+        )
+        strategy = "category_browse_fallback"
+
+    _llmobs_annotate_safe(
+        output_data={
+            "strategy": strategy,
+            "card_count": len(result_cards),
+            "product_ids": [card.id for card in result_cards],
+            "top_cards": [
+                {
+                    "id": card.id,
+                    "title": card.title,
+                    "brand": card.brand,
+                    "category": card.category,
+                }
+                for card in result_cards[:10]
+            ],
+        },
     )
-    return cards, "category_browse_fallback"
+
+    return result_cards, strategy
 
 
+
+@tool(name="recommendation_cards")
 def recommendation_cards(
     db: Session,
     *,
@@ -446,6 +610,19 @@ def recommendation_cards(
     category: str | None = None,
     limit: int = 3,
 ) -> list[CatalogProduct]:
+    _llmobs_annotate_safe(
+        input_data={
+            "customer_id_present": bool(customer_id),
+            "store_id": store_id,
+            "category": category,
+            "limit": limit,
+        },
+        tags={
+            "workflow": "chat",
+            "tool": "recommendation_cards",
+        },
+    )
+
     response = recommend_products(
         db,
         ProductRecommendationRequest(
@@ -456,7 +633,30 @@ def recommendation_cards(
             include_preorder=True,
         ),
     )
-    return [row.product for row in response.recommendations]
+
+    cards = [row.product for row in response.recommendations]
+
+    _llmobs_annotate_safe(
+        output_data={
+            "recommendation_count": len(cards),
+            "product_ids": [card.id for card in cards],
+            "top_cards": [
+                {
+                    "id": card.id,
+                    "title": card.title,
+                    "brand": card.brand,
+                    "category": card.category,
+                }
+                for card in cards[:10]
+            ],
+        },
+        metadata={
+            "strategy": response.strategy,
+        },
+    )
+
+    return cards
+
 
 
 def store_info(db: Session, store_id: str | None = None) -> dict:
