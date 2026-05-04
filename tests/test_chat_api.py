@@ -349,7 +349,7 @@ def test_outfit_pairing_prioritizes_apparel_not_current_category(monkeypatch):
 
 
 def test_pairing_policy_overrides_related_products_for_womens_shoe(monkeypatch):
-    def fake_evaluate_chat(message, context, *, history=None):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
         return ChatOrchestrationDecision(
             decision=TriageDecision(
                 intent="general_style",
@@ -397,7 +397,7 @@ def test_outfit_starter_routes_to_complementary_search(monkeypatch):
 
 
 def test_explicit_similar_request_can_use_gender_filtered_related_products(monkeypatch):
-    def fake_evaluate_chat(message, context, *, history=None):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
         return ChatOrchestrationDecision(
             decision=TriageDecision(
                 intent="product_question",
@@ -564,7 +564,7 @@ def test_chat_evaluation_constraints_normalize_null_lists():
 
 
 def test_selected_tool_dispatch_overrides_intent(monkeypatch):
-    def fake_evaluate_chat(message, context, *, history=None):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
         return ChatOrchestrationDecision(
             decision=TriageDecision(
                 intent="general_style",
@@ -616,7 +616,7 @@ def test_store_scoped_chat_search_excludes_out_of_stock_cards(monkeypatch):
 
 
 def test_chat_search_normalizes_evaluator_category_aliases(monkeypatch):
-    def fake_evaluate_chat(message, context, *, history=None):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
         return ChatOrchestrationDecision(
             decision=TriageDecision(
                 intent="catalog_search",
@@ -668,7 +668,7 @@ def test_chat_search_mens_shoes_filters_gender(monkeypatch):
 
 
 def test_chat_search_mens_shoes_uses_message_gender_when_evaluator_omits_it(monkeypatch):
-    def fake_evaluate_chat(message, context, *, history=None):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
         return ChatOrchestrationDecision(
             decision=TriageDecision(
                 intent="catalog_search",
@@ -703,7 +703,7 @@ def test_chat_search_mens_shoes_uses_message_gender_when_evaluator_omits_it(monk
 
 
 def test_chat_search_workwear_alias_browses_mens_apparel(monkeypatch):
-    def fake_evaluate_chat(message, context, *, history=None):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
         return ChatOrchestrationDecision(
             decision=TriageDecision(
                 intent="catalog_search",
@@ -767,7 +767,7 @@ def test_evaluator_receives_recent_chat_history(monkeypatch):
         )
         conversation_id = first_response.json()["conversation_id"]
 
-        def fake_evaluate_chat(message, context, *, history=None):
+        def fake_evaluate_chat(message, context, *, history=None, session_id=None):
             captured["history"] = history or []
             decision = triage_chat("find a blouse", context)
             return ChatOrchestrationDecision(

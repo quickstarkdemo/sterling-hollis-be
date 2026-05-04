@@ -17,7 +17,6 @@ from app.services.chat.schemas import ChatContext
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 
 from ddtrace.llmobs import LLMObs
-from ddtrace.llmobs.decorators import agent
 
 
 logger = logging.getLogger(__name__)
@@ -205,12 +204,12 @@ def _decision_from_evaluation(
     )
 
 
-@agent(name="chat_intake_agent")
 def evaluate_chat(
     message: str,
     context: ChatContext,
     *,
     history: list[dict[str, str]] | None = None,
+    session_id: str | None = None,
 ) -> ChatOrchestrationDecision:
     fallback = triage_chat(message, context)
     settings = get_settings()
@@ -228,145 +227,149 @@ def evaluate_chat(
         "Return the best route using the provided schema."
     )
 
-    _llmobs_annotate_safe(
-        input_data={
-            "message": message,
-            "history_count": len(history or []),
-            "context": summarize_context(context),
-        },
-        tags={
-            "workflow": "chat",
-            "agent": "ChatIntakeAgent",
-        },
-    )
-
-    if not settings.openai_api_key:
-        decision_result = _fallback_decision(
-            message,
-            context,
-            source="deterministic_fallback_no_openai",
+    with LLMObs.agent(name="chat_intake_agent", session_id=session_id) as agent_span:
+        _llmobs_annotate_safe(
+            span=agent_span,
+            input_data={
+                "message": message,
+                "history_count": len(history or []),
+                "context": summarize_context(context),
+            },
+            tags={
+                "workflow": "chat",
+                "agent": "ChatIntakeAgent",
+            },
         )
-    else:
-        try:
-            agent_client = build_chat_intake_agent(settings.chat_orchestration_model)
 
-            with LLMObs.llm(
-                name="chat_intake_llm_call",
-                model_name=settings.chat_orchestration_model,
-                model_provider="openai",
-            ) as llm_span:
-                _llmobs_annotate_safe(
-                    span=llm_span,
-                    input_data=[
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ],
-                    metadata={
-                        "structured_output_model": "ChatEvaluation",
-                        "history_count": len(history or []),
-                    },
-                    tags={
-                        "workflow": "chat",
-                        "agent": "ChatIntakeAgent",
-                    },
-                )
-
-                result = agent_client(prompt, structured_output_model=ChatEvaluation)
-                evaluation = result.structured_output
-
-                if isinstance(evaluation, ChatEvaluation):
-                    _llmobs_annotate_safe(
-                        span=llm_span,
-                        output_data={
-                            "intent": evaluation.intent,
-                            "target_agent": evaluation.target_agent,
-                            "tool": evaluation.tool,
-                            "confidence": evaluation.confidence,
-                            "requires_auth": evaluation.requires_auth,
-                            "constraints": evaluation.constraints.model_dump(mode="json"),
-                            "clarifying_question": evaluation.clarifying_question,
-                            "rationale": evaluation.rationale,
-                        },
-                    )
-                else:
-                    _llmobs_annotate_safe(
-                        span=llm_span,
-                        output_data={
-                            "error": "structured_output_missing_or_invalid",
-                            "output_type": type(evaluation).__name__,
-                        },
-                    )
-            
-            if not isinstance(evaluation, ChatEvaluation):
-                decision_result = _fallback_decision(
-                    message,
-                    context,
-                    source="deterministic_fallback_empty_strands",
-                )
-            elif evaluation.confidence < settings.chat_orchestration_min_confidence:
-                decision_result = _fallback_decision(
-                    message,
-                    context,
-                    source="deterministic_fallback_low_confidence",
-                    confidence=evaluation.confidence,
-                )
-            else:
-                fallback_question = _fallback_followup_question(fallback)
-
-                if fallback_question:
-                    decision_result = ChatOrchestrationDecision(
-                        decision=fallback,
-                        selected_agent=CHAT_AGENT_NAMES["customer_service"],
-                        selected_tool="chat_response",
-                        evaluator_confidence=evaluation.confidence,
-                        evaluator_source="ChatIntakeAgent",
-                        requires_auth=False,
-                        requires_followup=True,
-                        clarifying_question=(
-                            evaluation.clarifying_question or fallback_question
-                        ),
-                    )
-                else:
-                    decision = _decision_from_evaluation(evaluation, fallback)
-                    decision_result = ChatOrchestrationDecision(
-                        decision=decision,
-                        selected_agent=evaluation.target_agent,
-                        selected_tool=evaluation.tool,
-                        evaluator_confidence=evaluation.confidence,
-                        evaluator_source="ChatIntakeAgent",
-                        requires_auth=evaluation.requires_auth,
-                        requires_followup=bool(evaluation.clarifying_question),
-                        clarifying_question=evaluation.clarifying_question,
-                    )
-
-        except Exception as exc:
-            error = type(exc).__name__
-            logger.exception("Chat evaluator failed; falling back to deterministic triage")
+        if not settings.openai_api_key:
             decision_result = _fallback_decision(
                 message,
                 context,
-                source=f"deterministic_fallback_strands_error:{error}",
-                error=error,
+                source="deterministic_fallback_no_openai",
             )
+        else:
+            try:
+                agent_client = build_chat_intake_agent(settings.chat_orchestration_model)
 
-    _llmobs_annotate_safe(
-        output_data={
-            "selected_agent": decision_result.selected_agent,
-            "selected_tool": decision_result.selected_tool,
-            "confidence": decision_result.evaluator_confidence,
-            "source": decision_result.evaluator_source,
-            "requires_auth": decision_result.requires_auth,
-            "requires_followup": decision_result.requires_followup,
-            "clarifying_question": decision_result.clarifying_question,
-            "error": decision_result.evaluator_error,
-            "intent": decision_result.decision.intent,
-            "route": decision_result.decision.route,
-        },
-        metadata={
-            "fallback_reason": fallback.reason,
-        },
-    )
+                with LLMObs.llm(
+                    name="chat_intake_llm_call",
+                    model_name=settings.chat_orchestration_model,
+                    model_provider="openai",
+                    session_id=session_id,
+                ) as llm_span:
+                    _llmobs_annotate_safe(
+                        span=llm_span,
+                        input_data=[
+                            {
+                                "role": "user",
+                                "content": prompt,
+                            }
+                        ],
+                        metadata={
+                            "structured_output_model": "ChatEvaluation",
+                            "history_count": len(history or []),
+                        },
+                        tags={
+                            "workflow": "chat",
+                            "agent": "ChatIntakeAgent",
+                        },
+                    )
 
-    return decision_result
+                    result = agent_client(prompt, structured_output_model=ChatEvaluation)
+                    evaluation = result.structured_output
+
+                    if isinstance(evaluation, ChatEvaluation):
+                        _llmobs_annotate_safe(
+                            span=llm_span,
+                            output_data={
+                                "intent": evaluation.intent,
+                                "target_agent": evaluation.target_agent,
+                                "tool": evaluation.tool,
+                                "confidence": evaluation.confidence,
+                                "requires_auth": evaluation.requires_auth,
+                                "constraints": evaluation.constraints.model_dump(mode="json"),
+                                "clarifying_question": evaluation.clarifying_question,
+                                "rationale": evaluation.rationale,
+                            },
+                        )
+                    else:
+                        _llmobs_annotate_safe(
+                            span=llm_span,
+                            output_data={
+                                "error": "structured_output_missing_or_invalid",
+                                "output_type": type(evaluation).__name__,
+                            },
+                        )
+
+                if not isinstance(evaluation, ChatEvaluation):
+                    decision_result = _fallback_decision(
+                        message,
+                        context,
+                        source="deterministic_fallback_empty_strands",
+                    )
+                elif evaluation.confidence < settings.chat_orchestration_min_confidence:
+                    decision_result = _fallback_decision(
+                        message,
+                        context,
+                        source="deterministic_fallback_low_confidence",
+                        confidence=evaluation.confidence,
+                    )
+                else:
+                    fallback_question = _fallback_followup_question(fallback)
+
+                    if fallback_question:
+                        decision_result = ChatOrchestrationDecision(
+                            decision=fallback,
+                            selected_agent=CHAT_AGENT_NAMES["customer_service"],
+                            selected_tool="chat_response",
+                            evaluator_confidence=evaluation.confidence,
+                            evaluator_source="ChatIntakeAgent",
+                            requires_auth=False,
+                            requires_followup=True,
+                            clarifying_question=(
+                                evaluation.clarifying_question or fallback_question
+                            ),
+                        )
+                    else:
+                        decision = _decision_from_evaluation(evaluation, fallback)
+                        decision_result = ChatOrchestrationDecision(
+                            decision=decision,
+                            selected_agent=evaluation.target_agent,
+                            selected_tool=evaluation.tool,
+                            evaluator_confidence=evaluation.confidence,
+                            evaluator_source="ChatIntakeAgent",
+                            requires_auth=evaluation.requires_auth,
+                            requires_followup=bool(evaluation.clarifying_question),
+                            clarifying_question=evaluation.clarifying_question,
+                        )
+
+            except Exception as exc:
+                error = type(exc).__name__
+                logger.exception("Chat evaluator failed; falling back to deterministic triage")
+                decision_result = _fallback_decision(
+                    message,
+                    context,
+                    source=f"deterministic_fallback_strands_error:{error}",
+                    error=error,
+                )
+
+        _llmobs_annotate_safe(
+            span=agent_span,
+            output_data={
+                "selected_agent": decision_result.selected_agent,
+                "selected_tool": decision_result.selected_tool,
+                "confidence": decision_result.evaluator_confidence,
+                "source": decision_result.evaluator_source,
+                "requires_auth": decision_result.requires_auth,
+                "requires_followup": decision_result.requires_followup,
+                "clarifying_question": decision_result.clarifying_question,
+                "error": decision_result.evaluator_error,
+                "intent": decision_result.decision.intent,
+                "route": decision_result.decision.route,
+            },
+            metadata={
+                "fallback_reason": fallback.reason,
+            },
+        )
+
+        return decision_result
