@@ -24,7 +24,7 @@ from app.services.chat.tools import (
     store_scoped_related_product_cards,
     store_info,
 )
-from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, triage_chat
+from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, gender_targets_from_text, triage_chat
 from ddtrace.llmobs import LLMObs
 from ddtrace.llmobs.decorators import workflow
 
@@ -85,6 +85,10 @@ def _current_product_gender(req: ChatRequest) -> str | None:
 def _current_product_target_genders(req: ChatRequest) -> list[str]:
     gender = _current_product_gender(req)
     return [gender] if gender else []
+
+
+def _target_genders_for_search(req: ChatRequest, decision: TriageDecision) -> list[str]:
+    return decision.constraints.target_genders or gender_targets_from_text(req.message) or _current_product_target_genders(req)
 
 
 def _normalize_context(db: Session, req: ChatRequest) -> ChatRequest:
@@ -428,7 +432,7 @@ def _related_products_response(db: Session, req: ChatRequest, identity: ChatIden
             db,
             current_product_id,
             store_id=req.context.store_id,
-            target_genders=_current_product_target_genders(req),
+            target_genders=_target_genders_for_search(req, decision),
             limit=3,
         )
         if current_product_id
@@ -461,7 +465,7 @@ def _semantic_catalog_response(db: Session, req: ChatRequest, identity: ChatIden
         query=decision.constraints.query,
         target_categories=decision.target_categories,
         exclude_categories=decision.exclude_categories,
-        target_genders=_current_product_target_genders(req),
+        target_genders=_target_genders_for_search(req, decision),
         budget_max=decision.constraints.budget_max,
         colors=decision.constraints.colors,
         current_product_id=current_product_id,

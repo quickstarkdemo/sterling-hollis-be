@@ -25,6 +25,7 @@ class SearchConstraints:
     budget_max: float | None = None
     colors: list[str] = field(default_factory=list)
     materials: list[str] = field(default_factory=list)
+    target_genders: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,7 @@ OUTFIT_TERMS = {
 }
 
 SEARCH_TERMS = {
+    "provide",
     "find",
     "search",
     "show me",
@@ -232,6 +234,18 @@ def _colors(message: str, context: ChatContext, *, include_current: bool) -> lis
     return found
 
 
+def gender_targets_from_text(message: str) -> list[str]:
+    normalized = _normalized(message)
+    targets: list[str] = []
+    if any(term in f" {normalized} " for term in [" men ", " mens ", " men s ", " male ", " boys "]):
+        targets.append("men")
+    if any(term in f" {normalized} " for term in [" women ", " womens ", " women s ", " female ", " girls "]):
+        targets.append("women")
+    if " unisex " in f" {normalized} ":
+        targets.append("unisex")
+    return targets
+
+
 def _current_product_gender(context: ChatContext) -> str | None:
     gender = _current_product_attributes(context).get("gender")
     return gender.lower() if gender else None
@@ -260,6 +274,7 @@ def _semantic_decision(
     budget_max: float | None,
     colors: list[str],
     target_categories: list[str],
+    target_genders: list[str] | None = None,
     exclude_categories: list[str] | None = None,
     use_current_product: bool = False,
 ) -> TriageDecision:
@@ -269,7 +284,12 @@ def _semantic_decision(
         reason=reason,
         target_categories=target_categories,
         exclude_categories=exclude_categories or [],
-        constraints=SearchConstraints(query=query, budget_max=budget_max, colors=colors),
+        constraints=SearchConstraints(
+            query=query,
+            budget_max=budget_max,
+            colors=colors,
+            target_genders=target_genders or [],
+        ),
         use_current_product=use_current_product,
         tool="semantic_catalog_search",
     )
@@ -285,6 +305,7 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
     )
     search = _contains_any(normalized, SEARCH_TERMS)
     budget_max = _budget_max(normalized)
+    target_genders = gender_targets_from_text(normalized)
 
     if normalized in GREETING_TERMS:
         return TriageDecision(intent="general_style", route="agentic_response", reason="greeting", tool="chat_response")
@@ -343,6 +364,7 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
             budget_max=budget_max,
             colors=colors,
             target_categories=[category],
+            target_genders=target_genders,
             exclude_categories=[current_category] if pairing and current_category else [],
             use_current_product=pairing,
         )
@@ -362,6 +384,7 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
             budget_max=budget_max,
             colors=colors,
             target_categories=target_categories,
+            target_genders=target_genders,
             exclude_categories=[current_category],
             use_current_product=bool(current_product_id),
         )
@@ -379,6 +402,7 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
             budget_max=budget_max,
             colors=colors,
             target_categories=[category],
+            target_genders=target_genders,
         )
 
     if search or context.category:
@@ -389,6 +413,7 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
             budget_max=budget_max,
             colors=_colors(normalized, context, include_current=False),
             target_categories=[context.category] if context.category else [],
+            target_genders=target_genders,
         )
 
     return TriageDecision(intent="general_style", route="agentic_response", reason="general shopping question", tool="catalog_recommendations")

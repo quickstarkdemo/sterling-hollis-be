@@ -650,6 +650,58 @@ def test_chat_search_normalizes_evaluator_category_aliases(monkeypatch):
     assert all(card["inventory_summary"]["availability"] != "out_of_stock" for card in payload["cards"])
 
 
+def test_chat_search_mens_shoes_filters_gender(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "Can you provide nice men's shoes?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"shoes"}
+    assert all(card["attributes"].get("gender") == "men" for card in payload["cards"])
+
+
+def test_chat_search_mens_shoes_uses_message_gender_when_evaluator_omits_it(monkeypatch):
+    def fake_evaluate_chat(message, context, *, history=None):
+        return ChatOrchestrationDecision(
+            decision=TriageDecision(
+                intent="catalog_search",
+                route="semantic_catalog_search",
+                reason="llm chose shoes without gender",
+                constraints=SearchConstraints(query="shoe"),
+                target_categories=["shoes"],
+                tool="semantic_catalog_search",
+            ),
+            selected_agent="ProductAgent",
+            selected_tool="semantic_catalog_search",
+            evaluator_confidence=0.98,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fake_evaluate_chat)
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "Can you provide nice men's shoes?",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert {card["category"] for card in payload["cards"]} == {"shoes"}
+    assert all(card["attributes"].get("gender") == "men" for card in payload["cards"])
+
+
 def test_chat_search_workwear_alias_browses_mens_apparel(monkeypatch):
     def fake_evaluate_chat(message, context, *, history=None):
         return ChatOrchestrationDecision(

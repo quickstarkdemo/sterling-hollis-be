@@ -55,6 +55,7 @@ class ChatEvaluationConstraints(BaseModel):
     budget_max: float | None = None
     colors: list[str] = Field(default_factory=list)
     materials: list[str] = Field(default_factory=list)
+    target_genders: list[str] = Field(default_factory=list)
     target_categories: list[str] = Field(default_factory=list)
     exclude_categories: list[str] = Field(default_factory=list)
     order_id: str | None = None
@@ -197,6 +198,7 @@ def _decision_from_evaluation(
             budget_max=constraints.budget_max or fallback.constraints.budget_max,
             colors=constraints.colors or fallback.constraints.colors,
             materials=constraints.materials or fallback.constraints.materials,
+            target_genders=constraints.target_genders or fallback.constraints.target_genders,
         ),
         use_current_product=fallback.use_current_product,
         tool=evaluation.tool,
