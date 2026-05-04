@@ -180,6 +180,9 @@ jobs:
           DD_SITE=${{ secrets.DD_SITE || 'datadoghq.com' }}
           DD_API_KEY=${{ secrets.DD_API_KEY }}
           DD_APP_KEY=${{ secrets.DD_APP_KEY }}
+          DD_AI_GUARD_ENABLED=${{ secrets.DD_AI_GUARD_ENABLED || 'false' }}
+          DD_AI_GUARD_ENDPOINT=${{ secrets.DD_AI_GUARD_ENDPOINT }}
+          DD_AI_GUARD_DEMO_FALLBACK_ENABLED=${{ secrets.DD_AI_GUARD_DEMO_FALLBACK_ENABLED || 'false' }}
           DD_PROFILING_ENABLED=${{ secrets.DD_PROFILING_ENABLED || 'true' }}
           DD_PROFILING_TIMELINE_ENABLED=${{ secrets.DD_PROFILING_TIMELINE_ENABLED || 'true' }}
           DD_RUNTIME_METRICS_ENABLED=${{ secrets.DD_RUNTIME_METRICS_ENABLED || 'true' }}

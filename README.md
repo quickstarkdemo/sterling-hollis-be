@@ -67,6 +67,9 @@ Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic I
 - `DD_AGENT_HOST` and `DD_TRACE_AGENT_PORT` for the Datadog Agent reachable from the app container
 - `DD_ENV`, `DD_SERVICE`, and `DD_VERSION`
 - `DD_SITE`, `DD_API_KEY`, and `DD_APP_KEY`
+- `DD_AI_GUARD_ENABLED=true` to enable the inline chat AI Guard check
+- `DD_AI_GUARD_ENDPOINT` only when overriding the SDK-derived endpoint
+- `DD_AI_GUARD_DEMO_FALLBACK_ENABLED=true` only for local/offline demos
 - `DD_PROFILING_ENABLED=true`
 - `DD_RUNTIME_METRICS_ENABLED=true`
 - `DD_LLMOBS_ENABLED=true`
@@ -149,6 +152,9 @@ Datadog:
 - `DD_SITE`
 - `DD_API_KEY`
 - `DD_APP_KEY`
+- `DD_AI_GUARD_ENABLED`
+- `DD_AI_GUARD_ENDPOINT`
+- `DD_AI_GUARD_DEMO_FALLBACK_ENABLED`
 - `DD_PROFILING_ENABLED`
 - `DD_PROFILING_TIMELINE_ENABLED`
 - `DD_RUNTIME_METRICS_ENABLED`

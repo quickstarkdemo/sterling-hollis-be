@@ -15,6 +15,7 @@ from app.services.auth.clerk import ChatIdentity
 from app.services.chat.context import summarize_context
 from app.services.chat.evaluator import ChatOrchestrationDecision, evaluate_chat
 from app.services.chat.intent_frame import ChatIntentFrame, build_chat_intent_frame
+from app.services.chat.safety import ChatSafetyDecision, evaluate_chat_safety
 from app.services.chat.schemas import ChatAction, ChatCurrentProduct, ChatRequest, ChatResponse, ChatToolTrace
 from app.services.chat.tools import (
     catalog_cards,
@@ -264,7 +265,9 @@ def _apply_pairing_route_policy(req: ChatRequest, orchestration: ChatOrchestrati
     )
 
 
-def _semantic_search_used(response: ChatResponse, orchestration: ChatOrchestrationDecision) -> bool:
+def _semantic_search_used(response: ChatResponse, orchestration: ChatOrchestrationDecision | None) -> bool:
+    if orchestration is None:
+        return False
     if orchestration.selected_tool == "semantic_catalog_search" or response.selected_tool == "semantic_catalog_search":
         return True
     return any(
@@ -273,13 +276,62 @@ def _semantic_search_used(response: ChatResponse, orchestration: ChatOrchestrati
     )
 
 
+def _safety_decision_summary(decision: ChatSafetyDecision | None) -> dict:
+    if decision is None:
+        return {
+            "safety_intercepted": False,
+            "safety_source": "not_evaluated",
+            "safety_action": "not_evaluated",
+            "safety_category": "none",
+        }
+    return {
+        "safety_intercepted": decision.intercepted,
+        "safety_source": decision.source,
+        "safety_action": decision.action,
+        "safety_category": decision.category or "none",
+    }
+
+
+def _safety_prompt_injection_detected(decision: ChatSafetyDecision | None) -> bool:
+    if not decision or not decision.intercepted:
+        return False
+    tags = " ".join(decision.tags).lower()
+    return bool(
+        decision.category == "prompt_injection"
+        or "prompt" in tags
+        or "injection" in tags
+        or "jailbreak" in tags
+        or "system prompt" in tags
+        or "role" in tags
+    )
+
+
+def _safety_data_exfiltration_detected(decision: ChatSafetyDecision | None) -> bool:
+    if not decision or not decision.intercepted:
+        return False
+    tags = " ".join(decision.tags).lower()
+    return bool(
+        decision.category == "data_exfiltration"
+        or "exfil" in tags
+        or "personal" in tags
+        or "customer" in tags
+        or "account" in tags
+        or "password" in tags
+        or "api key" in tags
+        or "token" in tags
+        or "secret" in tags
+    )
+
+
 def _submit_chat_evaluations(
     exported_span,
     *,
     response: ChatResponse,
-    orchestration: ChatOrchestrationDecision,
+    orchestration: ChatOrchestrationDecision | None,
     auth_decision: str,
+    safety_decision: ChatSafetyDecision | None = None,
 ) -> None:
+    safety = _safety_decision_summary(safety_decision)
     metadata = {
         "conversation_id": response.conversation_id,
         "identity_status": response.identity_status,
@@ -289,15 +341,24 @@ def _submit_chat_evaluations(
         "route": response.route,
         "auth_decision": auth_decision,
         "card_count": len(response.cards),
+        **safety,
     }
-    auth_blocked = response.route == "blocked" or auth_decision.startswith("blocked")
+    safety_blocked = bool(safety_decision and safety_decision.intercepted)
+    auth_blocked = (not safety_blocked) and (response.route == "blocked" or auth_decision.startswith("blocked"))
     evaluations = {
-        "chat_route_confidence": orchestration.evaluator_confidence,
+        "chat_route_confidence": orchestration.evaluator_confidence if orchestration else 0.0,
         "chat_auth_blocked": 1.0 if auth_blocked else 0.0,
         "chat_followup_required": 1.0 if response.requires_followup else 0.0,
         "chat_result_card_count": float(len(response.cards)),
         "chat_semantic_search_used": 1.0 if _semantic_search_used(response, orchestration) else 0.0,
-        "chat_fallback_used": 1.0 if orchestration.evaluator_source.startswith("deterministic_fallback") else 0.0,
+        "chat_fallback_used": (
+            1.0
+            if orchestration and orchestration.evaluator_source.startswith("deterministic_fallback")
+            else 0.0
+        ),
+        "chat_safety_blocked": 1.0 if safety_blocked else 0.0,
+        "chat_prompt_injection_detected": 1.0 if _safety_prompt_injection_detected(safety_decision) else 0.0,
+        "chat_data_exfiltration_request": 1.0 if _safety_data_exfiltration_detected(safety_decision) else 0.0,
     }
     for label, value in evaluations.items():
         _llmobs_submit_evaluation_safe(exported_span, label=label, value=value, metadata=metadata)
@@ -350,6 +411,27 @@ def _blocked_response(req: ChatRequest, identity: ChatIdentity, session: ChatSes
         cards=[],
         actions=actions,
         tool_trace=[ChatToolTrace(name="triage", decision=decision.reason)],
+    )
+
+
+def _safety_response(session: ChatSession, identity: ChatIdentity, decision: ChatSafetyDecision) -> ChatResponse:
+    trace_decision = f"{decision.source}; action={decision.action}; category={decision.category or 'none'}"
+    if decision.reason:
+        trace_decision = f"{trace_decision}; reason={decision.reason}"
+    return ChatResponse(
+        conversation_id=session.id,
+        message=decision.content,
+        identity_status=identity.status,
+        route="blocked",
+        intent="account_question",
+        cards=[],
+        actions=[],
+        selected_agent="SafetyGuard",
+        selected_tool="safety_refusal",
+        tool_trace=[
+            ChatToolTrace(name="chat_safety_guard", decision=trace_decision),
+            ChatToolTrace(name="safety_refusal", decision="returned safety refusal"),
+        ],
     )
 
 
@@ -656,6 +738,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
     exported_span = None
     response: ChatResponse | None = None
     orchestration: ChatOrchestrationDecision | None = None
+    safety_decision: ChatSafetyDecision | None = None
     auth_decision = "not_evaluated"
 
     with suppress_genai_otel(), LLMObs.agent(name="sterling_hollis_chat", session_id=session.id) as root_span:
@@ -707,113 +790,187 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     tags={"workflow": "chat"},
                 )
 
-            orchestration = evaluate_chat(
-                req.message,
-                req.context,
-                history=history,
-                session_id=session.id,
-            )
-            if _should_run_pairing_route_policy(req):
-                with LLMObs.task(name="pairing_route_policy", session_id=session.id) as policy_span:
-                    before_tool = orchestration.selected_tool
-                    orchestration = _apply_pairing_route_policy(req, orchestration)
+            with LLMObs.tool(name="chat_safety_guard", session_id=session.id) as safety_span:
+                safety_decision = evaluate_chat_safety(req.message, history=history)
+                _llmobs_annotate_safe(
+                    span=safety_span,
+                    input_data={
+                        "message": req.message,
+                        "conversation_id": session.id,
+                        "history_count": len(history),
+                    },
+                    output_data={
+                        "intercepted": safety_decision.intercepted,
+                        "source": safety_decision.source,
+                        "action": safety_decision.action,
+                        "category": safety_decision.category,
+                        "reason": safety_decision.reason,
+                        "tags": list(safety_decision.tags),
+                    },
+                    tags={
+                        "workflow": "chat",
+                        **_safety_decision_summary(safety_decision),
+                    },
+                )
+
+            if safety_decision.intercepted:
+                auth_decision = f"safety_blocked; source={safety_decision.source}; action={safety_decision.action}"
+
+                with LLMObs.tool(name="persist_user_message", session_id=session.id) as persist_user_span:
+                    user_message = _persist_message(
+                        db,
+                        session.id,
+                        "user",
+                        req.message,
+                        {"context": summarize_context(req.context)},
+                    )
                     _llmobs_annotate_safe(
-                        span=policy_span,
+                        span=persist_user_span,
+                        input_data={"conversation_id": session.id, "role": "user"},
+                        output_data={"message_id": user_message.id},
+                        tags={"workflow": "chat"},
+                    )
+
+                with LLMObs.tool(name="safety_refusal", session_id=session.id) as refusal_span:
+                    response = _safety_response(session, identity, safety_decision)
+                    _llmobs_annotate_safe(
+                        span=refusal_span,
                         input_data={
-                            "message": req.message,
-                            "selected_tool": before_tool,
-                            "current_product_id": _current_product_id(req),
+                            "source": safety_decision.source,
+                            "action": safety_decision.action,
+                            "category": safety_decision.category,
+                            "tags": list(safety_decision.tags),
                         },
                         output_data={
-                            "selected_tool": orchestration.selected_tool,
-                            "selected_agent": orchestration.selected_agent,
-                            "policy_applied": before_tool != orchestration.selected_tool,
-                            "source": orchestration.evaluator_source,
+                            "route": response.route,
+                            "intent": response.intent,
+                            "message": response.message,
+                            "auth_decision": auth_decision,
+                        },
+                        tags={
+                            "workflow": "chat",
+                            "tool": "safety_refusal",
+                            "agent": "SafetyGuard",
+                            **_safety_decision_summary(safety_decision),
+                        },
+                    )
+
+                with LLMObs.task(name="apply_orchestration_trace", session_id=session.id) as trace_span:
+                    _llmobs_annotate_safe(
+                        span=trace_span,
+                        output_data={
+                            "trace_count": len(response.tool_trace),
+                            "selected_agent": response.selected_agent,
+                            "selected_tool": response.selected_tool,
                         },
                         tags={"workflow": "chat"},
                     )
-            decision = orchestration.decision
 
-            with LLMObs.task(name="build_intent_frame", session_id=session.id) as frame_span:
-                frame = build_chat_intent_frame(req, orchestration)
-                _llmobs_annotate_safe(
-                    span=frame_span,
-                    input_data={
-                        "intent": decision.intent,
-                        "route": decision.route,
-                        "selected_tool": orchestration.selected_tool,
-                    },
-                    output_data={
-                        "intent": frame.intent,
-                        "query": frame.query,
-                        "target_categories": frame.target_categories,
-                        "exclude_categories": frame.exclude_categories,
-                        "target_genders": frame.target_genders,
-                        "budget_max": frame.budget_max,
-                        "current_product_id": frame.current_product_id,
-                    },
-                    tags={"workflow": "chat"},
-                )
-
-            with LLMObs.tool(name="persist_user_message", session_id=session.id) as persist_user_span:
-                user_message = _persist_message(
-                    db,
-                    session.id,
-                    "user",
-                    req.message,
-                    {"context": summarize_context(req.context)},
-                )
-                _llmobs_annotate_safe(
-                    span=persist_user_span,
-                    input_data={"conversation_id": session.id, "role": "user"},
-                    output_data={"message_id": user_message.id},
-                    tags={"workflow": "chat"},
-                )
-
-            auth_required = _requires_auth(decision, orchestration)
-            selected_tool = orchestration.selected_tool
-
-            with LLMObs.tool(name="auth_gate", session_id=session.id) as auth_span:
-                will_block = bool(auth_required and identity.status != "authenticated_customer")
-                _llmobs_annotate_safe(
-                    span=auth_span,
-                    input_data={
-                        "selected_tool": selected_tool,
-                        "auth_required": auth_required,
-                        "identity_status": identity.status,
-                    },
-                    output_data={
-                        "blocked": will_block,
-                        "requires_followup": orchestration.requires_followup,
-                    },
-                    tags={
-                        "workflow": "chat",
-                        "tool": selected_tool,
-                        "identity_status": identity.status,
-                    },
-                )
-
-            with LLMObs.tool(name="execute_selected_tool", session_id=session.id) as execute_span:
-                _llmobs_annotate_safe(
-                    span=execute_span,
-                    input_data={
-                        "selected_tool": selected_tool,
-                        "selected_agent": orchestration.selected_agent,
-                        "message": req.message,
-                        "auth_required": auth_required,
-                        "identity_status": identity.status,
-                        "context": summarize_context(req.context),
-                    },
-                    tags={
-                        "workflow": "chat",
-                        "tool": selected_tool,
-                        "agent": orchestration.selected_agent,
-                    },
-                )
-
-                with LLMObs.tool(name=selected_tool, session_id=session.id) as selected_tool_span:
+                with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
+                    assistant = _persist_message(
+                        db,
+                        session.id,
+                        "assistant",
+                        response.message,
+                        response.model_dump(mode="json"),
+                    )
+                    db.commit()
                     _llmobs_annotate_safe(
-                        span=selected_tool_span,
+                        span=persist_assistant_span,
+                        input_data={"conversation_id": session.id, "role": "assistant"},
+                        output_data={"message_id": assistant.id},
+                        tags={"workflow": "chat"},
+                    )
+            else:
+                orchestration = evaluate_chat(
+                    req.message,
+                    req.context,
+                    history=history,
+                    session_id=session.id,
+                )
+                if _should_run_pairing_route_policy(req):
+                    with LLMObs.task(name="pairing_route_policy", session_id=session.id) as policy_span:
+                        before_tool = orchestration.selected_tool
+                        orchestration = _apply_pairing_route_policy(req, orchestration)
+                        _llmobs_annotate_safe(
+                            span=policy_span,
+                            input_data={
+                                "message": req.message,
+                                "selected_tool": before_tool,
+                                "current_product_id": _current_product_id(req),
+                            },
+                            output_data={
+                                "selected_tool": orchestration.selected_tool,
+                                "selected_agent": orchestration.selected_agent,
+                                "policy_applied": before_tool != orchestration.selected_tool,
+                                "source": orchestration.evaluator_source,
+                            },
+                            tags={"workflow": "chat"},
+                        )
+                decision = orchestration.decision
+
+                with LLMObs.task(name="build_intent_frame", session_id=session.id) as frame_span:
+                    frame = build_chat_intent_frame(req, orchestration)
+                    _llmobs_annotate_safe(
+                        span=frame_span,
+                        input_data={
+                            "intent": decision.intent,
+                            "route": decision.route,
+                            "selected_tool": orchestration.selected_tool,
+                        },
+                        output_data={
+                            "intent": frame.intent,
+                            "query": frame.query,
+                            "target_categories": frame.target_categories,
+                            "exclude_categories": frame.exclude_categories,
+                            "target_genders": frame.target_genders,
+                            "budget_max": frame.budget_max,
+                            "current_product_id": frame.current_product_id,
+                        },
+                        tags={"workflow": "chat"},
+                    )
+
+                with LLMObs.tool(name="persist_user_message", session_id=session.id) as persist_user_span:
+                    user_message = _persist_message(
+                        db,
+                        session.id,
+                        "user",
+                        req.message,
+                        {"context": summarize_context(req.context)},
+                    )
+                    _llmobs_annotate_safe(
+                        span=persist_user_span,
+                        input_data={"conversation_id": session.id, "role": "user"},
+                        output_data={"message_id": user_message.id},
+                        tags={"workflow": "chat"},
+                    )
+
+                auth_required = _requires_auth(decision, orchestration)
+                selected_tool = orchestration.selected_tool
+
+                with LLMObs.tool(name="auth_gate", session_id=session.id) as auth_span:
+                    will_block = bool(auth_required and identity.status != "authenticated_customer")
+                    _llmobs_annotate_safe(
+                        span=auth_span,
+                        input_data={
+                            "selected_tool": selected_tool,
+                            "auth_required": auth_required,
+                            "identity_status": identity.status,
+                        },
+                        output_data={
+                            "blocked": will_block,
+                            "requires_followup": orchestration.requires_followup,
+                        },
+                        tags={
+                            "workflow": "chat",
+                            "tool": selected_tool,
+                            "identity_status": identity.status,
+                        },
+                    )
+
+                with LLMObs.tool(name="execute_selected_tool", session_id=session.id) as execute_span:
+                    _llmobs_annotate_safe(
+                        span=execute_span,
                         input_data={
                             "selected_tool": selected_tool,
                             "selected_agent": orchestration.selected_agent,
@@ -829,51 +986,86 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         },
                     )
 
-                    if orchestration.requires_followup and orchestration.clarifying_question:
-                        response = _followup_response(
-                            req,
-                            identity,
-                            session,
-                            decision,
-                            orchestration.clarifying_question,
+                    with LLMObs.tool(name=selected_tool, session_id=session.id) as selected_tool_span:
+                        _llmobs_annotate_safe(
+                            span=selected_tool_span,
+                            input_data={
+                                "selected_tool": selected_tool,
+                                "selected_agent": orchestration.selected_agent,
+                                "message": req.message,
+                                "auth_required": auth_required,
+                                "identity_status": identity.status,
+                                "context": summarize_context(req.context),
+                            },
+                            tags={
+                                "workflow": "chat",
+                                "tool": selected_tool,
+                                "agent": orchestration.selected_agent,
+                            },
                         )
-                        auth_decision = "allowed; followup requested"
-                    elif auth_required and identity.status != "authenticated_customer":
-                        response = _blocked_response(req, identity, session, decision)
-                        auth_decision = f"blocked; tool={selected_tool}"
-                    elif selected_tool == "store_info":
-                        response = _store_info_response(db, req, identity, session, decision)
-                        auth_decision = "allowed; public store info"
-                    elif selected_tool == "service_answer":
-                        response = _service_answer_response(db, req, identity, session, decision)
-                        auth_decision = "allowed; approved service answer"
-                    elif selected_tool == "order_status":
-                        response = _order_status_response(db, req, identity, session, decision)
-                        auth_decision = "allowed; backend-derived customer_id"
-                    elif selected_tool == "related_products":
-                        response = _related_products_response(db, req, identity, session, decision, frame)
-                        auth_decision = "allowed; public catalog"
-                    elif selected_tool == "customer_summary":
-                        response = _account_response(db, identity, session, decision)
-                        auth_decision = "allowed; backend-derived customer_id"
-                    elif selected_tool == "customer_recommendations":
-                        response = _recommendation_response(db, req, identity, session, decision)
-                        auth_decision = "allowed; backend-derived customer_id"
-                    elif selected_tool == "product_detail":
-                        response = _product_context_response(db, req, identity, session, decision)
-                        auth_decision = "allowed; public product context"
-                    elif selected_tool == "semantic_catalog_search":
-                        response = _semantic_catalog_response(db, req, identity, session, decision, frame)
-                        auth_decision = "allowed; public catalog"
-                    elif selected_tool == "chat_response":
-                        response = _general_response(req, identity, session, decision)
-                        auth_decision = "allowed; general response"
-                    else:
-                        response = _general_response(req, identity, session, decision)
-                        auth_decision = f"allowed; unrecognized selected_tool={selected_tool}"
+
+                        if orchestration.requires_followup and orchestration.clarifying_question:
+                            response = _followup_response(
+                                req,
+                                identity,
+                                session,
+                                decision,
+                                orchestration.clarifying_question,
+                            )
+                            auth_decision = "allowed; followup requested"
+                        elif auth_required and identity.status != "authenticated_customer":
+                            response = _blocked_response(req, identity, session, decision)
+                            auth_decision = f"blocked; tool={selected_tool}"
+                        elif selected_tool == "store_info":
+                            response = _store_info_response(db, req, identity, session, decision)
+                            auth_decision = "allowed; public store info"
+                        elif selected_tool == "service_answer":
+                            response = _service_answer_response(db, req, identity, session, decision)
+                            auth_decision = "allowed; approved service answer"
+                        elif selected_tool == "order_status":
+                            response = _order_status_response(db, req, identity, session, decision)
+                            auth_decision = "allowed; backend-derived customer_id"
+                        elif selected_tool == "related_products":
+                            response = _related_products_response(db, req, identity, session, decision, frame)
+                            auth_decision = "allowed; public catalog"
+                        elif selected_tool == "customer_summary":
+                            response = _account_response(db, identity, session, decision)
+                            auth_decision = "allowed; backend-derived customer_id"
+                        elif selected_tool == "customer_recommendations":
+                            response = _recommendation_response(db, req, identity, session, decision)
+                            auth_decision = "allowed; backend-derived customer_id"
+                        elif selected_tool == "product_detail":
+                            response = _product_context_response(db, req, identity, session, decision)
+                            auth_decision = "allowed; public product context"
+                        elif selected_tool == "semantic_catalog_search":
+                            response = _semantic_catalog_response(db, req, identity, session, decision, frame)
+                            auth_decision = "allowed; public catalog"
+                        elif selected_tool == "chat_response":
+                            response = _general_response(req, identity, session, decision)
+                            auth_decision = "allowed; general response"
+                        else:
+                            response = _general_response(req, identity, session, decision)
+                            auth_decision = f"allowed; unrecognized selected_tool={selected_tool}"
+
+                        _llmobs_annotate_safe(
+                            span=selected_tool_span,
+                            output_data={
+                                "route": response.route,
+                                "intent": response.intent,
+                                "message": response.message,
+                                "auth_decision": auth_decision,
+                                "card_count": len(response.cards),
+                                "product_ids": [card.id for card in response.cards],
+                            },
+                            metadata={
+                                "requires_followup": response.requires_followup,
+                                "selected_agent": response.selected_agent,
+                                "selected_tool": response.selected_tool,
+                            },
+                        )
 
                     _llmobs_annotate_safe(
-                        span=selected_tool_span,
+                        span=execute_span,
                         output_data={
                             "route": response.route,
                             "intent": response.intent,
@@ -889,66 +1081,49 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         },
                     )
 
-                _llmobs_annotate_safe(
-                    span=execute_span,
-                    output_data={
-                        "route": response.route,
-                        "intent": response.intent,
-                        "message": response.message,
-                        "auth_decision": auth_decision,
-                        "card_count": len(response.cards),
-                        "product_ids": [card.id for card in response.cards],
-                    },
-                    metadata={
-                        "requires_followup": response.requires_followup,
-                        "selected_agent": response.selected_agent,
-                        "selected_tool": response.selected_tool,
-                    },
-                )
-
-            with LLMObs.task(name="apply_orchestration_trace", session_id=session.id) as trace_span:
-                response = _apply_orchestration_trace(
-                    response,
-                    orchestration,
-                    frame,
-                    auth_decision=auth_decision,
-                )
-                _llmobs_annotate_safe(
-                    span=trace_span,
-                    output_data={
-                        "trace_count": len(response.tool_trace),
-                        "selected_agent": response.selected_agent,
-                        "selected_tool": response.selected_tool,
-                    },
-                    tags={"workflow": "chat"},
-                )
-
-            with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
-                assistant = _persist_message(
-                    db,
-                    session.id,
-                    "assistant",
-                    response.message,
-                    response.model_dump(mode="json"),
-                )
-
-                for call in (
-                    db.query(ChatToolCall)
-                    .filter(
-                        ChatToolCall.session_id == session.id,
-                        ChatToolCall.message_id.is_(None),
+                with LLMObs.task(name="apply_orchestration_trace", session_id=session.id) as trace_span:
+                    response = _apply_orchestration_trace(
+                        response,
+                        orchestration,
+                        frame,
+                        auth_decision=auth_decision,
                     )
-                    .all()
-                ):
-                    call.message_id = assistant.id
+                    _llmobs_annotate_safe(
+                        span=trace_span,
+                        output_data={
+                            "trace_count": len(response.tool_trace),
+                            "selected_agent": response.selected_agent,
+                            "selected_tool": response.selected_tool,
+                        },
+                        tags={"workflow": "chat"},
+                    )
 
-                db.commit()
-                _llmobs_annotate_safe(
-                    span=persist_assistant_span,
-                    input_data={"conversation_id": session.id, "role": "assistant"},
-                    output_data={"message_id": assistant.id},
-                    tags={"workflow": "chat"},
-                )
+                with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
+                    assistant = _persist_message(
+                        db,
+                        session.id,
+                        "assistant",
+                        response.message,
+                        response.model_dump(mode="json"),
+                    )
+
+                    for call in (
+                        db.query(ChatToolCall)
+                        .filter(
+                            ChatToolCall.session_id == session.id,
+                            ChatToolCall.message_id.is_(None),
+                        )
+                        .all()
+                    ):
+                        call.message_id = assistant.id
+
+                    db.commit()
+                    _llmobs_annotate_safe(
+                        span=persist_assistant_span,
+                        input_data={"conversation_id": session.id, "role": "assistant"},
+                        output_data={"message_id": assistant.id},
+                        tags={"workflow": "chat"},
+                    )
 
             _llmobs_annotate_safe(
                 span=workflow_span,
@@ -965,12 +1140,14 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 },
                 metadata={
                     "auth_decision": auth_decision,
+                    **_safety_decision_summary(safety_decision),
                 },
                 tags={
                     "selected_agent": response.selected_agent,
                     "selected_tool": response.selected_tool,
                     "intent": response.intent,
                     "route": response.route,
+                    **_safety_decision_summary(safety_decision),
                 },
             )
 
@@ -996,6 +1173,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 "auth_decision": auth_decision,
                 "conversation_id": response.conversation_id,
                 "card_count": len(response.cards),
+                **_safety_decision_summary(safety_decision),
             },
             tags={
                 "identity_status": response.identity_status,
@@ -1004,16 +1182,17 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 "intent": response.intent,
                 "route": response.route,
                 "conversation_id": response.conversation_id,
+                **_safety_decision_summary(safety_decision),
             },
         )
         exported_span = _llmobs_export_span_safe(root_span)
 
     assert response is not None
-    assert orchestration is not None
     _submit_chat_evaluations(
         exported_span,
         response=response,
         orchestration=orchestration,
         auth_decision=auth_decision,
+        safety_decision=safety_decision,
     )
     return response
