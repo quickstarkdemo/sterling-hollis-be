@@ -728,85 +728,85 @@ def _image_sql_recommendations(
         for score, row, reasons in ranked[: req.top_k]
     ]
 
-    @trace_genai_tool(
-        "product_recommendation_ranking",
-        tool_type="ranking",
-        attributes=lambda db, req, analysis: {
-            "app.recommendations.top_k": req.top_k,
-            "app.filters.store_id": req.store_id,
-            "app.filters.category": req.category,
-            "app.filters.brand": req.brand,
-            "app.filters.budget_min": req.budget_min,
-            "app.filters.budget_max": req.budget_max,
-            "app.filters.include_preorder": req.include_preorder,
-            "app.image_analysis.confidence": analysis.confidence,
-            "app.image_analysis.target_categories": analysis.target_categories,
+@trace_genai_tool(
+    "product_recommendation_ranking",
+    tool_type="ranking",
+    attributes=lambda db, req, analysis: {
+        "app.recommendations.top_k": req.top_k,
+        "app.filters.store_id": req.store_id,
+        "app.filters.category": req.category,
+        "app.filters.brand": req.brand,
+        "app.filters.budget_min": req.budget_min,
+        "app.filters.budget_max": req.budget_max,
+        "app.filters.include_preorder": req.include_preorder,
+        "app.image_analysis.confidence": analysis.confidence,
+        "app.image_analysis.target_categories": analysis.target_categories,
+    },
+)
+def recommend_products_from_image_analysis(
+    db: Session,
+    req: ProductRecommendationRequest,
+    analysis: ImageAnalysisAttributes,
+) -> ImageRecommendationResponse:
+    span = current_genai_span()
+
+    record_tool_call(
+        span,
+        arguments={
+            "top_k": req.top_k,
+            "store_id": req.store_id,
+            "category": req.category,
+            "brand": req.brand,
+            "budget_min": req.budget_min,
+            "budget_max": req.budget_max,
+            "include_preorder": req.include_preorder,
+            "target_categories": analysis.target_categories,
+            "style_keywords": analysis.style_keywords[:10],
+        },
+        description="Rank catalog products using vector results first, then SQL keyword fallback.",
+    )
+
+    vector_rows = _image_vector_recommendations(db, req, analysis)
+
+    if vector_rows:
+        response = ImageRecommendationResponse(
+            analysis=analysis,
+            recommendations=vector_rows,
+            strategy="catalog_vector_image",
+        )
+    else:
+        response = ImageRecommendationResponse(
+            analysis=analysis,
+            recommendations=_image_sql_recommendations(db, req, analysis),
+            strategy="sql_catalog_image_rules",
+        )
+
+    set_span_attributes(
+        span,
+        {
+            "app.recommendations.strategy": response.strategy,
+            "app.recommendations.count": len(response.recommendations),
         },
     )
-    def recommend_products_from_image_analysis(
-        db: Session,
-        req: ProductRecommendationRequest,
-        analysis: ImageAnalysisAttributes,
-    ) -> ImageRecommendationResponse:
-        span = current_genai_span()
 
-        record_tool_call(
-            span,
-            arguments={
-                "top_k": req.top_k,
-                "store_id": req.store_id,
-                "category": req.category,
-                "brand": req.brand,
-                "budget_min": req.budget_min,
-                "budget_max": req.budget_max,
-                "include_preorder": req.include_preorder,
-                "target_categories": analysis.target_categories,
-                "style_keywords": analysis.style_keywords[:10],
-            },
-            description="Rank catalog products using vector results first, then SQL keyword fallback.",
-        )
+    record_tool_call(
+        span,
+        result={
+            "strategy": response.strategy,
+            "recommendation_count": len(response.recommendations),
+            "product_ids": [row.product.id for row in response.recommendations],
+            "top_recommendations": [
+                {
+                    "id": row.product.id,
+                    "title": row.product.title,
+                    "brand": row.product.brand,
+                    "category": row.product.category,
+                    "score": row.score,
+                    "strategy": row.strategy,
+                }
+                for row in response.recommendations[:10]
+            ],
+        },
+    )
 
-        vector_rows = _image_vector_recommendations(db, req, analysis)
-
-        if vector_rows:
-            response = ImageRecommendationResponse(
-                analysis=analysis,
-                recommendations=vector_rows,
-                strategy="catalog_vector_image",
-            )
-        else:
-            response = ImageRecommendationResponse(
-                analysis=analysis,
-                recommendations=_image_sql_recommendations(db, req, analysis),
-                strategy="sql_catalog_image_rules",
-            )
-
-        set_span_attributes(
-            span,
-            {
-                "app.recommendations.strategy": response.strategy,
-                "app.recommendations.count": len(response.recommendations),
-            },
-        )
-
-        record_tool_call(
-            span,
-            result={
-                "strategy": response.strategy,
-                "recommendation_count": len(response.recommendations),
-                "product_ids": [row.product.id for row in response.recommendations],
-                "top_recommendations": [
-                    {
-                        "id": row.product.id,
-                        "title": row.product.title,
-                        "brand": row.product.brand,
-                        "category": row.product.category,
-                        "score": row.score,
-                        "strategy": row.strategy,
-                    }
-                    for row in response.recommendations[:10]
-                ],
-            },
-        )
-
-        return response
+    return response
