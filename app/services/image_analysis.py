@@ -13,9 +13,6 @@ from app.config import get_settings
 from app.schemas import StyleConstraints
 from app.services.taxonomy import CATEGORY_TAXONOMY
 
-from ddtrace.llmobs.decorators import llm
-from app.observability.llmobs import annotate_safe
-
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
@@ -230,7 +227,6 @@ class ImageAnalysisService:
     def enabled(self) -> bool:
         return self.client is not None
 
-    @llm(name="openai_image_analysis", model_name="gpt-5.5", model_provider="openai")
     def analyze(
         self, image_bytes: bytes, mime_type: str, *, context: str | None = None
     ) -> ImageAnalysisResponse:
@@ -250,18 +246,6 @@ class ImageAnalysisService:
         )
         image_url = (
             f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
-        )
-        annotate_safe(
-            input_data={
-                "mime_type": mime_type,
-                "image_bytes": len(image_bytes),
-                "has_context": bool(context),
-                "context_length": len(context or ""),
-                "detail": self.detail,
-            },
-            metadata={
-                "schema_name": "consumer_image_analysis",
-            },
         )
 
         response = self.client.responses.create(
@@ -292,19 +276,6 @@ class ImageAnalysisService:
         if not raw_text:
             raise RuntimeError("OpenAI image analysis returned no text output.")
         analysis = _normalize_analysis(json.loads(raw_text))
-        
-        annotate_safe(
-            output_data={
-                "summary": analysis.summary[:300],
-                "target_categories": analysis.target_categories,
-                "exclude_categories": analysis.exclude_categories,
-                "colors": analysis.colors,
-                "materials": analysis.materials,
-                "style_keywords": analysis.style_keywords,
-                "confidence": analysis.confidence,
-            },
-            metadata={"model": self.model},
-        )
 
         return ImageAnalysisResponse(
             analysis=analysis,

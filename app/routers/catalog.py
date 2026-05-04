@@ -3,8 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
-from ddtrace.llmobs.decorators import workflow
-from app.observability.llmobs import annotate_safe
+
+from app.observability.genai_otel import (
+    current_genai_span,
+    record_genai_output,
+    set_span_attributes,
+    trace_genai_workflow,
+)
 
 from app.catalog.schemas import (
     CatalogIndexResponse,
@@ -323,7 +328,10 @@ async def image_analysis(
 
 
 @router.post("/recommendations/image", response_model=ImageRecommendationResponse)
-@workflow(name="style_finder_image_recommendations", _automatic_io_annotation=False)
+@trace_genai_workflow(
+    "style_finder_image_recommendations",
+    attributes={"app.workflow": "style_finder"},
+)
 async def image_recommendations(
     image: UploadFile = File(..., description="Consumer image to analyze for recommendations. JPEG, PNG, or WebP."),
     context: str | None = Form(default=None, description="Optional frontend context to guide analysis."),
@@ -352,19 +360,20 @@ async def image_recommendations(
     try:
         image_bytes, mime_type = await read_validated_image(image)
 
-        annotate_safe(
-            input_data={
-                "mime_type": mime_type,
-                "image_bytes": len(image_bytes),
-                "store_id": store_id,
-                "category": category,
-                "brand": brand,
-                "budget_min": budget_min,
-                "budget_max": budget_max,
-                "top_k": top_k,
-                "include_preorder": include_preorder,
+        span = current_genai_span()
+        set_span_attributes(
+            span,
+            {
+                "app.image.mime_type": mime_type,
+                "app.image.bytes": len(image_bytes),
+                "app.recommendations.top_k": top_k,
+                "app.filters.store_id": store_id,
+                "app.filters.category": category,
+                "app.filters.brand": brand,
+                "app.filters.budget_min": budget_min,
+                "app.filters.budget_max": budget_max,
+                "app.filters.include_preorder": include_preorder,
             },
-            tags={"workflow": "style_finder"},
         )
 
         analysis_response = ImageAnalysisService().analyze(
@@ -379,17 +388,27 @@ async def image_recommendations(
             analysis_response.analysis,
         )
 
-        annotate_safe(
-            output_data={
-                "strategy": response.strategy,
-                "recommendation_count": len(response.recommendations),
-                "product_ids": [row.product.id for row in response.recommendations],
-                "analysis_confidence": response.analysis.confidence,
-                "target_categories": response.analysis.target_categories,
-            },
-            metadata={
-                "analysis_summary": response.analysis.summary[:300],
-            },
+        record_genai_output(
+            span,
+            [
+                {
+                    "role": "assistant",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "content": {
+                                "strategy": response.strategy,
+                                "recommendation_count": len(response.recommendations),
+                                "product_ids": [
+                                    row.product.id for row in response.recommendations
+                                ],
+                                "analysis_confidence": response.analysis.confidence,
+                                "target_categories": response.analysis.target_categories,
+                            },
+                        }
+                    ],
+                }
+            ],
         )
 
         return response

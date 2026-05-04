@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from app.config import get_settings
 
-from ddtrace.llmobs.decorators import retrieval
-from app.observability.llmobs import annotate_safe
-
 try:
     from pinecone import Pinecone, ServerlessSpec
 except Exception:  # pragma: no cover
@@ -48,7 +45,6 @@ class PineconeService:
         assert self.index is not None
         self.index.upsert(vectors=vectors, namespace=namespace)
 
-    @retrieval(name="pinecone_catalog_query", _automatic_io_annotation=False)
     def query(
         self,
         namespace: str,
@@ -56,20 +52,6 @@ class PineconeService:
         top_k: int,
         filters: dict | None = None,
     ) -> list[dict]:
-
-        annotate_safe(
-            input_data={
-                "namespace": namespace,
-                "top_k": top_k,
-                "filters": filters or {},
-                "vector_dimension": len(vector),
-            },
-            metadata={
-                "index_name": self.settings.pinecone_index_name,
-                "enabled": self.enabled,
-            },
-        )
-
         if not self.enabled:
             return []
         assert self.index is not None
@@ -95,17 +77,6 @@ class PineconeService:
                         m.metadata if hasattr(m, "metadata") else m.get("metadata", {})
                     ),
                 }
-            )
-            annotate_safe(
-                output_data=[
-                    {
-                        "id": match["id"],
-                        "score": match["score"],
-                        "name": match["metadata"].get("title") or match["id"],
-                    }
-                    for match in matches[:10]
-                ],
-                metadata={"match_count": len(matches)},
             )
 
         return matches

@@ -6,9 +6,6 @@ from typing import Sequence
 
 from app.config import get_settings
 
-from ddtrace.llmobs.decorators import embedding
-from app.observability.llmobs import annotate_safe
-
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
@@ -38,29 +35,14 @@ class EmbeddingService:
         norm = math.sqrt(sum(v * v for v in values)) or 1.0
         return [v / norm for v in values]
 
-    @embedding(
-        name="openai_text_embeddings",
-        model_name="text-embedding-3-small",
-        model_provider="openai",
-    )
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        annotate_safe(...)
-
         if not texts:
-            vectors = []
+            return []
         elif self.client is None:
-            vectors = [self._deterministic_vector(t) for t in texts]
-        else:
-            resp = self.client.embeddings.create(model=self.model, input=list(texts))
-            vectors = [item.embedding for item in resp.data]
+            return [self._deterministic_vector(t) for t in texts]
 
-        annotate_safe(
-            output_data={
-                "vector_count": len(vectors),
-                "dimension": len(vectors[0]) if vectors else 0,
-            },
-        )
-        return vectors
+        resp = self.client.embeddings.create(model=self.model, input=list(texts))
+        return [item.embedding for item in resp.data]
 
 
     def embed_text(self, text: str) -> list[float]:
