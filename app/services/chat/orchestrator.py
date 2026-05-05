@@ -17,6 +17,7 @@ from app.services.chat.evaluator import ChatOrchestrationDecision, evaluate_chat
 from app.services.chat.intent_frame import ChatIntentFrame, build_chat_intent_frame
 from app.services.chat.safety import ChatSafetyDecision, evaluate_chat_safety
 from app.services.chat.schemas import ChatAction, ChatCurrentProduct, ChatRequest, ChatResponse, ChatToolTrace
+from app.services.chat.strands_orchestrator import persist_strands_tool_calls, run_storefront_shopping_agent
 from app.services.chat.tools import (
     catalog_cards,
     customer_summary,
@@ -81,6 +82,7 @@ def _actions_for_cards(cards: list[CatalogProduct]) -> list[ChatAction]:
 
 
 AUTH_REQUIRED_TOOLS = {"customer_recommendations", "customer_summary", "order_status"}
+STRANDS_PUBLIC_TOOLS = {"semantic_catalog_search", "related_products", "product_detail", "store_info"}
 SIMILAR_PRODUCT_TERMS = {
     "similar",
     "more like this",
@@ -235,6 +237,35 @@ def _requires_auth(decision: TriageDecision, orchestration: ChatOrchestrationDec
         decision.requires_customer
         or orchestration.requires_auth
         or orchestration.selected_tool in AUTH_REQUIRED_TOOLS
+    )
+
+
+def _settings_enable_strands_product() -> bool:
+    from app.config import get_settings
+
+    return get_settings().chat_orchestration_mode == "strands_product"
+
+
+def _strands_candidate_decision(req: ChatRequest, identity: ChatIdentity) -> ChatOrchestrationDecision | None:
+    if not _settings_enable_strands_product():
+        return None
+    decision = triage_chat(req.message, req.context)
+    selected_tool = decision.tool if decision.tool in STRANDS_PUBLIC_TOOLS else "chat_response"
+    if selected_tool not in STRANDS_PUBLIC_TOOLS:
+        return None
+    if decision.requires_customer or selected_tool in AUTH_REQUIRED_TOOLS:
+        return None
+    if identity.status not in {"anonymous", "authenticated_customer", "authenticated_unlinked"}:
+        return None
+    return ChatOrchestrationDecision(
+        decision=decision,
+        selected_agent="StorefrontShoppingAgent",
+        selected_tool="strands_agent",
+        evaluator_confidence=1.0,
+        evaluator_source="deterministic_strands_product_eligibility",
+        requires_auth=False,
+        requires_followup=False,
+        clarifying_question=None,
     )
 
 
@@ -731,6 +762,53 @@ def _recommendation_response(db: Session, req: ChatRequest, identity: ChatIdenti
         tool_trace=[ChatToolTrace(name="triage", decision=decision.reason), ChatToolTrace(name=tool_name, decision="backend-derived customer_id" if identity.customer_id else "anonymous catalog context")],
     )
 
+
+def _execute_selected_tool_response(
+    db: Session,
+    req: ChatRequest,
+    identity: ChatIdentity,
+    session: ChatSession,
+    decision: TriageDecision,
+    orchestration: ChatOrchestrationDecision,
+    frame: ChatIntentFrame,
+    *,
+    auth_required: bool,
+    selected_tool: str,
+) -> tuple[ChatResponse, str]:
+    if orchestration.requires_followup and orchestration.clarifying_question:
+        return (
+            _followup_response(
+                req,
+                identity,
+                session,
+                decision,
+                orchestration.clarifying_question,
+            ),
+            "allowed; followup requested",
+        )
+    if auth_required and identity.status != "authenticated_customer":
+        return _blocked_response(req, identity, session, decision), f"blocked; tool={selected_tool}"
+    if selected_tool == "store_info":
+        return _store_info_response(db, req, identity, session, decision), "allowed; public store info"
+    if selected_tool == "service_answer":
+        return _service_answer_response(db, req, identity, session, decision), "allowed; approved service answer"
+    if selected_tool == "order_status":
+        return _order_status_response(db, req, identity, session, decision), "allowed; backend-derived customer_id"
+    if selected_tool == "related_products":
+        return _related_products_response(db, req, identity, session, decision, frame), "allowed; public catalog"
+    if selected_tool == "customer_summary":
+        return _account_response(db, identity, session, decision), "allowed; backend-derived customer_id"
+    if selected_tool == "customer_recommendations":
+        return _recommendation_response(db, req, identity, session, decision), "allowed; backend-derived customer_id"
+    if selected_tool == "product_detail":
+        return _product_context_response(db, req, identity, session, decision), "allowed; public product context"
+    if selected_tool == "semantic_catalog_search":
+        return _semantic_catalog_response(db, req, identity, session, decision, frame), "allowed; public catalog"
+    if selected_tool == "chat_response":
+        return _general_response(req, identity, session, decision), "allowed; general response"
+    return _general_response(req, identity, session, decision), f"allowed; unrecognized selected_tool={selected_tool}"
+
+
 def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatResponse:
     original_context = summarize_context(req.context)
     req = _normalize_context(db, req)
@@ -882,13 +960,20 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         tags={"workflow": "chat"},
                     )
             else:
-                orchestration = evaluate_chat(
-                    req.message,
-                    req.context,
-                    history=history,
-                    session_id=session.id,
-                )
-                if _should_run_pairing_route_policy(req):
+                strands_tool_calls = []
+                using_strands = False
+                strands_selected_tool: str | None = None
+                orchestration = _strands_candidate_decision(req, identity)
+                if orchestration is None:
+                    orchestration = evaluate_chat(
+                        req.message,
+                        req.context,
+                        history=history,
+                        session_id=session.id,
+                    )
+                else:
+                    using_strands = True
+                if not using_strands and _should_run_pairing_route_policy(req):
                     with LLMObs.task(name="pairing_route_policy", session_id=session.id) as policy_span:
                         before_tool = orchestration.selected_tool
                         orchestration = _apply_pairing_route_policy(req, orchestration)
@@ -1004,48 +1089,53 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             },
                         )
 
-                        if orchestration.requires_followup and orchestration.clarifying_question:
-                            response = _followup_response(
+                        if using_strands:
+                            strands_result = run_storefront_shopping_agent(
+                                db,
+                                req=req,
+                                identity=identity,
+                                session=session,
+                                decision=decision,
+                                frame=frame,
+                                history=history,
+                            )
+                            strands_tool_calls = strands_result.tool_calls
+                            if strands_result.response is not None:
+                                response = strands_result.response
+                                strands_selected_tool = response.selected_tool
+                                auth_decision = "allowed; strands public storefront orchestration"
+                            else:
+                                fallback_tool = decision.tool if decision.tool in STRANDS_PUBLIC_TOOLS else "chat_response"
+                                response, auth_decision = _execute_selected_tool_response(
+                                    db,
+                                    req,
+                                    identity,
+                                    session,
+                                    decision,
+                                    replace(orchestration, selected_tool=fallback_tool),
+                                    frame,
+                                    auth_required=False,
+                                    selected_tool=fallback_tool,
+                                )
+                                response.tool_trace.append(
+                                    ChatToolTrace(
+                                        name="StrandsAgent",
+                                        decision=f"fallback_to_deterministic; error={strands_result.error or 'unknown'}",
+                                    )
+                                )
+                                strands_selected_tool = fallback_tool
+                        else:
+                            response, auth_decision = _execute_selected_tool_response(
+                                db,
                                 req,
                                 identity,
                                 session,
                                 decision,
-                                orchestration.clarifying_question,
+                                orchestration,
+                                frame,
+                                auth_required=auth_required,
+                                selected_tool=selected_tool,
                             )
-                            auth_decision = "allowed; followup requested"
-                        elif auth_required and identity.status != "authenticated_customer":
-                            response = _blocked_response(req, identity, session, decision)
-                            auth_decision = f"blocked; tool={selected_tool}"
-                        elif selected_tool == "store_info":
-                            response = _store_info_response(db, req, identity, session, decision)
-                            auth_decision = "allowed; public store info"
-                        elif selected_tool == "service_answer":
-                            response = _service_answer_response(db, req, identity, session, decision)
-                            auth_decision = "allowed; approved service answer"
-                        elif selected_tool == "order_status":
-                            response = _order_status_response(db, req, identity, session, decision)
-                            auth_decision = "allowed; backend-derived customer_id"
-                        elif selected_tool == "related_products":
-                            response = _related_products_response(db, req, identity, session, decision, frame)
-                            auth_decision = "allowed; public catalog"
-                        elif selected_tool == "customer_summary":
-                            response = _account_response(db, identity, session, decision)
-                            auth_decision = "allowed; backend-derived customer_id"
-                        elif selected_tool == "customer_recommendations":
-                            response = _recommendation_response(db, req, identity, session, decision)
-                            auth_decision = "allowed; backend-derived customer_id"
-                        elif selected_tool == "product_detail":
-                            response = _product_context_response(db, req, identity, session, decision)
-                            auth_decision = "allowed; public product context"
-                        elif selected_tool == "semantic_catalog_search":
-                            response = _semantic_catalog_response(db, req, identity, session, decision, frame)
-                            auth_decision = "allowed; public catalog"
-                        elif selected_tool == "chat_response":
-                            response = _general_response(req, identity, session, decision)
-                            auth_decision = "allowed; general response"
-                        else:
-                            response = _general_response(req, identity, session, decision)
-                            auth_decision = f"allowed; unrecognized selected_tool={selected_tool}"
 
                         _llmobs_annotate_safe(
                             span=selected_tool_span,
@@ -1088,6 +1178,10 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         frame,
                         auth_decision=auth_decision,
                     )
+                    if using_strands:
+                        response.selected_agent = "StorefrontShoppingAgent"
+                        if strands_selected_tool:
+                            response.selected_tool = strands_selected_tool
                     _llmobs_annotate_safe(
                         span=trace_span,
                         output_data={
@@ -1116,6 +1210,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         .all()
                     ):
                         call.message_id = assistant.id
+                    persist_strands_tool_calls(
+                        db,
+                        session_id=session.id,
+                        message_id=assistant.id,
+                        tool_calls=strands_tool_calls,
+                        make_id=_id,
+                    )
 
                     db.commit()
                     _llmobs_annotate_safe(

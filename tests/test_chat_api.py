@@ -12,13 +12,16 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
+from app.models import ChatToolCall, Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
 from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecision
 from app.services.chat.evaluator import ChatEvaluationConstraints
 from app.services.chat.safety import ChatSafetyDecision
+from app.services.chat.schemas import ChatAction, ChatResponse, ChatToolTrace
+from app.services.chat.strands_orchestrator import CapturedToolCall, StrandsRunResult
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
+from app.services.chat.tools import catalog_cards
 from tests.test_catalog_api import _product
 
 
@@ -352,6 +355,170 @@ def _patch_chat_llmobs(monkeypatch, fake=_FakeLLMObs):
     monkeypatch.setattr("app.services.chat.evaluator.LLMObs", fake)
     monkeypatch.setattr("app.services.chat.tools.LLMObs", fake)
     return fake
+
+
+def _enable_strands_product(monkeypatch):
+    monkeypatch.setenv("CHAT_ORCHESTRATION_MODE", "strands_product")
+    get_settings.cache_clear()
+
+
+def _strands_response(session_id, identity_status, *, message, intent, route, cards, selected_tool, tool_name=None):
+    return ChatResponse(
+        conversation_id=session_id,
+        message=message,
+        identity_status=identity_status,
+        intent=intent,
+        route=route,
+        cards=cards,
+        actions=[
+            ChatAction(type="view_product", label=f"View {card.title}", href=f"/product/{card.id}", product_id=card.id)
+            for card in cards
+        ],
+        tool_trace=[
+            ChatToolTrace(name="StrandsAgent", decision="mocked storefront shopping orchestration"),
+            ChatToolTrace(name=tool_name or selected_tool, decision=f"product_ids={','.join(card.id for card in cards) or 'none'}"),
+        ],
+        selected_agent="StorefrontShoppingAgent",
+        selected_tool=selected_tool,
+    )
+
+
+def test_strands_product_mode_uses_storefront_agent_for_catalog_search(monkeypatch):
+    captured = {}
+
+    def fail_evaluate_chat(*_args, **_kwargs):
+        raise AssertionError("Strands product mode should bypass OpenAI intake for eligible public product turns")
+
+    def fake_run_storefront_shopping_agent(db, *, req, identity, session, decision, frame, history):
+        cards = catalog_cards(db, store_id=req.context.store_id, query="moisturizer", limit=1)
+        captured["frame"] = frame
+        captured["history"] = history
+        output = {"cards": [card.model_dump(mode="json") for card in cards], "product_ids": [card.id for card in cards]}
+        return StrandsRunResult(
+            response=_strands_response(
+                session.id,
+                identity.status,
+                message="I found a moisturizer that fits.",
+                intent="catalog_search",
+                route="semantic_catalog_search",
+                cards=cards,
+                selected_tool="semantic_catalog_search",
+            ),
+            tool_calls=[
+                CapturedToolCall(
+                    name="semantic_catalog_search",
+                    input_json={"query": "moisturizer"},
+                    output_json=output,
+                )
+            ],
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", fail_evaluate_chat)
+    monkeypatch.setattr("app.services.chat.orchestrator.run_storefront_shopping_agent", fake_run_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, SessionLocal):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "do you have a moisturizer under $150",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+        with SessionLocal() as session:
+            stored_calls = session.scalars(select(ChatToolCall)).all()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_agent"] == "StorefrontShoppingAgent"
+    assert payload["selected_tool"] == "semantic_catalog_search"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert any(trace["name"] == "StrandsAgent" for trace in payload["tool_trace"])
+    assert captured["frame"].query == "moisturizer"
+    assert captured["history"] == []
+    assert [call.tool_name for call in stored_calls] == ["semantic_catalog_search"]
+
+
+def test_strands_product_mode_passes_recent_history(monkeypatch):
+    captured = {}
+
+    def fake_run_storefront_shopping_agent(db, *, req, identity, session, decision, frame, history):
+        cards = catalog_cards(db, store_id=req.context.store_id, query="blouse", limit=1)
+        captured["history"] = history
+        return StrandsRunResult(
+            response=_strands_response(
+                session.id,
+                identity.status,
+                message="I found a blouse for that outfit.",
+                intent="complementary_products",
+                route="semantic_catalog_search",
+                cards=cards,
+                selected_tool="strands_agent",
+                tool_name="semantic_catalog_search",
+            )
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.run_storefront_shopping_agent", fake_run_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        first_response = client.post("/api/chat", json=_chat_payload("Hello", current_product_id="prod_5"))
+        conversation_id = first_response.json()["conversation_id"]
+        response = client.post(
+            "/api/chat",
+            json={
+                **_chat_payload(
+                    "find a blouse that goes with this purse",
+                    current_product_id="prod_5",
+                    current_product={
+                        "id": "prod_5",
+                        "title": "Ivory Leather Shoulder Bag",
+                        "category": "handbags",
+                        "brand": "Example Brand",
+                        "attributes": {"color": "ivory", "material": "leather"},
+                    },
+                    category="handbags",
+                ),
+                "conversation_id": conversation_id,
+            },
+        )
+
+    assert response.status_code == 200
+    assert any(turn["role"] == "assistant" and "Hello" in turn["content"] for turn in captured["history"])
+    assert any(turn["role"] == "user" and turn["content"] == "Hello" for turn in captured["history"])
+
+
+def test_strands_product_mode_keeps_order_status_deterministic(monkeypatch):
+    def fail_run_storefront_shopping_agent(*_args, **_kwargs):
+        raise AssertionError("Private account/order flows must not enter Strands product orchestration")
+
+    monkeypatch.setattr("app.services.chat.orchestrator.run_storefront_shopping_agent", fail_run_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post("/api/chat", json=_chat_payload("What is my order status?"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["route"] == "blocked"
+    assert payload["selected_agent"] == "OrderAgent"
+    assert payload["selected_tool"] == "order_status"
+    assert payload["actions"][0]["type"] == "sign_in"
+
+
+def test_strands_product_mode_falls_back_to_deterministic_response(monkeypatch):
+    def fake_run_storefront_shopping_agent(db, *, req, identity, session, decision, frame, history):
+        return StrandsRunResult(error="RuntimeError")
+
+    monkeypatch.setattr("app.services.chat.orchestrator.run_storefront_shopping_agent", fake_run_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post("/api/chat", json=_chat_payload("What phone number can I call?"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_agent"] == "StorefrontShoppingAgent"
+    assert payload["selected_tool"] == "store_info"
+    assert "555-111-2222" in payload["message"]
+    assert any(trace["name"] == "StrandsAgent" and "fallback_to_deterministic" in trace["decision"] for trace in payload["tool_trace"])
 
 
 def test_product_question_works_anonymously(monkeypatch):

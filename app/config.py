@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     image_upload_max_bytes: int = 8 * 1024 * 1024
     chat_orchestration_model: str = "gpt-5.4-mini"
     chat_orchestration_min_confidence: float = 0.55
+    chat_orchestration_mode: Literal["deterministic", "strands_product"] = "deterministic"
 
     pinecone_api_key: str | None = None
     pinecone_cloud: str = "aws"

@@ -187,6 +187,7 @@ jobs:
           DD_PROFILING_TIMELINE_ENABLED=${{ secrets.DD_PROFILING_TIMELINE_ENABLED || 'true' }}
           DD_RUNTIME_METRICS_ENABLED=${{ secrets.DD_RUNTIME_METRICS_ENABLED || 'true' }}
           DD_LLMOBS_ENABLED=${{ secrets.DD_LLMOBS_ENABLED || 'true' }}
+          DD_LLMOBS_AGENTLESS_ENABLED=${{ secrets.DD_LLMOBS_AGENTLESS_ENABLED || 'true' }}
           DD_LLMOBS_ML_APP=${{ secrets.DD_LLMOBS_ML_APP || 'sterling-hollis-be' }}
           DD_LOGS_INJECTION=${{ secrets.DD_LOGS_INJECTION || 'true' }}
           DD_DATA_STREAMS_ENABLED=${{ secrets.DD_DATA_STREAMS_ENABLED || 'true' }}
