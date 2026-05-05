@@ -30,6 +30,7 @@ def _chat_client(monkeypatch):
     monkeypatch.setenv("ENABLE_MCP_ADAPTER", "false")
     monkeypatch.setenv("ENABLE_OPENAI_APPS_UI", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("CHAT_ORCHESTRATION_MODE", "deterministic")
     get_settings.cache_clear()
 
     engine = create_engine(

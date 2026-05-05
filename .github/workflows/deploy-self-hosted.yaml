@@ -154,6 +154,7 @@ jobs:
           PGUSER=${{ secrets.PGUSER }}
           PGPASSWORD=${{ secrets.PGPASSWORD }}
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          CHAT_ORCHESTRATION_MODE=${{ secrets.CHAT_ORCHESTRATION_MODE || 'deterministic' }}
           PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME=${{ secrets.PINECONE_INDEX_NAME || 'fashion-products-v1' }}
           PINECONE_CLOUD=${{ secrets.PINECONE_CLOUD || 'aws' }}

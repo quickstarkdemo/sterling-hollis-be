@@ -13,6 +13,16 @@ from app.services.chat.schemas import ChatAction, ChatRequest, ChatResponse, Cha
 from app.services.chat.strands_agent import ShoppingAgentResult, invoke_storefront_shopping_agent
 from app.services.chat.strands_tools import build_storefront_tools
 from app.services.chat.triage import TriageDecision
+from ddtrace.llmobs import LLMObs
+
+
+def _llmobs_annotate_safe(**kwargs) -> None:
+    try:
+        if not LLMObs.enabled:
+            return
+        LLMObs.annotate(**kwargs)
+    except Exception:
+        pass
 
 
 @dataclass
@@ -108,7 +118,40 @@ def run_storefront_shopping_agent(
 
     try:
         tools = build_storefront_tools(db, req, frame, record_tool_call)
-        result = invoke_storefront_shopping_agent(_prompt(req, frame, history), tools)
+        prompt = _prompt(req, frame, history)
+        with LLMObs.agent(name="StorefrontShoppingAgent", session_id=session.id) as agent_span:
+            _llmobs_annotate_safe(
+                span=agent_span,
+                input_data={
+                    "message": req.message,
+                    "conversation_id": session.id,
+                    "history_count": len(history),
+                    "intent": frame.intent,
+                    "route": frame.route,
+                    "query": frame.query,
+                    "target_categories": frame.target_categories,
+                    "exclude_categories": frame.exclude_categories,
+                    "target_genders": frame.target_genders,
+                    "current_product_id": frame.current_product_id,
+                    "available_tools": [
+                        "search_catalog",
+                        "semantic_catalog_search",
+                        "get_current_product",
+                        "get_product_detail",
+                        "find_related_products",
+                        "get_store_info",
+                    ],
+                },
+                tags={
+                    "workflow": "chat",
+                    "orchestration_mode": "strands_product",
+                    "agent": "StorefrontShoppingAgent",
+                    "conversation_id": session.id,
+                    "intent": frame.intent,
+                    "route": frame.route,
+                },
+            )
+            result = invoke_storefront_shopping_agent(prompt, tools)
         cards = _cards_from_tool_calls(captured, result)
         primary_tool = result.primary_tool or "strands_agent"
         if primary_tool == "strands_agent" and len(captured) == 1:
@@ -137,6 +180,34 @@ def run_storefront_shopping_agent(
             selected_tool=primary_tool,
             requires_followup=result.requires_followup,
             clarifying_question=result.clarifying_question,
+        )
+        _llmobs_annotate_safe(
+            span=agent_span,
+            output_data={
+                "message": response.message,
+                "selected_agent": response.selected_agent,
+                "selected_tool": response.selected_tool,
+                "route": response.route,
+                "intent": response.intent,
+                "requires_followup": response.requires_followup,
+                "card_count": len(response.cards),
+                "product_ids": [card.id for card in response.cards],
+                "tool_calls": [call.name for call in captured],
+            },
+            metadata={
+                "orchestration_mode": "strands_product",
+                "tool_call_count": len(captured),
+                "primary_tool": primary_tool,
+            },
+            tags={
+                "workflow": "chat",
+                "orchestration_mode": "strands_product",
+                "agent": "StorefrontShoppingAgent",
+                "selected_tool": response.selected_tool,
+                "selected_agent": response.selected_agent,
+                "route": response.route,
+                "intent": response.intent,
+            },
         )
         return StrandsRunResult(response=response, tool_calls=captured)
     except Exception as exc:
