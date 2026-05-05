@@ -74,7 +74,12 @@ def _prompt(req: ChatRequest, frame: ChatIntentFrame, history: list[dict[str, st
     )
 
 
-def _cards_from_tool_calls(tool_calls: list[CapturedToolCall], result: ShoppingAgentResult) -> list[CatalogProduct]:
+def _cards_from_tool_calls(
+    tool_calls: list[CapturedToolCall],
+    result: ShoppingAgentResult,
+    *,
+    current_product_id: str | None,
+) -> list[CatalogProduct]:
     card_map: dict[str, CatalogProduct] = {}
     ordered_cards: list[CatalogProduct] = []
     for call in tool_calls:
@@ -88,12 +93,16 @@ def _cards_from_tool_calls(tool_calls: list[CapturedToolCall], result: ShoppingA
                 card = CatalogProduct.model_validate(raw)
             except Exception:
                 continue
+            if current_product_id and card.id == current_product_id:
+                continue
             if card.id not in card_map:
                 card_map[card.id] = card
                 ordered_cards.append(card)
 
     selected: list[CatalogProduct] = []
     for product_id in result.product_ids:
+        if current_product_id and product_id == current_product_id:
+            continue
         card = card_map.get(product_id)
         if card and card.id not in {item.id for item in selected}:
             selected.append(card)
@@ -139,7 +148,7 @@ def _complete_outfit_cards(
     if current_category in {"womens_apparel", "mens_apparel"} and current_category in category_order:
         category_order = [current_category, *[category for category in category_order if category != current_category]]
 
-    completed = list(cards)
+    completed = [card for card in cards if not frame.current_product_id or card.id != frame.current_product_id]
     seen_ids = {card.id for card in completed}
     seen_categories = {card.category for card in completed}
     for category in category_order:
@@ -227,7 +236,7 @@ def run_storefront_shopping_agent(
                 },
             )
             result = invoke_storefront_shopping_agent(prompt, tools)
-        cards = _cards_from_tool_calls(captured, result)
+        cards = _cards_from_tool_calls(captured, result, current_product_id=frame.current_product_id)
         cards = _complete_outfit_cards(db, req, frame, cards, captured)
         primary_tool = result.primary_tool or "strands_agent"
         if primary_tool == "strands_agent" and len(captured) == 1:

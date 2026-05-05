@@ -619,6 +619,46 @@ def test_strands_product_mode_completes_outfit_cards_when_agent_returns_too_few(
     assert any(trace["name"] == "complete_outfit_cards" for trace in payload["tool_trace"])
 
 
+def test_strands_product_mode_excludes_current_product_from_outfit_cards(monkeypatch):
+    def fake_invoke_storefront_shopping_agent(prompt, tools):
+        current_product = tools[2]()
+        search_result = tools[1](query="ivory blazer layer", target_categories=["womens_apparel"], limit=2)
+        selected_ids = list(current_product.get("product_ids") or []) + list(search_result.get("product_ids") or [])
+        return ShoppingAgentResult(
+            message="Pair the navy skirt with an ivory layer and refined accessories.",
+            intent="complementary_products",
+            route="semantic_catalog_search",
+            primary_tool="strands_agent",
+            product_ids=selected_ids,
+            rationale="Agent inspected the anchor and selected outfit products.",
+        )
+
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.invoke_storefront_shopping_agent", fake_invoke_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_10",
+                current_product={
+                    "id": "prod_10",
+                    "title": "Moncler Navy Skirt",
+                    "category": "womens_apparel",
+                    "brand": "Moncler",
+                    "attributes": {"color": "navy", "material": "cashmere", "gender": "women"},
+                },
+                category="womens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert all(card["title"] != "Moncler Navy Skirt" for card in payload["cards"])
+    assert all(card["brand"] != "Moncler" or card["title"] != "Moncler Navy Skirt" for card in payload["cards"])
+
+
 def test_strands_product_mode_keeps_order_status_deterministic(monkeypatch):
     def fail_run_storefront_shopping_agent(*_args, **_kwargs):
         raise AssertionError("Private account/order flows must not enter Strands product orchestration")
