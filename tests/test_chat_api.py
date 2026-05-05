@@ -294,6 +294,51 @@ def _seed_chat_data(session):
                 inventory_qty=7,
                 objective_weight=Decimal("0.9050"),
             ),
+            _product(
+                "prod_13",
+                seed_run_id="run_chat",
+                title="Solenne Studio Gold Dress",
+                description="Gold silk dress",
+                brand="Solenne Studio",
+                category="womens_apparel",
+                color="Gold",
+                size="M",
+                material="silk",
+                gender="women",
+                price=Decimal("366.18"),
+                inventory_qty=6,
+                objective_weight=Decimal("0.9900"),
+            ),
+            _product(
+                "prod_14",
+                seed_run_id="run_chat",
+                title="Maison Arctis Sage Dress",
+                description="Sage satin dress",
+                brand="Maison Arctis",
+                category="womens_apparel",
+                color="Sage",
+                size="M",
+                material="satin",
+                gender="women",
+                price=Decimal("1530.01"),
+                inventory_qty=6,
+                objective_weight=Decimal("0.9800"),
+            ),
+            _product(
+                "prod_15",
+                seed_run_id="run_chat",
+                title="Saint Laurent Chocolate Dress",
+                description="Chocolate cotton dress",
+                brand="Saint Laurent",
+                category="womens_apparel",
+                color="Chocolate",
+                size="M",
+                material="cotton",
+                gender="women",
+                price=Decimal("993.82"),
+                inventory_qty=6,
+                objective_weight=Decimal("0.9700"),
+            ),
         ]
     )
     session.commit()
@@ -657,6 +702,51 @@ def test_strands_product_mode_excludes_current_product_from_outfit_cards(monkeyp
     assert payload["cards"]
     assert all(card["title"] != "Moncler Navy Skirt" for card in payload["cards"])
     assert all(card["brand"] != "Moncler" or card["title"] != "Moncler Navy Skirt" for card in payload["cards"])
+
+
+def test_strands_product_mode_filters_replacement_dresses_for_skirt_outfit(monkeypatch):
+    def fake_invoke_storefront_shopping_agent(prompt, tools):
+        browse_result = tools[0](category="womens_apparel", limit=3)
+        return ShoppingAgentResult(
+            message=(
+                "Here are pieces to build an outfit around the skirt: a gold silk dress, "
+                "a sage satin dress, and a chocolate cotton dress."
+            ),
+            intent="complementary_products",
+            route="semantic_catalog_search",
+            primary_tool="search_catalog",
+            product_ids=list(browse_result.get("product_ids") or []),
+            rationale="Agent browsed the apparel category.",
+        )
+
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.invoke_storefront_shopping_agent", fake_invoke_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_10",
+                current_product={
+                    "id": "prod_10",
+                    "title": "Moncler Navy Skirt",
+                    "category": "womens_apparel",
+                    "brand": "Moncler",
+                    "attributes": {"color": "navy", "material": "cashmere", "gender": "women"},
+                },
+                category="womens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    card_titles = [card["title"] for card in payload["cards"]]
+    assert card_titles
+    assert all("Dress" not in title for title in card_titles)
+    assert all("Skirt" not in title for title in card_titles)
+    assert any(any(term in title for term in ["Blouse", "Cardigan", "Top", "Jacket"]) for title in card_titles)
+    assert "dress" not in payload["message"].lower()
+    assert any(trace["name"] == "filter_outfit_cards" for trace in payload["tool_trace"])
 
 
 def test_strands_product_mode_keeps_order_status_deterministic(monkeypatch):

@@ -35,6 +35,7 @@ You may call multiple tools when needed: inspect the current product, search com
 Return a concise shopper-facing answer and include product_ids for the products you want rendered as cards.
 Do not include the current product id in product_ids for outfit, pairing, or complementary-product requests; it is the anchor item, not a recommendation.
 For pairing/outfit requests, prefer semantic_catalog_search and avoid recommending the same category as the current product unless the shopper explicitly asks for similar items.
+When building around an apparel anchor, do not suggest replacement garments. For example, if the current product is a skirt, dress, gown, pant, or trouser, recommend tops, layers, shoes, bags, or jewelry instead of another dress, skirt, pant, or trouser.
 For explicitly similar requests, use find_related_products.
 For store phone/address questions, use get_store_info.
 """.strip()

@@ -16,6 +16,46 @@ from app.services.chat.tools import semantic_catalog_cards
 from app.services.chat.triage import TriageDecision
 from ddtrace.llmobs import LLMObs
 
+APPAREL_CATEGORIES = {"womens_apparel", "mens_apparel"}
+APPAREL_LAYER_TERMS = {
+    "blazer",
+    "blouse",
+    "buttondown",
+    "button-down",
+    "cardigan",
+    "coat",
+    "jacket",
+    "layer",
+    "overshirt",
+    "shell",
+    "shirt",
+    "sweater",
+    "tank",
+    "tee",
+    "top",
+    "tunic",
+    "vest",
+}
+APPAREL_BOTTOM_TERMS = {
+    "jean",
+    "jeans",
+    "pant",
+    "pants",
+    "short",
+    "shorts",
+    "skirt",
+    "trouser",
+    "trousers",
+}
+APPAREL_ONE_PIECE_TERMS = {
+    "dress",
+    "dresses",
+    "gown",
+    "gowns",
+    "jumpsuit",
+    "romper",
+}
+
 
 def _llmobs_annotate_safe(**kwargs) -> None:
     try:
@@ -117,12 +157,108 @@ def _current_category(req: ChatRequest) -> str | None:
     return req.context.category
 
 
+def _normalized_words(value: str) -> set[str]:
+    clean = "".join(char.lower() if char.isalnum() else " " for char in value)
+    return set(clean.split())
+
+
+def _card_words(card: CatalogProduct) -> set[str]:
+    text = " ".join(
+        [
+            card.title,
+            card.description,
+            card.brand,
+            card.category,
+            *card.attributes.values(),
+        ]
+    )
+    return _normalized_words(text)
+
+
+def _current_product_words(req: ChatRequest) -> set[str]:
+    current = req.context.current_product
+    if not current:
+        return set()
+    text = " ".join(
+        [
+            current.title or "",
+            current.brand or "",
+            current.category or "",
+            *current.attributes.values(),
+        ]
+    )
+    return _normalized_words(text)
+
+
+def _apparel_anchor_role(req: ChatRequest) -> str:
+    words = _current_product_words(req)
+    if words & APPAREL_ONE_PIECE_TERMS:
+        return "one_piece"
+    if words & APPAREL_BOTTOM_TERMS:
+        return "bottom"
+    if words & APPAREL_LAYER_TERMS:
+        return "top_or_layer"
+    return "apparel"
+
+
+def _allowed_apparel_outfit_card(req: ChatRequest, card: CatalogProduct) -> bool:
+    if card.category not in APPAREL_CATEGORIES:
+        return True
+    words = _card_words(card)
+    role = _apparel_anchor_role(req)
+    if role in {"bottom", "one_piece"}:
+        return bool(words & APPAREL_LAYER_TERMS) and not bool(words & (APPAREL_BOTTOM_TERMS | APPAREL_ONE_PIECE_TERMS))
+    if role == "top_or_layer":
+        return not bool(words & APPAREL_ONE_PIECE_TERMS)
+    return not bool(words & APPAREL_ONE_PIECE_TERMS)
+
+
+def _filter_outfit_cards(
+    req: ChatRequest,
+    frame: ChatIntentFrame,
+    cards: list[CatalogProduct],
+    captured: list[CapturedToolCall],
+) -> tuple[list[CatalogProduct], bool]:
+    if frame.intent != "complementary_products" or _current_category(req) not in APPAREL_CATEGORIES:
+        return cards, False
+
+    kept: list[CatalogProduct] = []
+    removed: list[CatalogProduct] = []
+    for card in cards:
+        if _allowed_apparel_outfit_card(req, card):
+            kept.append(card)
+        else:
+            removed.append(card)
+
+    if removed:
+        captured.append(
+            CapturedToolCall(
+                name="filter_outfit_cards",
+                input_json={
+                    "anchor_category": _current_category(req),
+                    "anchor_role": _apparel_anchor_role(req),
+                    "removed_product_ids": [card.id for card in removed],
+                },
+                output_json=cards_payload(kept, strategy="apparel_anchor_filter"),
+            )
+        )
+    return kept, bool(removed)
+
+
+def _outfit_cards_message(req: ChatRequest, cards: list[CatalogProduct]) -> str | None:
+    current = req.context.current_product
+    if not current or not current.title or not cards:
+        return None
+    titles = ", ".join(card.title for card in cards)
+    return f"Here are complementary pieces to build an outfit around the {current.title}: {titles}."
+
+
 def _outfit_completion_query(category: str, req: ChatRequest) -> str:
     title = req.context.current_product.title if req.context.current_product else "this item"
     color = (req.context.current_product.attributes.get("color") if req.context.current_product else None) or ""
     material = (req.context.current_product.attributes.get("material") if req.context.current_product else None) or ""
     base = " ".join(part for part in [color, material, title] if part)
-    if category in {"womens_apparel", "mens_apparel"}:
+    if category in APPAREL_CATEGORIES:
         return f"light blouse top cardigan jacket layer to style with {base}".strip()
     if category == "shoes":
         return f"neutral heels pumps shoes to style with {base}".strip()
@@ -145,7 +281,7 @@ def _complete_outfit_cards(
 
     current_category = _current_category(req)
     category_order = [category for category in frame.target_categories if category]
-    if current_category in {"womens_apparel", "mens_apparel"} and current_category in category_order:
+    if current_category in APPAREL_CATEGORIES and current_category in category_order:
         category_order = [current_category, *[category for category in category_order if category != current_category]]
 
     completed = [card for card in cards if not frame.current_product_id or card.id != frame.current_product_id]
@@ -160,15 +296,19 @@ def _complete_outfit_cards(
             db,
             query=_outfit_completion_query(category, req),
             target_categories=[category],
-            exclude_categories=[] if category in {"womens_apparel", "mens_apparel"} else frame.exclude_categories,
+            exclude_categories=[] if category in APPAREL_CATEGORIES else frame.exclude_categories,
             target_genders=frame.target_genders,
             budget_max=frame.budget_max,
             colors=[],
             current_product_id=frame.current_product_id,
             store_id=req.context.store_id,
-            limit=1,
+            limit=6 if category in APPAREL_CATEGORIES else 1,
         )
-        new_cards = [card for card in found if card.id not in seen_ids]
+        new_cards = [
+            card
+            for card in found
+            if card.id not in seen_ids and _allowed_apparel_outfit_card(req, card)
+        ]
         if not new_cards:
             continue
         next_card = new_cards[0]
@@ -237,7 +377,9 @@ def run_storefront_shopping_agent(
             )
             result = invoke_storefront_shopping_agent(prompt, tools)
         cards = _cards_from_tool_calls(captured, result, current_product_id=frame.current_product_id)
+        cards, filtered_outfit_cards = _filter_outfit_cards(req, frame, cards, captured)
         cards = _complete_outfit_cards(db, req, frame, cards, captured)
+        response_message = _outfit_cards_message(req, cards) if filtered_outfit_cards else None
         primary_tool = result.primary_tool or "strands_agent"
         if primary_tool == "strands_agent" and len(captured) == 1:
             primary_tool = captured[0].name
@@ -245,7 +387,7 @@ def run_storefront_shopping_agent(
             primary_tool = "strands_agent"
         response = ChatResponse(
             conversation_id=session.id,
-            message=result.message,
+            message=response_message or result.message,
             identity_status=identity.status,
             intent=result.intent or decision.intent,
             route=result.route or decision.route,

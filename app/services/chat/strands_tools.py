@@ -50,6 +50,28 @@ def _safe_exclude_categories(frame: ChatIntentFrame, requested: list[str] | None
     return excluded
 
 
+def _current_category(req: ChatRequest) -> str | None:
+    if req.context.current_product and req.context.current_product.category:
+        return req.context.current_product.category
+    return req.context.category
+
+
+def _safe_outfit_query(req: ChatRequest, frame: ChatIntentFrame, requested: str | None) -> str | None:
+    clean_requested = " ".join((requested or "").split())
+    if clean_requested:
+        return clean_requested
+    if frame.intent != "complementary_products" or _current_category(req) not in {"womens_apparel", "mens_apparel"}:
+        return frame.query
+    title = req.context.current_product.title if req.context.current_product else "this item"
+    color = (req.context.current_product.attributes.get("color") if req.context.current_product else None) or ""
+    material = (req.context.current_product.attributes.get("material") if req.context.current_product else None) or ""
+    anchor = " ".join(part for part in [color, material, title] if part)
+    return (
+        "blouse top shell cardigan sweater blazer jacket layer shoes handbag jewelry "
+        f"to complete an outfit with {anchor}"
+    ).strip()
+
+
 def build_storefront_tools(
     db: Session,
     req: ChatRequest,
@@ -84,9 +106,10 @@ def build_storefront_tools(
     ) -> dict[str, Any]:
         """Search the catalog for product or styling matches with normalized retail constraints."""
         safe_exclude_categories = _safe_exclude_categories(frame, exclude_categories)
+        safe_query = _safe_outfit_query(req, frame, query)
         cards, strategy = semantic_catalog_cards(
             db,
-            query=query or frame.query,
+            query=safe_query,
             target_categories=target_categories if target_categories is not None else frame.target_categories,
             exclude_categories=safe_exclude_categories,
             target_genders=target_genders if target_genders is not None else frame.target_genders,
@@ -100,7 +123,7 @@ def build_storefront_tools(
         record_tool_call(
             "semantic_catalog_search",
             {
-                "query": query,
+                "query": safe_query,
                 "target_categories": target_categories,
                 "exclude_categories": safe_exclude_categories,
                 "target_genders": target_genders,
