@@ -73,6 +73,8 @@ def initialize_llm_otel() -> bool:
         return True
     if not _truthy(os.environ.get("DD_LLMOBS_ENABLED")):
         return False
+    if not _truthy(os.environ.get("STRANDS_OTEL_ENABLED")):
+        return False
     if not os.environ.get("DD_API_KEY") and "dd-api-key=" not in os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""):
         _BOOTSTRAP_ERROR = "DD_API_KEY is not configured for Datadog LLM OTel export."
         logger.warning(_BOOTSTRAP_ERROR)

@@ -73,6 +73,7 @@ Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic I
 - `DD_PROFILING_ENABLED=true`
 - `DD_RUNTIME_METRICS_ENABLED=true`
 - `DD_LLMOBS_ENABLED=true`
+- `STRANDS_OTEL_ENABLED=false` to keep Strands-native OTEL traces disabled unless debugging agent event loops
 - `DD_LLMOBS_AGENTLESS_ENABLED=true`
 - `DD_LLMOBS_ML_APP=sterling-hollis-be`
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`
@@ -160,6 +161,7 @@ Datadog:
 - `DD_PROFILING_TIMELINE_ENABLED`
 - `DD_RUNTIME_METRICS_ENABLED`
 - `DD_LLMOBS_ENABLED`
+- `STRANDS_OTEL_ENABLED`
 - `DD_LLMOBS_AGENTLESS_ENABLED`
 - `DD_LLMOBS_ML_APP`
 - `DD_LOGS_INJECTION`
@@ -186,7 +188,7 @@ Notes:
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
 - `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add every production storefront origin, including the deployed FE host.
 - Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`.
-- LLM Observability enrichment for Strands chat orchestration uses OpenTelemetry GenAI spans. If `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
+- Datadog LLM Observability uses `DD_LLMOBS_ENABLED=true` for the canonical app-level chat traces. Keep `STRANDS_OTEL_ENABLED=false` by default to avoid duplicate Strands-native OTEL traces; set it to `true` only when debugging Strands event-loop telemetry. When Strands OTEL is enabled and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
 - MCP client LLM Observability uses Datadog's automatic MCP Python SDK instrumentation. Run `make mcp-smoke` with `DD_LLMOBS_ENABLED=true`, `DD_LLMOBS_AGENTLESS_ENABLED=true`, and `DD_API_KEY` to emit MCP client spans.
 - `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.
 - Keep `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=true` unless you intentionally want SQL query values to appear in trace metadata.

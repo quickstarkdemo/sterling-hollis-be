@@ -63,12 +63,61 @@ def test_initialize_llm_otel_is_idempotent(monkeypatch):
     monkeypatch.setattr(llm_otel, "_BOOTSTRAP_ERROR", None)
     monkeypatch.setattr(strands_config, "StrandsTelemetry", FakeTelemetry)
     monkeypatch.setenv("DD_LLMOBS_ENABLED", "true")
+    monkeypatch.setenv("STRANDS_OTEL_ENABLED", "true")
     monkeypatch.setenv("DD_API_KEY", "test-api-key")
     monkeypatch.setenv("DD_SITE", "datadoghq.com")
 
     assert llm_otel.initialize_llm_otel() is True
     assert llm_otel.initialize_llm_otel() is True
     assert calls == ["init", "setup"]
+
+
+def test_initialize_llm_otel_skips_strands_exporter_when_flag_unset(monkeypatch):
+    calls: list[str] = []
+
+    class FakeTelemetry:
+        def __init__(self) -> None:
+            calls.append("init")
+
+        def setup_otlp_exporter(self):
+            calls.append("setup")
+            return self
+
+    import strands.telemetry.config as strands_config
+
+    monkeypatch.setattr(llm_otel, "_BOOTSTRAPPED", False)
+    monkeypatch.setattr(llm_otel, "_BOOTSTRAP_ERROR", None)
+    monkeypatch.setattr(strands_config, "StrandsTelemetry", FakeTelemetry)
+    monkeypatch.setenv("DD_LLMOBS_ENABLED", "true")
+    monkeypatch.delenv("STRANDS_OTEL_ENABLED", raising=False)
+    monkeypatch.setenv("DD_API_KEY", "test-api-key")
+
+    assert llm_otel.initialize_llm_otel() is False
+    assert calls == []
+
+
+def test_initialize_llm_otel_skips_strands_exporter_when_flag_false(monkeypatch):
+    calls: list[str] = []
+
+    class FakeTelemetry:
+        def __init__(self) -> None:
+            calls.append("init")
+
+        def setup_otlp_exporter(self):
+            calls.append("setup")
+            return self
+
+    import strands.telemetry.config as strands_config
+
+    monkeypatch.setattr(llm_otel, "_BOOTSTRAPPED", False)
+    monkeypatch.setattr(llm_otel, "_BOOTSTRAP_ERROR", None)
+    monkeypatch.setattr(strands_config, "StrandsTelemetry", FakeTelemetry)
+    monkeypatch.setenv("DD_LLMOBS_ENABLED", "true")
+    monkeypatch.setenv("STRANDS_OTEL_ENABLED", "false")
+    monkeypatch.setenv("DD_API_KEY", "test-api-key")
+
+    assert llm_otel.initialize_llm_otel() is False
+    assert calls == []
 
 
 def test_record_chat_agent_result_sets_agent_span_attributes():
@@ -126,4 +175,3 @@ def test_trace_chat_agent_evaluation_records_request_and_exception(monkeypatch):
     assert span.attributes["app.chat.current_product_id"] == "prod_1"
     assert span.attributes["error.type"] == "RuntimeError"
     assert isinstance(span.exceptions[0], RuntimeError)
-
