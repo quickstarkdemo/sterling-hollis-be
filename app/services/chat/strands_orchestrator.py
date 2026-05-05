@@ -11,7 +11,8 @@ from app.services.auth.clerk import ChatIdentity
 from app.services.chat.intent_frame import ChatIntentFrame
 from app.services.chat.schemas import ChatAction, ChatRequest, ChatResponse, ChatToolTrace
 from app.services.chat.strands_agent import ShoppingAgentResult, invoke_storefront_shopping_agent
-from app.services.chat.strands_tools import build_storefront_tools
+from app.services.chat.strands_tools import build_storefront_tools, cards_payload
+from app.services.chat.tools import semantic_catalog_cards
 from app.services.chat.triage import TriageDecision
 from ddtrace.llmobs import LLMObs
 
@@ -101,6 +102,80 @@ def _cards_from_tool_calls(tool_calls: list[CapturedToolCall], result: ShoppingA
     return ordered_cards[:3]
 
 
+def _current_category(req: ChatRequest) -> str | None:
+    if req.context.current_product and req.context.current_product.category:
+        return req.context.current_product.category
+    return req.context.category
+
+
+def _outfit_completion_query(category: str, req: ChatRequest) -> str:
+    title = req.context.current_product.title if req.context.current_product else "this item"
+    color = (req.context.current_product.attributes.get("color") if req.context.current_product else None) or ""
+    material = (req.context.current_product.attributes.get("material") if req.context.current_product else None) or ""
+    base = " ".join(part for part in [color, material, title] if part)
+    if category in {"womens_apparel", "mens_apparel"}:
+        return f"light blouse top cardigan jacket layer to style with {base}".strip()
+    if category == "shoes":
+        return f"neutral heels pumps shoes to style with {base}".strip()
+    if category == "handbags":
+        return f"structured handbag clutch tote to style with {base}".strip()
+    if category == "jewelry_accessories":
+        return f"jewelry necklace earrings bracelet to style with {base}".strip()
+    return f"outfit piece to style with {base}".strip()
+
+
+def _complete_outfit_cards(
+    db: Session,
+    req: ChatRequest,
+    frame: ChatIntentFrame,
+    cards: list[CatalogProduct],
+    captured: list[CapturedToolCall],
+) -> list[CatalogProduct]:
+    if frame.intent != "complementary_products" or len(cards) >= 3:
+        return cards
+
+    current_category = _current_category(req)
+    category_order = [category for category in frame.target_categories if category]
+    if current_category in {"womens_apparel", "mens_apparel"} and current_category in category_order:
+        category_order = [current_category, *[category for category in category_order if category != current_category]]
+
+    completed = list(cards)
+    seen_ids = {card.id for card in completed}
+    seen_categories = {card.category for card in completed}
+    for category in category_order:
+        if len(completed) >= 3:
+            break
+        if category in seen_categories and len(completed) > 0:
+            continue
+        found, strategy = semantic_catalog_cards(
+            db,
+            query=_outfit_completion_query(category, req),
+            target_categories=[category],
+            exclude_categories=[] if category in {"womens_apparel", "mens_apparel"} else frame.exclude_categories,
+            target_genders=frame.target_genders,
+            budget_max=frame.budget_max,
+            colors=[],
+            current_product_id=frame.current_product_id,
+            store_id=req.context.store_id,
+            limit=1,
+        )
+        new_cards = [card for card in found if card.id not in seen_ids]
+        if not new_cards:
+            continue
+        next_card = new_cards[0]
+        completed.append(next_card)
+        seen_ids.add(next_card.id)
+        seen_categories.add(next_card.category)
+        captured.append(
+            CapturedToolCall(
+                name="complete_outfit_cards",
+                input_json={"category": category, "query": _outfit_completion_query(category, req)},
+                output_json=cards_payload([next_card], strategy=strategy),
+            )
+        )
+    return completed[:3]
+
+
 def run_storefront_shopping_agent(
     db: Session,
     *,
@@ -153,6 +228,7 @@ def run_storefront_shopping_agent(
             )
             result = invoke_storefront_shopping_agent(prompt, tools)
         cards = _cards_from_tool_calls(captured, result)
+        cards = _complete_outfit_cards(db, req, frame, cards, captured)
         primary_tool = result.primary_tool or "strands_agent"
         if primary_tool == "strands_agent" and len(captured) == 1:
             primary_tool = captured[0].name

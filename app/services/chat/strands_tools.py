@@ -41,6 +41,15 @@ def cards_payload(cards: list[CatalogProduct], *, strategy: str | None = None) -
     }
 
 
+def _safe_exclude_categories(frame: ChatIntentFrame, requested: list[str] | None) -> list[str]:
+    excluded = list(requested if requested is not None else frame.exclude_categories)
+    if frame.intent != "complementary_products":
+        return excluded
+    if frame.current_product_id and len(frame.exclude_categories) == 0:
+        return [category for category in excluded if category not in {"womens_apparel", "mens_apparel"}]
+    return excluded
+
+
 def build_storefront_tools(
     db: Session,
     req: ChatRequest,
@@ -74,11 +83,12 @@ def build_storefront_tools(
         limit: int = 3,
     ) -> dict[str, Any]:
         """Search the catalog for product or styling matches with normalized retail constraints."""
+        safe_exclude_categories = _safe_exclude_categories(frame, exclude_categories)
         cards, strategy = semantic_catalog_cards(
             db,
             query=query or frame.query,
             target_categories=target_categories if target_categories is not None else frame.target_categories,
-            exclude_categories=exclude_categories if exclude_categories is not None else frame.exclude_categories,
+            exclude_categories=safe_exclude_categories,
             target_genders=target_genders if target_genders is not None else frame.target_genders,
             budget_max=budget_max if budget_max is not None else frame.budget_max,
             colors=colors if colors is not None else frame.colors,
@@ -92,7 +102,7 @@ def build_storefront_tools(
             {
                 "query": query,
                 "target_categories": target_categories,
-                "exclude_categories": exclude_categories,
+                "exclude_categories": safe_exclude_categories,
                 "target_genders": target_genders,
                 "budget_max": budget_max,
                 "colors": colors,

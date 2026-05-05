@@ -19,6 +19,7 @@ from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecisio
 from app.services.chat.evaluator import ChatEvaluationConstraints
 from app.services.chat.safety import ChatSafetyDecision
 from app.services.chat.schemas import ChatAction, ChatResponse, ChatToolTrace
+from app.services.chat.strands_agent import ShoppingAgentResult
 from app.services.chat.strands_orchestrator import CapturedToolCall, StrandsRunResult
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 from app.services.chat.tools import catalog_cards
@@ -574,6 +575,48 @@ def test_strands_product_mode_apparel_outfit_frame_allows_apparel(monkeypatch):
     assert "womens_apparel" in captured["frame"].target_categories
     assert captured["frame"].exclude_categories == []
     assert response.json()["selected_agent"] == "StorefrontShoppingAgent"
+
+
+def test_strands_product_mode_completes_outfit_cards_when_agent_returns_too_few(monkeypatch):
+    def fake_invoke_storefront_shopping_agent(prompt, tools):
+        return ShoppingAgentResult(
+            message=(
+                "Suggested pairing: a crisp light blouse, neutral heels, and a structured handbag "
+                "to balance the navy cashmere."
+            ),
+            intent="complementary_products",
+            route="semantic_catalog_search",
+            primary_tool="strands_agent",
+            product_ids=[],
+            rationale="Agent synthesized a complete outfit but did not select enough product ids.",
+        )
+
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.invoke_storefront_shopping_agent", fake_invoke_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_10",
+                current_product={
+                    "id": "prod_10",
+                    "title": "Moncler Navy Skirt",
+                    "category": "womens_apparel",
+                    "brand": "Moncler",
+                    "attributes": {"color": "navy", "material": "cashmere", "gender": "women"},
+                },
+                category="womens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_agent"] == "StorefrontShoppingAgent"
+    assert len(payload["cards"]) == 3
+    assert "womens_apparel" in {card["category"] for card in payload["cards"]}
+    assert all(action["type"] == "view_product" for action in payload["actions"])
+    assert any(trace["name"] == "complete_outfit_cards" for trace in payload["tool_trace"])
 
 
 def test_strands_product_mode_keeps_order_status_deterministic(monkeypatch):
