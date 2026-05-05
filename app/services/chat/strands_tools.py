@@ -10,6 +10,7 @@ from app.services.chat.context import summarize_context
 from app.services.chat.intent_frame import ChatIntentFrame
 from app.services.chat.schemas import ChatRequest
 from app.services.chat.tools import (
+    card_gender_allowed,
     catalog_cards,
     product_detail,
     semantic_catalog_cards,
@@ -56,6 +57,32 @@ def _current_category(req: ChatRequest) -> str | None:
     return req.context.category
 
 
+def _safe_target_genders(frame: ChatIntentFrame, requested: list[str] | None) -> list[str]:
+    if frame.target_genders:
+        return frame.target_genders
+    return requested or []
+
+
+def _safe_target_categories(frame: ChatIntentFrame, requested: list[str] | None) -> list[str]:
+    if frame.intent == "complementary_products" and frame.target_categories:
+        if requested is None:
+            return frame.target_categories
+        safe = [category for category in requested if category in frame.target_categories]
+        return safe or frame.target_categories
+    return requested if requested is not None else frame.target_categories
+
+
+def _safe_search_category(frame: ChatIntentFrame, requested: str | None, fallback: str | None) -> str | None:
+    category = requested or fallback
+    if frame.intent == "complementary_products" and frame.target_categories:
+        return category if category in frame.target_categories else frame.target_categories[0]
+    return category
+
+
+def _strict_gender(frame: ChatIntentFrame) -> bool:
+    return bool(frame.target_genders)
+
+
 def _safe_outfit_query(req: ChatRequest, frame: ChatIntentFrame, requested: str | None) -> str | None:
     clean_requested = " ".join((requested or "").split())
     if clean_requested:
@@ -66,6 +93,11 @@ def _safe_outfit_query(req: ChatRequest, frame: ChatIntentFrame, requested: str 
     color = (req.context.current_product.attributes.get("color") if req.context.current_product else None) or ""
     material = (req.context.current_product.attributes.get("material") if req.context.current_product else None) or ""
     anchor = " ".join(part for part in [color, material, title] if part)
+    if _current_category(req) == "mens_apparel":
+        return (
+            "trousers chinos jeans jacket blazer overshirt boots loafers sneakers dress shoes "
+            f"to complete an outfit with {anchor}"
+        ).strip()
     return (
         "blouse top shell cardigan sweater blazer jacket layer shoes handbag jewelry "
         f"to complete an outfit with {anchor}"
@@ -83,15 +115,19 @@ def build_storefront_tools(
     @strands_tool(name="search_catalog")
     def search_catalog(query: str | None = None, category: str | None = None, limit: int = 3) -> dict[str, Any]:
         """Search public catalog products using text, category, and the current store context."""
+        safe_category = _safe_search_category(frame, category, req.context.category)
         cards = catalog_cards(
             db,
-            category=category or req.context.category,
+            category=safe_category,
             store_id=store_id,
             query=query or frame.query,
-            limit=max(1, min(limit, 6)),
+            limit=max(max(1, min(limit, 6)) * 4, 12),
         )
+        if _strict_gender(frame):
+            cards = [card for card in cards if card_gender_allowed(card, frame.target_genders, strict=True)]
+        cards = cards[: max(1, min(limit, 6))]
         output = cards_payload(cards, strategy="catalog_search")
-        record_tool_call("search_catalog", {"query": query, "category": category, "limit": limit}, output)
+        record_tool_call("search_catalog", {"query": query, "category": safe_category, "limit": limit}, output)
         return output
 
     @strands_tool(name="semantic_catalog_search")
@@ -107,12 +143,15 @@ def build_storefront_tools(
         """Search the catalog for product or styling matches with normalized retail constraints."""
         safe_exclude_categories = _safe_exclude_categories(frame, exclude_categories)
         safe_query = _safe_outfit_query(req, frame, query)
+        safe_target_categories = _safe_target_categories(frame, target_categories)
+        safe_target_genders = _safe_target_genders(frame, target_genders)
         cards, strategy = semantic_catalog_cards(
             db,
             query=safe_query,
-            target_categories=target_categories if target_categories is not None else frame.target_categories,
+            target_categories=safe_target_categories,
             exclude_categories=safe_exclude_categories,
-            target_genders=target_genders if target_genders is not None else frame.target_genders,
+            target_genders=safe_target_genders,
+            strict_gender=bool(safe_target_genders),
             budget_max=budget_max if budget_max is not None else frame.budget_max,
             colors=colors if colors is not None else frame.colors,
             current_product_id=frame.current_product_id,
@@ -124,9 +163,9 @@ def build_storefront_tools(
             "semantic_catalog_search",
             {
                 "query": safe_query,
-                "target_categories": target_categories,
+                "target_categories": safe_target_categories,
                 "exclude_categories": safe_exclude_categories,
-                "target_genders": target_genders,
+                "target_genders": safe_target_genders,
                 "budget_max": budget_max,
                 "colors": colors,
                 "limit": limit,
@@ -168,6 +207,7 @@ def build_storefront_tools(
                 resolved_id,
                 store_id=store_id,
                 target_genders=frame.target_genders,
+                strict_gender=_strict_gender(frame),
                 limit=max(1, min(limit, 6)),
             )
             if resolved_id

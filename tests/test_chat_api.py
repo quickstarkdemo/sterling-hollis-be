@@ -12,15 +12,16 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import ChatToolCall, Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
+from app.models import ChatMessage, ChatToolCall, ChatTurn, Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
 from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecision
 from app.services.chat.evaluator import ChatEvaluationConstraints
 from app.services.chat.safety import ChatSafetyDecision
-from app.services.chat.schemas import ChatAction, ChatResponse, ChatToolTrace
+from app.services.chat.schemas import ChatAction, ChatRequest, ChatResponse, ChatToolTrace
 from app.services.chat.strands_agent import ShoppingAgentResult
 from app.services.chat.strands_orchestrator import CapturedToolCall, StrandsRunResult
+from app.services.chat.strands_tools import cards_payload
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 from app.services.chat.tools import catalog_cards
 from tests.test_catalog_api import _product
@@ -339,6 +340,21 @@ def _seed_chat_data(session):
                 inventory_qty=6,
                 objective_weight=Decimal("0.9700"),
             ),
+            _product(
+                "prod_16",
+                seed_run_id="run_chat",
+                title="Noir Harbor Charcoal Trouser",
+                description="Men's charcoal trouser for polished shirt outfits",
+                brand="Noir Harbor",
+                category="mens_apparel",
+                color="Charcoal",
+                size="M",
+                material="wool",
+                gender="men",
+                price=Decimal("520.00"),
+                inventory_qty=6,
+                objective_weight=Decimal("0.9300"),
+            ),
         ]
     )
     session.commit()
@@ -473,6 +489,153 @@ def _strands_response(session_id, identity_status, *, message, intent, route, ca
         selected_agent="StorefrontShoppingAgent",
         selected_tool=selected_tool,
     )
+
+
+def _counting_catalog_evaluator(calls: list[str]):
+    def fake_evaluate_chat(message, context, *, history=None, session_id=None):
+        calls.append(message)
+        decision = triage_chat(message, context)
+        return ChatOrchestrationDecision(
+            decision=decision,
+            selected_agent="ProductAgent",
+            selected_tool="semantic_catalog_search",
+            evaluator_confidence=0.9,
+            evaluator_source="test",
+            requires_auth=False,
+        )
+
+    return fake_evaluate_chat
+
+
+def test_chat_schema_accepts_turn_metadata_and_preserves_legacy_defaults():
+    legacy = ChatRequest.model_validate(_chat_payload("Hello"))
+    assert legacy.client_request_id is None
+    assert legacy.trigger_type == "user_submit"
+    assert legacy.parent_turn_id is None
+
+    payload = _chat_payload("Retry this")
+    payload["client_request_id"] = "client_req_1"
+    payload["trigger_type"] = "retry"
+    payload["parent_turn_id"] = "turn_previous"
+    request = ChatRequest.model_validate(payload)
+    assert request.client_request_id == "client_req_1"
+    assert request.trigger_type == "retry"
+    assert request.parent_turn_id == "turn_previous"
+
+
+def test_chat_client_request_id_replays_completed_turn_without_orchestration(monkeypatch):
+    fake = _patch_chat_llmobs(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", _counting_catalog_evaluator(calls))
+
+    with _chat_client(monkeypatch) as (client, SessionLocal):
+        payload = _chat_payload("do you have a moisturizer under $150", current_product_id="prod_5")
+        payload["client_request_id"] = "client_req_1"
+        first_response = client.post("/api/chat", json=payload)
+        first = first_response.json()
+
+        replay_payload = {**payload, "conversation_id": first["conversation_id"]}
+        second_response = client.post("/api/chat", json=replay_payload)
+        second = second_response.json()
+
+        with SessionLocal() as session:
+            turns = session.scalars(select(ChatTurn).order_by(ChatTurn.created_at)).all()
+            messages = session.scalars(select(ChatMessage).where(ChatMessage.session_id == first["conversation_id"])).all()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert calls == ["do you have a moisturizer under $150"]
+    assert first["turn_id"].startswith("turn_")
+    assert second["turn_id"] == first["turn_id"]
+    assert second["client_request_id"] == "client_req_1"
+    assert second["duplicate_replay"] is True
+    assert len(turns) == 1
+    assert turns[0].status == "completed"
+    assert len(messages) == 2
+    message_payloads = {message.role: message.payload_json for message in messages}
+    assert message_payloads["user"]["turn"]["turn_id"] == first["turn_id"]
+    assert message_payloads["assistant"]["turn"]["request_fingerprint"] == turns[0].request_fingerprint
+
+    span_pairs = [(span["kind"], span["name"]) for span in fake.spans]
+    assert span_pairs.count(("agent", "sterling_hollis_chat")) == 2
+    assert span_pairs.count(("tool", "execute_selected_tool")) == 1
+    replay_annotations = [
+        annotation
+        for annotation in fake.annotations
+        if annotation.get("span", {}).get("name") == "sterling_hollis_chat"
+        and annotation.get("tags", {}).get("duplicate_replay") is True
+    ]
+    assert replay_annotations
+    assert replay_annotations[-1]["tags"]["turn_id"] == first["turn_id"]
+
+
+def test_chat_same_message_without_client_request_id_creates_new_turn(monkeypatch):
+    fake = _patch_chat_llmobs(monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", _counting_catalog_evaluator(calls))
+
+    with _chat_client(monkeypatch) as (client, SessionLocal):
+        first_response = client.post(
+            "/api/chat",
+            json=_chat_payload("do you have a moisturizer under $150", current_product_id="prod_5"),
+        )
+        conversation_id = first_response.json()["conversation_id"]
+        second_response = client.post(
+            "/api/chat",
+            json={
+                **_chat_payload("do you have a moisturizer under $150", current_product_id="prod_5"),
+                "conversation_id": conversation_id,
+            },
+        )
+        first = first_response.json()
+        second = second_response.json()
+
+        with SessionLocal() as session:
+            turns = session.scalars(select(ChatTurn).where(ChatTurn.session_id == conversation_id).order_by(ChatTurn.created_at)).all()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert calls == ["do you have a moisturizer under $150", "do you have a moisturizer under $150"]
+    assert first["turn_id"] != second["turn_id"]
+    assert first["duplicate_replay"] is False
+    assert second["duplicate_replay"] is False
+    assert len(turns) == 2
+    assert all(turn.client_request_id is None for turn in turns)
+
+    root_inputs = [
+        annotation
+        for annotation in fake.annotations
+        if annotation.get("span", {}).get("name") == "sterling_hollis_chat" and "input_data" in annotation
+    ]
+    assert root_inputs[-1]["tags"]["possible_duplicate"] is True
+
+
+def test_chat_different_client_request_id_creates_new_turn(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr("app.services.chat.orchestrator.evaluate_chat", _counting_catalog_evaluator(calls))
+
+    with _chat_client(monkeypatch) as (client, SessionLocal):
+        first_payload = _chat_payload("do you have a moisturizer under $150", current_product_id="prod_5")
+        first_payload["client_request_id"] = "client_req_1"
+        first_response = client.post("/api/chat", json=first_payload)
+        first = first_response.json()
+
+        second_payload = _chat_payload("do you have a moisturizer under $150", current_product_id="prod_5")
+        second_payload["conversation_id"] = first["conversation_id"]
+        second_payload["client_request_id"] = "client_req_2"
+        second_response = client.post("/api/chat", json=second_payload)
+        second = second_response.json()
+
+        with SessionLocal() as session:
+            turns = session.scalars(select(ChatTurn).where(ChatTurn.session_id == first["conversation_id"]).order_by(ChatTurn.created_at)).all()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert calls == ["do you have a moisturizer under $150", "do you have a moisturizer under $150"]
+    assert first["turn_id"] != second["turn_id"]
+    assert first["duplicate_replay"] is False
+    assert second["duplicate_replay"] is False
+    assert [turn.client_request_id for turn in turns] == ["client_req_1", "client_req_2"]
 
 
 def test_strands_product_mode_uses_storefront_agent_for_catalog_search(monkeypatch):
@@ -749,6 +912,116 @@ def test_strands_product_mode_filters_replacement_dresses_for_skirt_outfit(monke
     assert any(trace["name"] == "filter_outfit_cards" for trace in payload["tool_trace"])
 
 
+def test_strands_product_mode_forces_mens_gender_when_agent_overrides_it(monkeypatch):
+    def fake_invoke_storefront_shopping_agent(prompt, tools):
+        search_result = tools[1](
+            target_categories=["shoes", "handbags", "jewelry_accessories"],
+            target_genders=["women"],
+            limit=6,
+        )
+        return ShoppingAgentResult(
+            message="I found outfit pieces for the sage shirt.",
+            intent="complementary_products",
+            route="semantic_catalog_search",
+            primary_tool="semantic_catalog_search",
+            product_ids=list(search_result.get("product_ids") or []),
+            rationale="Agent attempted an overridden gender search.",
+        )
+
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.invoke_storefront_shopping_agent", fake_invoke_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, TestingSessionLocal):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_9",
+                current_product={
+                    "id": "prod_9",
+                    "title": "Noir Harbor Wool Work Shirt",
+                    "category": "mens_apparel",
+                    "brand": "Noir Harbor",
+                    "attributes": {"color": "navy", "material": "wool", "gender": "men"},
+                },
+                category="mens_apparel",
+            ),
+        )
+        with TestingSessionLocal() as session:
+            stored_calls = session.scalars(select(ChatToolCall).where(ChatToolCall.tool_name == "semantic_catalog_search")).all()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert all(card["attributes"].get("gender") in {"men", "unisex"} for card in payload["cards"])
+    assert all(card["category"] in {"mens_apparel", "shoes"} for card in payload["cards"])
+    assert payload["requires_followup"] is True
+    assert "broaden to unisex accessories" in payload["clarifying_question"]
+    assert stored_calls
+    assert stored_calls[0].input_json["target_genders"] == ["men"]
+    assert stored_calls[0].input_json["target_categories"] == ["shoes"]
+
+
+def test_strands_product_mode_filters_bad_gender_tool_outputs_for_mens_outfit(monkeypatch):
+    def fake_build_storefront_tools(db, req, frame, record_tool_call):
+        def noop(*_args, **_kwargs):
+            return {"cards": [], "product_ids": [], "count": 0, "strategy": "noop"}
+
+        def bad_semantic_search(*_args, **_kwargs):
+            cards = [
+                *catalog_cards(db, category="shoes", store_id=req.context.store_id, query="pump", limit=2),
+                *catalog_cards(db, category="handbags", store_id=req.context.store_id, limit=1),
+            ]
+            output = cards_payload(cards, strategy="bad_test_output")
+            record_tool_call(
+                "semantic_catalog_search",
+                {"target_genders": ["women"], "target_categories": ["shoes", "handbags"]},
+                output,
+            )
+            return output
+
+        return [noop, bad_semantic_search, noop, noop, noop, noop]
+
+    def fake_invoke_storefront_shopping_agent(prompt, tools):
+        search_result = tools[1]()
+        return ShoppingAgentResult(
+            message="Here are outfit pieces for the men's sage shirt: pumps and a handbag.",
+            intent="complementary_products",
+            route="semantic_catalog_search",
+            primary_tool="semantic_catalog_search",
+            product_ids=list(search_result.get("product_ids") or []),
+            rationale="Agent returned bad gender tool output.",
+        )
+
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.build_storefront_tools", fake_build_storefront_tools)
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.invoke_storefront_shopping_agent", fake_invoke_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_9",
+                current_product={
+                    "id": "prod_9",
+                    "title": "Noir Harbor Wool Work Shirt",
+                    "category": "mens_apparel",
+                    "brand": "Noir Harbor",
+                    "attributes": {"color": "navy", "material": "wool", "gender": "men"},
+                },
+                category="mens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cards"]
+    assert all(card["attributes"].get("gender") in {"men", "unisex"} for card in payload["cards"])
+    assert all("Pump" not in card["title"] and "Handbag" not in card["title"] for card in payload["cards"])
+    assert "pump" not in payload["message"].lower()
+    assert payload["requires_followup"] is True
+    assert any(trace["name"] == "filter_gender_cards" for trace in payload["tool_trace"])
+
+
 def test_strands_product_mode_keeps_order_status_deterministic(monkeypatch):
     def fail_run_storefront_shopping_agent(*_args, **_kwargs):
         raise AssertionError("Private account/order flows must not enter Strands product orchestration")
@@ -944,6 +1217,40 @@ def test_outfit_starter_around_apparel_can_return_apparel_layers(monkeypatch):
     assert "womens_apparel" in {card["category"] for card in payload["cards"]}
     assert any(
         trace["name"] == "intent_frame" and "target_categories=womens_apparel" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
+
+
+def test_deterministic_mens_shirt_outfit_uses_strict_gender_guardrails(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_9",
+                current_product={
+                    "id": "prod_9",
+                    "title": "Noir Harbor Wool Work Shirt",
+                    "category": "mens_apparel",
+                    "brand": "Noir Harbor",
+                    "attributes": {"color": "navy", "material": "wool", "gender": "men"},
+                },
+                category="mens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "complementary_products"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert all(card["category"] in {"mens_apparel", "shoes"} for card in payload["cards"])
+    assert all(card["attributes"].get("gender") in {"men", "unisex"} for card in payload["cards"])
+    assert all("Pump" not in card["title"] and "Handbag" not in card["title"] for card in payload["cards"])
+    assert payload["requires_followup"] is True
+    assert "broaden to unisex accessories" in payload["clarifying_question"]
+    assert any(
+        trace["name"] == "intent_frame" and "target_categories=mens_apparel,shoes" in trace["decision"]
         for trace in payload["tool_trace"]
     )
 
@@ -1506,6 +1813,10 @@ def test_chat_llmobs_records_root_workflow_tool_spans_and_evaluations(monkeypatc
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["turn_id"].startswith("turn_")
+    assert payload["client_request_id"] is None
+    assert payload["trigger_type"] == "user_submit"
+    assert payload["duplicate_replay"] is False
     span_pairs = [(span["kind"], span["name"]) for span in fake.spans]
     assert ("agent", "sterling_hollis_chat") in span_pairs
     assert ("workflow", "chat_turn") in span_pairs
@@ -1516,6 +1827,15 @@ def test_chat_llmobs_records_root_workflow_tool_spans_and_evaluations(monkeypatc
     assert ("tool", "execute_selected_tool") in span_pairs
     assert ("tool", payload["selected_tool"]) in span_pairs
     assert fake.exports
+    root_inputs = [
+        annotation
+        for annotation in fake.annotations
+        if annotation.get("span", {}).get("name") == "sterling_hollis_chat" and "input_data" in annotation
+    ]
+    assert root_inputs[0]["tags"]["turn_id"] == payload["turn_id"]
+    assert root_inputs[0]["tags"]["trigger_type"] == "user_submit"
+    assert root_inputs[0]["tags"]["possible_duplicate"] is False
+    assert root_inputs[0]["tags"]["duplicate_replay"] is False
 
     evaluations = {item["label"]: item for item in fake.evaluations}
     assert evaluations["chat_route_confidence"]["value"] == 0.5

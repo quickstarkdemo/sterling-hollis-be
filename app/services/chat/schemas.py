@@ -33,6 +33,9 @@ class ChatRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=2000)
     conversation_id: str | None = Field(default=None, max_length=64)
+    client_request_id: str | None = Field(default=None, max_length=128)
+    trigger_type: Literal["user_submit", "suggestion_click", "retry", "system_auto"] = "user_submit"
+    parent_turn_id: str | None = Field(default=None, max_length=64)
     context: ChatContext = Field(default_factory=ChatContext)
 
 
@@ -50,6 +53,10 @@ class ChatToolTrace(BaseModel):
 
 class ChatResponse(BaseModel):
     conversation_id: str
+    turn_id: str | None = None
+    client_request_id: str | None = None
+    trigger_type: Literal["user_submit", "suggestion_click", "retry", "system_auto"] = "user_submit"
+    duplicate_replay: bool = False
     message: str
     identity_status: Literal["anonymous", "authenticated_unlinked", "authenticated_customer"]
     intent: Literal[

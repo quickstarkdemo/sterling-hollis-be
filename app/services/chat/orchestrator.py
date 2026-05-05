@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 import logging
 import re
 from uuid import uuid4
@@ -9,7 +11,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.catalog.schemas import CatalogProduct
-from app.models import ChatMessage, ChatSession, ChatToolCall
+from app.models import ChatMessage, ChatSession, ChatToolCall, ChatTurn
 from app.observability.genai_otel import suppress_genai_otel
 from app.services.auth.clerk import ChatIdentity
 from app.services.chat.context import summarize_context
@@ -188,6 +190,192 @@ def _persist_message(db: Session, session_id: str, role: str, content: str, payl
     db.add(message)
     db.flush()
     return message
+
+
+def _normalize_fingerprint_message(message: str) -> str:
+    return " ".join(message.casefold().split())
+
+
+def _request_fingerprint(req: ChatRequest) -> str:
+    context = summarize_context(req.context)
+    material_context = {
+        "category": context.get("category"),
+        "current_product": context.get("current_product"),
+        "page_type": context.get("page_type"),
+        "product_id": context.get("product_id"),
+        "route": context.get("route"),
+        "store_id": context.get("store_id"),
+    }
+    payload = {
+        "message": _normalize_fingerprint_message(req.message),
+        "context": material_context,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _turn_metadata(
+    *,
+    turn_id: str,
+    req: ChatRequest,
+    fingerprint: str,
+    possible_duplicate: bool = False,
+    duplicate_replay: bool = False,
+) -> dict:
+    return {
+        "turn_id": turn_id,
+        "client_request_id": req.client_request_id or "",
+        "trigger_type": req.trigger_type,
+        "parent_turn_id": req.parent_turn_id or "",
+        "request_fingerprint": fingerprint,
+        "possible_duplicate": possible_duplicate,
+        "duplicate_replay": duplicate_replay,
+    }
+
+
+def _turn_message_payload(req: ChatRequest, metadata: dict, *, context: dict | None = None) -> dict:
+    return {
+        "context": context if context is not None else summarize_context(req.context),
+        "turn": metadata,
+    }
+
+
+def _assistant_message_payload(response: ChatResponse, metadata: dict) -> dict:
+    payload = response.model_dump(mode="json")
+    payload["turn"] = metadata
+    return payload
+
+
+def _find_completed_turn_by_client_request(
+    db: Session,
+    *,
+    session_id: str,
+    client_request_id: str | None,
+) -> ChatTurn | None:
+    if not client_request_id:
+        return None
+    return (
+        db.query(ChatTurn)
+        .filter(
+            ChatTurn.session_id == session_id,
+            ChatTurn.client_request_id == client_request_id,
+            ChatTurn.status == "completed",
+        )
+        .order_by(ChatTurn.created_at.desc())
+        .first()
+    )
+
+
+def _has_recent_matching_turn(
+    db: Session,
+    *,
+    session_id: str,
+    fingerprint: str,
+    now: datetime,
+) -> bool:
+    cutoff = now - timedelta(seconds=10)
+    return (
+        db.query(ChatTurn.id)
+        .filter(
+            ChatTurn.session_id == session_id,
+            ChatTurn.request_fingerprint == fingerprint,
+            ChatTurn.created_at >= cutoff,
+            ChatTurn.status == "completed",
+        )
+        .first()
+        is not None
+    )
+
+
+def _create_chat_turn(db: Session, *, session: ChatSession, req: ChatRequest, fingerprint: str, now: datetime) -> ChatTurn:
+    turn = ChatTurn(
+        id=_id("turn"),
+        session_id=session.id,
+        client_request_id=req.client_request_id,
+        trigger_type=req.trigger_type,
+        parent_turn_id=req.parent_turn_id,
+        request_fingerprint=fingerprint,
+        message=req.message,
+        context_json=summarize_context(req.context),
+        response_json={},
+        status="pending",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(turn)
+    db.flush()
+    return turn
+
+
+def _apply_turn_metadata(response: ChatResponse, metadata: dict) -> ChatResponse:
+    response.turn_id = metadata["turn_id"]
+    response.client_request_id = metadata["client_request_id"] or None
+    response.trigger_type = metadata["trigger_type"]
+    response.duplicate_replay = bool(metadata["duplicate_replay"])
+    return response
+
+
+def _complete_chat_turn(
+    turn: ChatTurn,
+    *,
+    response: ChatResponse,
+    user_message: ChatMessage | None,
+    assistant_message: ChatMessage | None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    turn.user_message_id = user_message.id if user_message else turn.user_message_id
+    turn.assistant_message_id = assistant_message.id if assistant_message else turn.assistant_message_id
+    turn.response_json = response.model_dump(mode="json")
+    turn.status = "completed"
+    turn.updated_at = now
+
+
+def _response_from_completed_turn(turn: ChatTurn, *, req: ChatRequest) -> ChatResponse:
+    response = ChatResponse.model_validate(turn.response_json)
+    response.duplicate_replay = True
+    response.turn_id = response.turn_id or turn.id
+    response.client_request_id = response.client_request_id or req.client_request_id
+    return response
+
+
+def _annotate_duplicate_replay(
+    *,
+    root_span,
+    req: ChatRequest,
+    session: ChatSession,
+    identity: ChatIdentity,
+    response: ChatResponse,
+    metadata: dict,
+) -> None:
+    _llmobs_annotate_safe(
+        span=root_span,
+        input_data={
+            "message": req.message,
+            "conversation_id": session.id,
+            "context": summarize_context(req.context),
+            **metadata,
+        },
+        output_data={
+            "conversation_id": response.conversation_id,
+            "message": response.message,
+            "route": response.route,
+            "intent": response.intent,
+            "selected_agent": response.selected_agent,
+            "selected_tool": response.selected_tool,
+            "duplicate_replay": True,
+        },
+        metadata={
+            "identity_status": identity.status,
+            "conversation_id": session.id,
+            **metadata,
+        },
+        tags={
+            "workflow": "chat",
+            "identity_status": identity.status,
+            "conversation_id": session.id,
+            **metadata,
+        },
+    )
 
 
 def _recent_history(db: Session, session_id: str, *, limit: int = 8) -> list[dict[str, str]]:
@@ -405,8 +593,8 @@ def _apply_orchestration_trace(
     response.evaluator_confidence = round(orchestration.evaluator_confidence, 4)
     response.selected_agent = orchestration.selected_agent
     response.selected_tool = orchestration.selected_tool
-    response.requires_followup = orchestration.requires_followup
-    response.clarifying_question = orchestration.clarifying_question
+    response.requires_followup = response.requires_followup or orchestration.requires_followup
+    response.clarifying_question = response.clarifying_question or orchestration.clarifying_question
     response.tool_trace.extend(
         [
             ChatToolTrace(
@@ -618,6 +806,7 @@ def _related_products_response(
             current_product_id,
             store_id=req.context.store_id,
             target_genders=frame.target_genders,
+            strict_gender=bool(frame.target_genders),
             limit=3,
         )
         if current_product_id
@@ -651,6 +840,7 @@ def _semantic_catalog_response(
     decision: TriageDecision,
     frame: ChatIntentFrame,
 ) -> ChatResponse:
+    strict_gender = bool(frame.target_genders)
     cards, strategy = semantic_catalog_cards(
         db,
         query=frame.query,
@@ -661,6 +851,7 @@ def _semantic_catalog_response(
         colors=frame.colors,
         current_product_id=frame.current_product_id,
         store_id=req.context.store_id,
+        strict_gender=strict_gender,
         limit=3,
     )
     if cards and frame.intent == "complementary_products":
@@ -672,6 +863,17 @@ def _semantic_catalog_response(
         message = "I found a few products that fit that request."
     else:
         message = "I could not find matching catalog products for that request."
+
+    needs_strict_followup = frame.intent == "complementary_products" and strict_gender and len(cards) < 3
+    clarifying_question = None
+    if needs_strict_followup:
+        current_label = "that item"
+        if req.context.current_product and req.context.current_product.title:
+            current_label = req.context.current_product.title
+        clarifying_question = (
+            f"I found fewer than three strict matches for {current_label}. "
+            "Would you like me to broaden to unisex accessories or looser styling matches?"
+        )
 
     trace_decision = (
         f"target_category={','.join(frame.target_categories) or 'any'}, "
@@ -692,6 +894,7 @@ def _semantic_catalog_response(
             "target_genders": frame.target_genders,
             "budget_max": frame.budget_max,
             "strategy": strategy,
+            "strict_gender": strict_gender,
         },
         cards,
     )
@@ -707,6 +910,8 @@ def _semantic_catalog_response(
             ChatToolTrace(name="triage", decision=decision.reason),
             ChatToolTrace(name="semantic_catalog_search", decision=trace_decision),
         ],
+        requires_followup=needs_strict_followup,
+        clarifying_question=clarifying_question,
     )
 
 
@@ -813,6 +1018,54 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
     original_context = summarize_context(req.context)
     req = _normalize_context(db, req)
     session = _persist_session(db, req, identity)
+    now = datetime.now(timezone.utc)
+    request_fingerprint = _request_fingerprint(req)
+    completed_turn = _find_completed_turn_by_client_request(
+        db,
+        session_id=session.id,
+        client_request_id=req.client_request_id,
+    )
+    if completed_turn is not None:
+        response = _response_from_completed_turn(completed_turn, req=req)
+        replay_metadata = _turn_metadata(
+            turn_id=completed_turn.id,
+            req=req,
+            fingerprint=completed_turn.request_fingerprint,
+            duplicate_replay=True,
+        )
+        with suppress_genai_otel(), LLMObs.agent(name="sterling_hollis_chat", session_id=session.id) as root_span:
+            _annotate_duplicate_replay(
+                root_span=root_span,
+                req=req,
+                session=session,
+                identity=identity,
+                response=response,
+                metadata=replay_metadata,
+            )
+            _llmobs_export_span_safe(root_span)
+        return response
+
+    possible_duplicate = False
+    if not req.client_request_id:
+        possible_duplicate = _has_recent_matching_turn(
+            db,
+            session_id=session.id,
+            fingerprint=request_fingerprint,
+            now=now,
+        )
+    turn = _create_chat_turn(
+        db,
+        session=session,
+        req=req,
+        fingerprint=request_fingerprint,
+        now=now,
+    )
+    turn_metadata = _turn_metadata(
+        turn_id=turn.id,
+        req=req,
+        fingerprint=request_fingerprint,
+        possible_duplicate=possible_duplicate,
+    )
     exported_span = None
     response: ChatResponse | None = None
     orchestration: ChatOrchestrationDecision | None = None
@@ -826,11 +1079,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 "message": req.message,
                 "conversation_id": session.id,
                 "context": summarize_context(req.context),
+                **turn_metadata,
             },
             tags={
                 "workflow": "chat",
                 "identity_status": identity.status,
                 "conversation_id": session.id,
+                **turn_metadata,
             },
         )
 
@@ -841,10 +1096,12 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     "message": req.message,
                     "conversation_id": session.id,
                     "context": summarize_context(req.context),
+                    **turn_metadata,
                 },
                 tags={
                     "workflow": "chat",
                     "identity_status": identity.status,
+                    **turn_metadata,
                 },
             )
 
@@ -853,7 +1110,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     span=normalize_span,
                     input_data={"context": original_context},
                     output_data={"context": summarize_context(req.context)},
-                    tags={"workflow": "chat"},
+                    tags={"workflow": "chat", **turn_metadata},
                 )
 
             with LLMObs.workflow(name="chat_history", session_id=session.id) as history_span:
@@ -865,7 +1122,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         "history_count": len(history),
                         "roles": [turn["role"] for turn in history],
                     },
-                    tags={"workflow": "chat"},
+                    tags={"workflow": "chat", **turn_metadata},
                 )
 
             with LLMObs.tool(name="chat_safety_guard", session_id=session.id) as safety_span:
@@ -876,6 +1133,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         "message": req.message,
                         "conversation_id": session.id,
                         "history_count": len(history),
+                        **turn_metadata,
                     },
                     output_data={
                         "intercepted": safety_decision.intercepted,
@@ -887,6 +1145,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     },
                     tags={
                         "workflow": "chat",
+                        **turn_metadata,
                         **_safety_decision_summary(safety_decision),
                     },
                 )
@@ -900,17 +1159,18 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         session.id,
                         "user",
                         req.message,
-                        {"context": summarize_context(req.context)},
+                        _turn_message_payload(req, turn_metadata),
                     )
                     _llmobs_annotate_safe(
                         span=persist_user_span,
                         input_data={"conversation_id": session.id, "role": "user"},
                         output_data={"message_id": user_message.id},
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
 
                 with LLMObs.tool(name="safety_refusal", session_id=session.id) as refusal_span:
                     response = _safety_response(session, identity, safety_decision)
+                    response = _apply_turn_metadata(response, turn_metadata)
                     _llmobs_annotate_safe(
                         span=refusal_span,
                         input_data={
@@ -924,11 +1184,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             "intent": response.intent,
                             "message": response.message,
                             "auth_decision": auth_decision,
+                            **turn_metadata,
                         },
                         tags={
                             "workflow": "chat",
                             "tool": "safety_refusal",
                             "agent": "SafetyGuard",
+                            **turn_metadata,
                             **_safety_decision_summary(safety_decision),
                         },
                     )
@@ -941,7 +1203,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             "selected_agent": response.selected_agent,
                             "selected_tool": response.selected_tool,
                         },
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
 
                 with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
@@ -950,14 +1212,20 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         session.id,
                         "assistant",
                         response.message,
-                        response.model_dump(mode="json"),
+                        _assistant_message_payload(response, turn_metadata),
+                    )
+                    _complete_chat_turn(
+                        turn,
+                        response=response,
+                        user_message=user_message,
+                        assistant_message=assistant,
                     )
                     db.commit()
                     _llmobs_annotate_safe(
                         span=persist_assistant_span,
                         input_data={"conversation_id": session.id, "role": "assistant"},
                         output_data={"message_id": assistant.id},
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
             else:
                 strands_tool_calls = []
@@ -990,7 +1258,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                 "policy_applied": before_tool != orchestration.selected_tool,
                                 "source": orchestration.evaluator_source,
                             },
-                            tags={"workflow": "chat"},
+                            tags={"workflow": "chat", **turn_metadata},
                         )
                 decision = orchestration.decision
 
@@ -1012,7 +1280,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             "budget_max": frame.budget_max,
                             "current_product_id": frame.current_product_id,
                         },
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
 
                 with LLMObs.tool(name="persist_user_message", session_id=session.id) as persist_user_span:
@@ -1021,13 +1289,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         session.id,
                         "user",
                         req.message,
-                        {"context": summarize_context(req.context)},
+                        _turn_message_payload(req, turn_metadata),
                     )
                     _llmobs_annotate_safe(
                         span=persist_user_span,
                         input_data={"conversation_id": session.id, "role": "user"},
                         output_data={"message_id": user_message.id},
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
 
                 auth_required = _requires_auth(decision, orchestration)
@@ -1050,6 +1318,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             "workflow": "chat",
                             "tool": selected_tool,
                             "identity_status": identity.status,
+                            **turn_metadata,
                         },
                     )
 
@@ -1063,11 +1332,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             "auth_required": auth_required,
                             "identity_status": identity.status,
                             "context": summarize_context(req.context),
+                            **turn_metadata,
                         },
                         tags={
                             "workflow": "chat",
                             "tool": selected_tool,
                             "agent": orchestration.selected_agent,
+                            **turn_metadata,
                         },
                     )
 
@@ -1081,11 +1352,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                 "auth_required": auth_required,
                                 "identity_status": identity.status,
                                 "context": summarize_context(req.context),
+                                **turn_metadata,
                             },
                             tags={
                                 "workflow": "chat",
                                 "tool": selected_tool,
                                 "agent": orchestration.selected_agent,
+                                **turn_metadata,
                             },
                         )
 
@@ -1146,11 +1419,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                 "auth_decision": auth_decision,
                                 "card_count": len(response.cards),
                                 "product_ids": [card.id for card in response.cards],
+                                **turn_metadata,
                             },
                             metadata={
                                 "requires_followup": response.requires_followup,
                                 "selected_agent": response.selected_agent,
                                 "selected_tool": response.selected_tool,
+                                **turn_metadata,
                             },
                         )
 
@@ -1163,11 +1438,13 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                             "auth_decision": auth_decision,
                             "card_count": len(response.cards),
                             "product_ids": [card.id for card in response.cards],
+                            **turn_metadata,
                         },
                         metadata={
                             "requires_followup": response.requires_followup,
                             "selected_agent": response.selected_agent,
                             "selected_tool": response.selected_tool,
+                            **turn_metadata,
                         },
                     )
 
@@ -1182,14 +1459,16 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         response.selected_agent = "StorefrontShoppingAgent"
                         if strands_selected_tool:
                             response.selected_tool = strands_selected_tool
+                    response = _apply_turn_metadata(response, turn_metadata)
                     _llmobs_annotate_safe(
                         span=trace_span,
                         output_data={
                             "trace_count": len(response.tool_trace),
                             "selected_agent": response.selected_agent,
                             "selected_tool": response.selected_tool,
+                            **turn_metadata,
                         },
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
 
                 with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
@@ -1198,7 +1477,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         session.id,
                         "assistant",
                         response.message,
-                        response.model_dump(mode="json"),
+                        _assistant_message_payload(response, turn_metadata),
                     )
 
                     for call in (
@@ -1218,12 +1497,18 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         make_id=_id,
                     )
 
+                    _complete_chat_turn(
+                        turn,
+                        response=response,
+                        user_message=user_message,
+                        assistant_message=assistant,
+                    )
                     db.commit()
                     _llmobs_annotate_safe(
                         span=persist_assistant_span,
                         input_data={"conversation_id": session.id, "role": "assistant"},
                         output_data={"message_id": assistant.id},
-                        tags={"workflow": "chat"},
+                        tags={"workflow": "chat", **turn_metadata},
                     )
 
             _llmobs_annotate_safe(
@@ -1238,9 +1523,11 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     "requires_followup": response.requires_followup,
                     "card_count": len(response.cards),
                     "product_ids": [card.id for card in response.cards],
+                    **turn_metadata,
                 },
                 metadata={
                     "auth_decision": auth_decision,
+                    **turn_metadata,
                     **_safety_decision_summary(safety_decision),
                 },
                 tags={
@@ -1248,6 +1535,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     "selected_tool": response.selected_tool,
                     "intent": response.intent,
                     "route": response.route,
+                    **turn_metadata,
                     **_safety_decision_summary(safety_decision),
                 },
             )
@@ -1264,6 +1552,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 "requires_followup": response.requires_followup,
                 "card_count": len(response.cards),
                 "product_ids": [card.id for card in response.cards],
+                **turn_metadata,
             },
             metadata={
                 "identity_status": response.identity_status,
@@ -1274,6 +1563,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 "auth_decision": auth_decision,
                 "conversation_id": response.conversation_id,
                 "card_count": len(response.cards),
+                **turn_metadata,
                 **_safety_decision_summary(safety_decision),
             },
             tags={
@@ -1283,6 +1573,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 "intent": response.intent,
                 "route": response.route,
                 "conversation_id": response.conversation_id,
+                **turn_metadata,
                 **_safety_decision_summary(safety_decision),
             },
         )

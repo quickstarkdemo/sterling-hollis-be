@@ -431,6 +431,37 @@ class ChatMessage(Base):
     )
 
 
+class ChatTurn(Base):
+    __tablename__ = "chat_turns"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    client_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    trigger_type: Mapped[str] = mapped_column(String(32), nullable=False, default="user_submit")
+    parent_turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    context_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    user_message_id: Mapped[str | None] = mapped_column(ForeignKey("chat_messages.id", ondelete="SET NULL"), index=True)
+    assistant_message_id: Mapped[str | None] = mapped_column(ForeignKey("chat_messages.id", ondelete="SET NULL"), index=True)
+    response_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "client_request_id", name="uq_chat_turns_session_client_request"),
+    )
+
+
 class ChatToolCall(Base):
     __tablename__ = "chat_tool_calls"
 

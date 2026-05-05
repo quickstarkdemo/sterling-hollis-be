@@ -254,6 +254,11 @@ def _current_product_gender(context: ChatContext) -> str | None:
 def _outfit_categories(context: ChatContext, current_category: str | None) -> list[str]:
     gender = _current_product_gender(context)
     apparel_category = "mens_apparel" if gender in {"men", "mens", "male"} else "womens_apparel"
+    if apparel_category == "mens_apparel":
+        categories = [apparel_category, "shoes"]
+        if current_category == apparel_category:
+            return categories
+        return [category for category in categories if category != current_category]
     categories = [apparel_category, "shoes", "handbags", "jewelry_accessories"]
     if current_category == apparel_category:
         return categories

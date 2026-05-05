@@ -78,6 +78,23 @@ QUERY_STOPWORDS = {
     "you",
 }
 
+WOMEN_CODED_PRODUCT_TERMS = {
+    "blouse",
+    "blouses",
+    "dress",
+    "dresses",
+    "gown",
+    "gowns",
+    "heel",
+    "heels",
+    "pump",
+    "pumps",
+    "skirt",
+    "skirts",
+    "stiletto",
+    "stilettos",
+}
+
 
 def product_detail(db: Session, product_id: str, store_id: str | None = None) -> CatalogProduct | None:
     return get_product_detail(db, product_id, store_id=store_id)
@@ -147,15 +164,34 @@ def _normalized_gender(gender: str | None) -> str | None:
     return clean or None
 
 
-def _gender_allowed(card: CatalogProduct, target_genders: list[str]) -> bool:
+def _card_words(card: CatalogProduct) -> set[str]:
+    text = " ".join(
+        [
+            card.title,
+            card.description,
+            card.brand,
+            card.category,
+            *card.attributes.values(),
+        ]
+    )
+    return set(_normalized_text(text).split())
+
+
+def card_gender_allowed(card: CatalogProduct, target_genders: list[str], *, strict: bool = False) -> bool:
     normalized_targets = {_normalized_gender(gender) for gender in target_genders}
     normalized_targets.discard(None)
     if not normalized_targets:
         return True
+    if strict and "male" in normalized_targets and _card_words(card) & WOMEN_CODED_PRODUCT_TERMS:
+        return False
     card_gender = _normalized_gender(card.attributes.get("gender"))
     if not card_gender:
-        return True
+        return not strict
     return card_gender == "unisex" or card_gender in normalized_targets
+
+
+def _gender_allowed(card: CatalogProduct, target_genders: list[str], *, strict: bool = False) -> bool:
+    return card_gender_allowed(card, target_genders, strict=strict)
 
 
 def related_product_cards(db: Session, product_id: str, *, limit: int = 3) -> list[CatalogProduct]:
@@ -169,6 +205,7 @@ def store_scoped_related_product_cards(
     *,
     store_id: str | None = None,
     target_genders: list[str] | None = None,
+    strict_gender: bool = False,
     limit: int = 3,
 ) -> list[CatalogProduct]:
     response = related_products(db, product_id, limit=max(limit * 4, 12))
@@ -176,12 +213,16 @@ def store_scoped_related_product_cards(
         return []
     gender_filters = target_genders or []
     if not store_id:
-        return [card for card in response.items if _gender_allowed(card, gender_filters)][:limit]
+        return [card for card in response.items if _gender_allowed(card, gender_filters, strict=strict_gender)][:limit]
 
     scoped: list[CatalogProduct] = []
     for card in response.items:
         detail = product_detail(db, card.id, store_id=store_id)
-        if detail and detail.inventory_summary.availability != "out_of_stock" and _gender_allowed(detail, gender_filters):
+        if (
+            detail
+            and detail.inventory_summary.availability != "out_of_stock"
+            and _gender_allowed(detail, gender_filters, strict=strict_gender)
+        ):
             scoped.append(detail)
         if len(scoped) >= limit:
             break
@@ -252,6 +293,7 @@ def _card_allowed(
     budget_max: float | None,
     current_product_id: str | None,
     require_available: bool,
+    strict_gender: bool,
 ) -> bool:
     if current_product_id and card.id == current_product_id:
         return False
@@ -259,7 +301,7 @@ def _card_allowed(
         return False
     if exclude_categories and card.category in exclude_categories:
         return False
-    if not _gender_allowed(card, target_genders):
+    if not _gender_allowed(card, target_genders, strict=strict_gender):
         return False
     if budget_max is not None and card.price_min > budget_max:
         return False
@@ -278,6 +320,7 @@ def _filter_cards(
     colors: list[str],
     current_product_id: str | None,
     require_available: bool,
+    strict_gender: bool,
     limit: int,
 ) -> list[CatalogProduct]:
     filtered = []
@@ -293,6 +336,7 @@ def _filter_cards(
             budget_max=budget_max,
             current_product_id=current_product_id,
             require_available=require_available,
+            strict_gender=strict_gender,
         ):
             filtered.append(card)
             seen.add(card.id)
@@ -313,6 +357,7 @@ def _semantic_vector_cards(
     colors: list[str],
     current_product_id: str | None,
     store_id: str | None,
+    strict_gender: bool,
     limit: int,
 ) -> list[CatalogProduct]:
     _llmobs_annotate_safe(
@@ -325,6 +370,7 @@ def _semantic_vector_cards(
             "colors": colors,
             "current_product_id": current_product_id,
             "store_id": store_id,
+            "strict_gender": strict_gender,
             "limit": limit,
         },
         tags={
@@ -385,6 +431,7 @@ def _semantic_vector_cards(
         colors=colors,
         current_product_id=current_product_id,
         require_available=bool(store_id),
+        strict_gender=strict_gender,
         limit=limit,
     )
 
@@ -414,6 +461,7 @@ def _sql_search_cards(
     colors: list[str],
     current_product_id: str | None,
     store_id: str | None,
+    strict_gender: bool,
     limit: int,
 ) -> list[CatalogProduct]:
     _llmobs_annotate_safe(
@@ -426,6 +474,7 @@ def _sql_search_cards(
             "colors": colors,
             "current_product_id": current_product_id,
             "store_id": store_id,
+            "strict_gender": strict_gender,
             "limit": limit,
         },
         tags={
@@ -474,6 +523,7 @@ def _sql_search_cards(
         colors=colors,
         current_product_id=current_product_id,
         require_available=bool(store_id),
+        strict_gender=strict_gender,
         limit=limit,
     )
 
@@ -509,6 +559,7 @@ def semantic_catalog_cards(
     current_product_id: str | None,
     store_id: str | None,
     target_genders: list[str] | None = None,
+    strict_gender: bool = False,
     limit: int = 3,
 ) -> tuple[list[CatalogProduct], str]:
     clean_query = " ".join((query or "").split())
@@ -522,6 +573,11 @@ def semantic_catalog_cards(
         exclude_categories,
         None,
     )
+    resolved_current_product_id = current_product_id
+    if current_product_id:
+        current_card = product_detail(db, current_product_id, store_id=store_id)
+        if current_card:
+            resolved_current_product_id = current_card.id
 
     _llmobs_annotate_safe(
         input_data={
@@ -530,9 +586,10 @@ def semantic_catalog_cards(
             "exclude_categories": normalized_exclude_categories,
             "budget_max": budget_max,
             "colors": color_filters,
-            "current_product_id": current_product_id,
+            "current_product_id": resolved_current_product_id,
             "store_id": store_id,
             "target_genders": gender_filters,
+            "strict_gender": strict_gender,
             "limit": limit,
         },
         tags={
@@ -554,8 +611,9 @@ def semantic_catalog_cards(
                 target_genders=gender_filters,
                 budget_max=budget_max,
                 colors=color_filters,
-                current_product_id=current_product_id,
+                current_product_id=resolved_current_product_id,
                 store_id=store_id,
+                strict_gender=strict_gender,
                 limit=limit,
             )
             if cards:
@@ -573,8 +631,9 @@ def semantic_catalog_cards(
             target_genders=gender_filters,
             budget_max=budget_max,
             colors=color_filters,
-            current_product_id=current_product_id,
+            current_product_id=resolved_current_product_id,
             store_id=store_id,
+            strict_gender=strict_gender,
             limit=limit,
         )
         if cards:
@@ -591,8 +650,9 @@ def semantic_catalog_cards(
             target_genders=gender_filters,
             budget_max=budget_max,
             colors=color_filters,
-            current_product_id=current_product_id,
+            current_product_id=resolved_current_product_id,
             store_id=store_id,
+            strict_gender=strict_gender,
             limit=limit,
         )
         strategy = "category_browse_fallback"

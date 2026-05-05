@@ -12,7 +12,7 @@ from app.services.chat.intent_frame import ChatIntentFrame
 from app.services.chat.schemas import ChatAction, ChatRequest, ChatResponse, ChatToolTrace
 from app.services.chat.strands_agent import ShoppingAgentResult, invoke_storefront_shopping_agent
 from app.services.chat.strands_tools import build_storefront_tools, cards_payload
-from app.services.chat.tools import semantic_catalog_cards
+from app.services.chat.tools import card_gender_allowed, semantic_catalog_cards
 from app.services.chat.triage import TriageDecision
 from ddtrace.llmobs import LLMObs
 
@@ -190,6 +190,18 @@ def _current_product_words(req: ChatRequest) -> set[str]:
     return _normalized_words(text)
 
 
+def _current_gender(req: ChatRequest) -> str | None:
+    current = req.context.current_product
+    if not current:
+        return None
+    gender = current.attributes.get("gender")
+    return gender.lower() if gender else None
+
+
+def _strict_gender(frame: ChatIntentFrame) -> bool:
+    return bool(frame.target_genders)
+
+
 def _apparel_anchor_role(req: ChatRequest) -> str:
     words = _current_product_words(req)
     if words & APPAREL_ONE_PIECE_TERMS:
@@ -206,6 +218,8 @@ def _allowed_apparel_outfit_card(req: ChatRequest, card: CatalogProduct) -> bool
         return True
     words = _card_words(card)
     role = _apparel_anchor_role(req)
+    if _current_gender(req) in {"men", "mens", "male"} and words & {"blouse", "dress", "gown", "heel", "heels", "pump", "pumps", "skirt", "stiletto"}:
+        return False
     if role in {"bottom", "one_piece"}:
         return bool(words & APPAREL_LAYER_TERMS) and not bool(words & (APPAREL_BOTTOM_TERMS | APPAREL_ONE_PIECE_TERMS))
     if role == "top_or_layer":
@@ -245,12 +259,50 @@ def _filter_outfit_cards(
     return kept, bool(removed)
 
 
+def _filter_gender_cards(
+    frame: ChatIntentFrame,
+    cards: list[CatalogProduct],
+    captured: list[CapturedToolCall],
+) -> tuple[list[CatalogProduct], bool]:
+    if not _strict_gender(frame):
+        return cards, False
+
+    kept: list[CatalogProduct] = []
+    removed: list[CatalogProduct] = []
+    for card in cards:
+        if card_gender_allowed(card, frame.target_genders, strict=True):
+            kept.append(card)
+        else:
+            removed.append(card)
+
+    if removed:
+        captured.append(
+            CapturedToolCall(
+                name="filter_gender_cards",
+                input_json={
+                    "target_genders": frame.target_genders,
+                    "removed_product_ids": [card.id for card in removed],
+                },
+                output_json=cards_payload(kept, strategy="strict_gender_filter"),
+            )
+        )
+    return kept, bool(removed)
+
+
 def _outfit_cards_message(req: ChatRequest, cards: list[CatalogProduct]) -> str | None:
     current = req.context.current_product
-    if not current or not current.title or not cards:
+    if not current or not current.title:
         return None
+    if not cards:
+        return f"I could not find enough compatible pieces to build an outfit around the {current.title}."
     titles = ", ".join(card.title for card in cards)
     return f"Here are complementary pieces to build an outfit around the {current.title}: {titles}."
+
+
+def _outfit_followup_question(req: ChatRequest) -> str:
+    current = req.context.current_product
+    label = current.title if current and current.title else "this item"
+    return f"I found fewer than three strict matches for {label}. Would you like me to broaden to unisex accessories or looser styling matches?"
 
 
 def _outfit_completion_query(category: str, req: ChatRequest) -> str:
@@ -258,6 +310,11 @@ def _outfit_completion_query(category: str, req: ChatRequest) -> str:
     color = (req.context.current_product.attributes.get("color") if req.context.current_product else None) or ""
     material = (req.context.current_product.attributes.get("material") if req.context.current_product else None) or ""
     base = " ".join(part for part in [color, material, title] if part)
+    if _current_gender(req) in {"men", "mens", "male"}:
+        if category == "mens_apparel":
+            return f"trousers chinos jeans jacket blazer overshirt sport coat to style with {base}".strip()
+        if category == "shoes":
+            return f"boots loafers sneakers dress shoes to style with {base}".strip()
     if category in APPAREL_CATEGORIES:
         return f"light blouse top cardigan jacket layer to style with {base}".strip()
     if category == "shoes":
@@ -298,6 +355,7 @@ def _complete_outfit_cards(
             target_categories=[category],
             exclude_categories=[] if category in APPAREL_CATEGORIES else frame.exclude_categories,
             target_genders=frame.target_genders,
+            strict_gender=_strict_gender(frame),
             budget_max=frame.budget_max,
             colors=[],
             current_product_id=frame.current_product_id,
@@ -377,9 +435,20 @@ def run_storefront_shopping_agent(
             )
             result = invoke_storefront_shopping_agent(prompt, tools)
         cards = _cards_from_tool_calls(captured, result, current_product_id=frame.current_product_id)
+        cards, filtered_gender_cards = _filter_gender_cards(frame, cards, captured)
         cards, filtered_outfit_cards = _filter_outfit_cards(req, frame, cards, captured)
         cards = _complete_outfit_cards(db, req, frame, cards, captured)
-        response_message = _outfit_cards_message(req, cards) if filtered_outfit_cards else None
+        cards, filtered_completion_gender_cards = _filter_gender_cards(frame, cards, captured)
+        response_message = (
+            _outfit_cards_message(req, cards)
+            if filtered_gender_cards or filtered_outfit_cards or filtered_completion_gender_cards
+            else None
+        )
+        needs_strict_followup = (
+            frame.intent == "complementary_products"
+            and _strict_gender(frame)
+            and len(cards) < 3
+        )
         primary_tool = result.primary_tool or "strands_agent"
         if primary_tool == "strands_agent" and len(captured) == 1:
             primary_tool = captured[0].name
@@ -405,8 +474,8 @@ def run_storefront_shopping_agent(
             ],
             selected_agent="StorefrontShoppingAgent",
             selected_tool=primary_tool,
-            requires_followup=result.requires_followup,
-            clarifying_question=result.clarifying_question,
+            requires_followup=result.requires_followup or needs_strict_followup,
+            clarifying_question=result.clarifying_question or (_outfit_followup_question(req) if needs_strict_followup else None),
         )
         _llmobs_annotate_safe(
             span=agent_span,
