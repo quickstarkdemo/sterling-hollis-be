@@ -255,7 +255,17 @@ def _outfit_categories(context: ChatContext, current_category: str | None) -> li
     gender = _current_product_gender(context)
     apparel_category = "mens_apparel" if gender in {"men", "mens", "male"} else "womens_apparel"
     categories = [apparel_category, "shoes", "handbags", "jewelry_accessories"]
+    if current_category == apparel_category:
+        return categories
     return [category for category in categories if category != current_category]
+
+
+def _outfit_exclude_categories(context: ChatContext, current_category: str | None) -> list[str]:
+    gender = _current_product_gender(context)
+    apparel_category = "mens_apparel" if gender in {"men", "mens", "male"} else "womens_apparel"
+    if not current_category or current_category == apparel_category:
+        return []
+    return [current_category]
 
 
 def _complementary_categories(context: ChatContext, current_category: str) -> list[str]:
@@ -385,7 +395,11 @@ def triage_chat(message: str, context: ChatContext) -> TriageDecision:
             colors=colors,
             target_categories=target_categories,
             target_genders=target_genders,
-            exclude_categories=[current_category],
+            exclude_categories=(
+                _outfit_exclude_categories(context, current_category)
+                if outfit_pairing
+                else [current_category]
+            ),
             use_current_product=bool(current_product_id),
         )
 

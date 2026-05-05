@@ -248,6 +248,51 @@ def _seed_chat_data(session):
                 inventory_qty=9,
                 objective_weight=Decimal("0.8800"),
             ),
+            _product(
+                "prod_10",
+                seed_run_id="run_chat",
+                title="Moncler Navy Skirt",
+                description="Navy cashmere skirt",
+                brand="Moncler",
+                category="womens_apparel",
+                color="Navy",
+                size="M",
+                material="cashmere",
+                gender="women",
+                price=Decimal("875.00"),
+                inventory_qty=5,
+                objective_weight=Decimal("0.7200"),
+            ),
+            _product(
+                "prod_11",
+                seed_run_id="run_chat",
+                title="Aster Atelier Ivory Cashmere Cardigan",
+                description="Ivory cashmere cardigan for layered outfits",
+                brand="Aster Atelier",
+                category="womens_apparel",
+                color="Ivory",
+                size="M",
+                material="cashmere",
+                gender="women",
+                price=Decimal("690.00"),
+                inventory_qty=8,
+                objective_weight=Decimal("0.9100"),
+            ),
+            _product(
+                "prod_12",
+                seed_run_id="run_chat",
+                title="Aster Atelier Silk Shell Top",
+                description="Ivory silk shell top for polished separates",
+                brand="Aster Atelier",
+                category="womens_apparel",
+                color="Ivory",
+                size="M",
+                material="silk",
+                gender="women",
+                price=Decimal("390.00"),
+                inventory_qty=7,
+                objective_weight=Decimal("0.9050"),
+            ),
         ]
     )
     session.commit()
@@ -488,6 +533,49 @@ def test_strands_product_mode_passes_recent_history(monkeypatch):
     assert any(turn["role"] == "user" and turn["content"] == "Hello" for turn in captured["history"])
 
 
+def test_strands_product_mode_apparel_outfit_frame_allows_apparel(monkeypatch):
+    captured = {}
+
+    def fake_run_storefront_shopping_agent(db, *, req, identity, session, decision, frame, history):
+        captured["frame"] = frame
+        cards = catalog_cards(db, category="womens_apparel", store_id=req.context.store_id, query="cardigan", limit=1)
+        return StrandsRunResult(
+            response=_strands_response(
+                session.id,
+                identity.status,
+                message="I would start with a soft layer for the navy skirt.",
+                intent="complementary_products",
+                route="semantic_catalog_search",
+                cards=cards,
+                selected_tool="semantic_catalog_search",
+            )
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.run_storefront_shopping_agent", fake_run_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_10",
+                current_product={
+                    "id": "prod_10",
+                    "title": "Moncler Navy Skirt",
+                    "category": "womens_apparel",
+                    "brand": "Moncler",
+                    "attributes": {"color": "navy", "material": "cashmere", "gender": "women"},
+                },
+                category="womens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    assert "womens_apparel" in captured["frame"].target_categories
+    assert captured["frame"].exclude_categories == []
+    assert response.json()["selected_agent"] == "StorefrontShoppingAgent"
+
+
 def test_strands_product_mode_keeps_order_status_deterministic(monkeypatch):
     def fail_run_storefront_shopping_agent(*_args, **_kwargs):
         raise AssertionError("Private account/order flows must not enter Strands product orchestration")
@@ -654,6 +742,37 @@ def test_outfit_starter_routes_to_complementary_search(monkeypatch):
     assert payload["route"] == "semantic_catalog_search"
     assert payload["cards"]
     assert "shoes" not in {card["category"] for card in payload["cards"]}
+
+
+def test_outfit_starter_around_apparel_can_return_apparel_layers(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="prod_10",
+                current_product={
+                    "id": "prod_10",
+                    "title": "Moncler Navy Skirt",
+                    "category": "womens_apparel",
+                    "brand": "Moncler",
+                    "attributes": {"color": "navy", "material": "cashmere", "gender": "women"},
+                },
+                category="womens_apparel",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "complementary_products"
+    assert payload["route"] == "semantic_catalog_search"
+    assert payload["cards"]
+    assert "prod_10" not in {card["id"] for card in payload["cards"]}
+    assert "womens_apparel" in {card["category"] for card in payload["cards"]}
+    assert any(
+        trace["name"] == "intent_frame" and "target_categories=womens_apparel" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
 
 
 def test_explicit_similar_request_can_use_gender_filtered_related_products(monkeypatch):
