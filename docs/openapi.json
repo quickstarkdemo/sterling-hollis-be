@@ -595,6 +595,18 @@
       "ChatRequest": {
         "additionalProperties": false,
         "properties": {
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
           "context": {
             "$ref": "#/components/schemas/ChatContext"
           },
@@ -614,6 +626,29 @@
             "maxLength": 2000,
             "minLength": 1,
             "title": "Message",
+            "type": "string"
+          },
+          "parent_turn_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Turn Id"
+          },
+          "trigger_type": {
+            "default": "user_submit",
+            "enum": [
+              "user_submit",
+              "suggestion_click",
+              "retry",
+              "system_auto"
+            ],
+            "title": "Trigger Type",
             "type": "string"
           }
         },
@@ -650,9 +685,25 @@
             ],
             "title": "Clarifying Question"
           },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
           "conversation_id": {
             "title": "Conversation Id",
             "type": "string"
+          },
+          "duplicate_replay": {
+            "default": false,
+            "title": "Duplicate Replay",
+            "type": "boolean"
           },
           "evaluator_confidence": {
             "anyOf": [
@@ -733,6 +784,28 @@
             },
             "title": "Tool Trace",
             "type": "array"
+          },
+          "trigger_type": {
+            "default": "user_submit",
+            "enum": [
+              "user_submit",
+              "suggestion_click",
+              "retry",
+              "system_auto"
+            ],
+            "title": "Trigger Type",
+            "type": "string"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
           }
         },
         "required": [
@@ -914,6 +987,111 @@
           "recommendations"
         ],
         "title": "CustomerRecommendationResponse",
+        "type": "object"
+      },
+      "DemoObservabilityMode": {
+        "enum": [
+          "off",
+          "latency",
+          "error",
+          "latency_and_error"
+        ],
+        "title": "DemoObservabilityMode",
+        "type": "string"
+      },
+      "DemoObservabilityStateResponse": {
+        "properties": {
+          "correlation_key": {
+            "title": "Correlation Key",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "latency_seconds": {
+            "title": "Latency Seconds",
+            "type": "number"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DemoObservabilityMode"
+          },
+          "target_store_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Store Id"
+          }
+        },
+        "required": [
+          "enabled",
+          "mode",
+          "latency_seconds",
+          "incident_id",
+          "correlation_key"
+        ],
+        "title": "DemoObservabilityStateResponse",
+        "type": "object"
+      },
+      "DemoObservabilityUpdateRequest": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "latency_seconds": {
+            "anyOf": [
+              {
+                "maximum": 60.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Seconds"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DemoObservabilityMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_store_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Store Id"
+          }
+        },
+        "title": "DemoObservabilityUpdateRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1275,6 +1453,18 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
           },
           "limit": {
             "title": "Limit",
@@ -2568,6 +2758,87 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/admin/demo/observability": {
+      "get": {
+        "operationId": "demo_observability_state_admin_demo_observability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Observability State",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "set_demo_observability_state_admin_demo_observability_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoObservabilityUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Demo Observability State",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/demo/observability/reset": {
+      "post": {
+        "operationId": "reset_demo_observability_admin_demo_observability_reset_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reset Demo Observability",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/product-images/generate": {
       "post": {
         "operationId": "generate_product_images_admin_product_images_generate_post",

@@ -79,6 +79,9 @@ frontend actions.
 | Start background product image generation | `POST` | `/admin/product-images/generate` |
 | Poll one image generation job | `GET` | `/admin/product-images/jobs/{job_id}` |
 | List recent image generation jobs | `GET` | `/admin/product-images/jobs` |
+| Get Datadog demo fault state | `GET` | `/admin/demo/observability` |
+| Toggle Datadog demo faults | `POST` | `/admin/demo/observability` |
+| Disable Datadog demo faults | `POST` | `/admin/demo/observability/reset` |
 | Health check | `GET` | `/health` |
 
 ## Recommended Frontend Flow
@@ -196,6 +199,51 @@ Supported selected tools:
 - `service_answer`
 - `order_status`
 - `chat_response`
+
+## Demo Observability Toggle
+
+The Datadog demo fault harness is an admin/operator control. Do not expose it as
+a normal shopper-facing setting. A front-end demo panel can call:
+
+```http
+GET /admin/demo/observability
+```
+
+Response:
+
+```json
+{
+  "enabled": false,
+  "mode": "off",
+  "latency_seconds": 8,
+  "target_store_id": "1001",
+  "incident_id": "demo-atp-supplier-feed-2026-05-06",
+  "correlation_key": "sterling-hollis-atp-reconciliation"
+}
+```
+
+To enable latency in the chat path:
+
+```http
+POST /admin/demo/observability
+content-type: application/json
+```
+
+```json
+{
+  "enabled": true,
+  "mode": "latency",
+  "latency_seconds": 8,
+  "target_store_id": "1001"
+}
+```
+
+Supported `mode` values are `off`, `latency`, `error`, and
+`latency_and_error`. Use `POST /admin/demo/observability/reset` to turn it off.
+When enabled for a matching `store_id`, the next `/api/chat` turn emits an
+`available_to_promise_reconciliation` `tool_trace` entry. Error modes return a
+real backend 500 from chat so Datadog Error Management can group
+`DemoSupplierFeedSchemaError`.
 
 Blocked auth example:
 

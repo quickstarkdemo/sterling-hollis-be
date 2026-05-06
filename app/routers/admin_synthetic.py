@@ -11,6 +11,8 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    DemoObservabilityStateResponse,
+    DemoObservabilityUpdateRequest,
     ImageGenerationJobListResponse,
     ImageGenerationJobRequest,
     ImageGenerationJobResponse,
@@ -23,6 +25,11 @@ from app.schemas import (
     SyntheticLoadRequest,
     SyntheticLoadResponse,
     VectorStatusResponse,
+)
+from app.services.demo_observability import (
+    get_demo_observability_state,
+    reset_demo_observability_state,
+    update_demo_observability_state,
 )
 from app.services.image_jobs import (
     enqueue_image_generation_job,
@@ -45,6 +52,21 @@ from app.services.system_status import vector_status_payload
 from app.services.validation import run_validation_checks
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.get("/demo/observability", response_model=DemoObservabilityStateResponse)
+def demo_observability_state():
+    return get_demo_observability_state()
+
+
+@router.post("/demo/observability", response_model=DemoObservabilityStateResponse)
+def set_demo_observability_state(req: DemoObservabilityUpdateRequest):
+    return update_demo_observability_state(req)
+
+
+@router.post("/demo/observability/reset", response_model=DemoObservabilityStateResponse)
+def reset_demo_observability():
+    return reset_demo_observability_state()
 
 
 @router.post("/synthetic/generate", response_model=SyntheticGenerateResponse)

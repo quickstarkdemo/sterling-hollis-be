@@ -155,6 +155,10 @@ jobs:
           PGPASSWORD=${{ secrets.PGPASSWORD }}
           OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
           CHAT_ORCHESTRATION_MODE=${{ secrets.CHAT_ORCHESTRATION_MODE || 'deterministic' }}
+          DEMO_OBSERVABILITY_ENABLED=${{ secrets.DEMO_OBSERVABILITY_ENABLED || 'false' }}
+          DEMO_OBSERVABILITY_MODE=${{ secrets.DEMO_OBSERVABILITY_MODE || 'off' }}
+          DEMO_OBSERVABILITY_LATENCY_SECONDS=${{ secrets.DEMO_OBSERVABILITY_LATENCY_SECONDS || '8' }}
+          DEMO_OBSERVABILITY_TARGET_STORE_ID=${{ secrets.DEMO_OBSERVABILITY_TARGET_STORE_ID || '1001' }}
           PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME=${{ secrets.PINECONE_INDEX_NAME || 'fashion-products-v1' }}
           PINECONE_CLOUD=${{ secrets.PINECONE_CLOUD || 'aws' }}

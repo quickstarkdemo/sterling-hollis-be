@@ -389,6 +389,64 @@ paths:
                 $ref: "#/components/schemas/ImageGenerationJobResponse"
         "404":
           description: Job not found.
+  /admin/demo/observability:
+    get:
+      tags: [admin]
+      summary: Get demo observability state
+      description: Operator/demo endpoint for reading the Datadog fault harness state.
+      responses:
+        "200":
+          description: Current demo observability state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityStateResponse"
+    post:
+      tags: [admin]
+      summary: Update demo observability state
+      description: >
+        Operator/demo endpoint for enabling latency or error injection in the
+        backend chat path. This should not be exposed as a public shopper control.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoObservabilityUpdateRequest"
+            examples:
+              latency:
+                summary: Enable latency demo
+                value:
+                  enabled: true
+                  mode: latency
+                  latency_seconds: 8
+                  target_store_id: "1001"
+              off:
+                summary: Disable demo harness
+                value:
+                  enabled: false
+                  mode: off
+      responses:
+        "200":
+          description: Updated demo observability state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityStateResponse"
+        "422":
+          description: Invalid request shape.
+  /admin/demo/observability/reset:
+    post:
+      tags: [admin]
+      summary: Reset demo observability state
+      description: Disables the Datadog demo fault harness and returns mode to off.
+      responses:
+        "200":
+          description: Disabled demo observability state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityStateResponse"
   /health:
     get:
       tags: [admin]
@@ -682,6 +740,50 @@ components:
     JobStatus:
       type: string
       enum: [queued, running, succeeded, failed]
+    DemoObservabilityMode:
+      type: string
+      enum: [off, latency, error, latency_and_error]
+    DemoObservabilityUpdateRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          nullable: true
+        mode:
+          allOf:
+            - $ref: "#/components/schemas/DemoObservabilityMode"
+          nullable: true
+        latency_seconds:
+          type: number
+          minimum: 0
+          maximum: 60
+          nullable: true
+        target_store_id:
+          type: string
+          maxLength: 64
+          nullable: true
+    DemoObservabilityStateResponse:
+      type: object
+      required:
+        - enabled
+        - mode
+        - latency_seconds
+        - incident_id
+        - correlation_key
+      properties:
+        enabled:
+          type: boolean
+        mode:
+          $ref: "#/components/schemas/DemoObservabilityMode"
+        latency_seconds:
+          type: number
+        target_store_id:
+          type: string
+          nullable: true
+        incident_id:
+          type: string
+        correlation_key:
+          type: string
     CategoryListResponse:
       type: object
       required: [categories]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.config import get_settings
+from app.services import demo_observability
 
 
 def test_database_url_builds_from_pg_env(monkeypatch):
@@ -34,4 +35,26 @@ def test_strategy_flags_default_to_false(monkeypatch):
     assert settings.strategy_packet_enabled is False
     assert settings.merch_strategy_context_enabled is False
     assert settings.associate_priority_tags_enabled is False
+    get_settings.cache_clear()
+
+
+def test_demo_observability_defaults_from_env(monkeypatch):
+    monkeypatch.setenv("DEMO_OBSERVABILITY_ENABLED", "true")
+    monkeypatch.setenv("DEMO_OBSERVABILITY_MODE", "latency")
+    monkeypatch.setenv("DEMO_OBSERVABILITY_LATENCY_SECONDS", "3.5")
+    monkeypatch.setenv("DEMO_OBSERVABILITY_TARGET_STORE_ID", "2002")
+    monkeypatch.setattr(demo_observability, "_STATE", None)
+    get_settings.cache_clear()
+
+    settings = get_settings()
+    state = demo_observability.get_demo_observability_state()
+
+    assert settings.demo_observability_enabled is True
+    assert settings.demo_observability_mode == "latency"
+    assert settings.demo_observability_latency_seconds == 3.5
+    assert settings.demo_observability_target_store_id == "2002"
+    assert state.enabled is True
+    assert state.mode == "latency"
+    assert state.latency_seconds == 3.5
+    assert state.target_store_id == "2002"
     get_settings.cache_clear()

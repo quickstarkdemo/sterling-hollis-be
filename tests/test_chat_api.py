@@ -24,15 +24,19 @@ from app.services.chat.strands_orchestrator import CapturedToolCall, StrandsRunR
 from app.services.chat.strands_tools import cards_payload
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
 from app.services.chat.tools import catalog_cards
+from app.services import demo_observability
 from tests.test_catalog_api import _product
 
 
 @contextmanager
-def _chat_client(monkeypatch):
+def _chat_client(monkeypatch, *, raise_server_exceptions: bool = True):
     monkeypatch.setenv("ENABLE_MCP_ADAPTER", "false")
     monkeypatch.setenv("ENABLE_OPENAI_APPS_UI", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("CHAT_ORCHESTRATION_MODE", "deterministic")
+    monkeypatch.setenv("DEMO_OBSERVABILITY_ENABLED", "false")
+    monkeypatch.setenv("DEMO_OBSERVABILITY_MODE", "off")
+    monkeypatch.setattr(demo_observability, "_STATE", None)
     get_settings.cache_clear()
 
     engine = create_engine(
@@ -57,7 +61,7 @@ def _chat_client(monkeypatch):
     session = TestingSessionLocal()
     try:
         _seed_chat_data(session)
-        yield TestClient(app), TestingSessionLocal
+        yield TestClient(app, raise_server_exceptions=raise_server_exceptions), TestingSessionLocal
     finally:
         session.close()
         app.dependency_overrides.clear()
@@ -1847,6 +1851,98 @@ def test_chat_llmobs_records_root_workflow_tool_spans_and_evaluations(monkeypatc
     assert evaluations["chat_safety_blocked"]["value"] == 0.0
     assert evaluations["chat_prompt_injection_detected"]["value"] == 0.0
     assert evaluations["chat_data_exfiltration_request"]["value"] == 0.0
+
+
+def test_demo_observability_admin_toggle_and_reset(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        initial = client.get("/admin/demo/observability")
+        enabled = client.post(
+            "/admin/demo/observability",
+            json={
+                "enabled": True,
+                "mode": "latency",
+                "latency_seconds": 0.25,
+                "target_store_id": "1001",
+            },
+        )
+        reset = client.post("/admin/demo/observability/reset")
+
+    assert initial.status_code == 200
+    assert initial.json()["enabled"] is False
+    assert initial.json()["mode"] == "off"
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert enabled.json()["mode"] == "latency"
+    assert enabled.json()["latency_seconds"] == 0.25
+    assert enabled.json()["incident_id"] == "demo-atp-supplier-feed-2026-05-06"
+    assert enabled.json()["correlation_key"] == "sterling-hollis-atp-reconciliation"
+    assert reset.status_code == 200
+    assert reset.json()["enabled"] is False
+    assert reset.json()["mode"] == "off"
+
+
+def test_chat_demo_observability_latency_records_llmobs_tool_trace(monkeypatch):
+    fake = _patch_chat_llmobs(monkeypatch)
+    monkeypatch.setattr(demo_observability, "_sleep", lambda seconds: None)
+
+    with _chat_client(monkeypatch) as (client, _):
+        toggle = client.post(
+            "/admin/demo/observability",
+            json={
+                "enabled": True,
+                "mode": "latency",
+                "latency_seconds": 0.01,
+                "target_store_id": "1001",
+            },
+        )
+        response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+
+    assert toggle.status_code == 200
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(trace["name"] == "available_to_promise_reconciliation" for trace in payload["tool_trace"])
+
+    span_pairs = [(span["kind"], span["name"]) for span in fake.spans]
+    assert ("tool", "available_to_promise_reconciliation") in span_pairs
+    demo_annotations = [
+        annotation
+        for annotation in fake.annotations
+        if annotation.get("span", {}).get("name") == "available_to_promise_reconciliation"
+        and "output_data" in annotation
+    ]
+    assert demo_annotations
+    assert demo_annotations[0]["output_data"]["demo.incident_id"] == "demo-atp-supplier-feed-2026-05-06"
+    assert demo_annotations[0]["output_data"]["demo.correlation_key"] == "sterling-hollis-atp-reconciliation"
+    assert demo_annotations[0]["output_data"]["mode"] == "latency"
+
+
+def test_chat_demo_observability_error_returns_unhandled_500_and_error_trace(monkeypatch):
+    fake = _patch_chat_llmobs(monkeypatch)
+    monkeypatch.setattr(demo_observability, "_sleep", lambda seconds: None)
+
+    with _chat_client(monkeypatch, raise_server_exceptions=False) as (client, _):
+        toggle = client.post(
+            "/admin/demo/observability",
+            json={
+                "enabled": True,
+                "mode": "error",
+                "latency_seconds": 0.0,
+                "target_store_id": "1001",
+            },
+        )
+        response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+
+    assert toggle.status_code == 200
+    assert response.status_code == 500
+    span_pairs = [(span["kind"], span["name"]) for span in fake.spans]
+    assert ("tool", "available_to_promise_reconciliation") in span_pairs
+    error_annotations = [
+        annotation
+        for annotation in fake.annotations
+        if annotation.get("span", {}).get("name") == "available_to_promise_reconciliation"
+        and annotation.get("output_data", {}).get("error") == "DemoSupplierFeedSchemaError"
+    ]
+    assert error_annotations
 
 
 def test_chat_safety_guard_blocks_prompt_injection_before_intake(monkeypatch):

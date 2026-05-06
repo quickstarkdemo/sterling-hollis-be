@@ -32,6 +32,10 @@ from app.services.chat.tools import (
     store_info,
 )
 from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, triage_chat
+from app.services.demo_observability import (
+    demo_observability_active_for_store,
+    run_available_to_promise_reconciliation,
+)
 from ddtrace.llmobs import LLMObs
 
 
@@ -70,6 +74,75 @@ def _llmobs_submit_evaluation_safe(span, *, label: str, value: float, metadata: 
         )
     except Exception:
         logger.debug("Failed to submit Datadog LLMObs evaluation %s", label, exc_info=True)
+
+
+def _run_demo_available_to_promise_reconciliation(
+    db: Session,
+    *,
+    session_id: str,
+    turn_id: str | None,
+    selected_tool: str | None,
+    store_id: str | None,
+    turn_metadata: dict,
+) -> dict | None:
+    if not demo_observability_active_for_store(store_id):
+        return None
+
+    with LLMObs.tool(name="available_to_promise_reconciliation", session_id=session_id) as demo_span:
+        tags = {
+            "workflow": "chat",
+            "tool": "available_to_promise_reconciliation",
+            "selected_tool": selected_tool,
+            "conversation_id": session_id,
+            "turn_id": turn_id,
+            "store_id": store_id,
+            **turn_metadata,
+        }
+        _llmobs_annotate_safe(
+            span=demo_span,
+            input_data={
+                "conversation_id": session_id,
+                "turn_id": turn_id,
+                "selected_tool": selected_tool,
+                "store_id": store_id,
+            },
+            tags=tags,
+        )
+        try:
+            result = run_available_to_promise_reconciliation(
+                db,
+                conversation_id=session_id,
+                turn_id=turn_id,
+                selected_tool=selected_tool,
+                store_id=store_id,
+            )
+        except Exception as exc:
+            _llmobs_annotate_safe(
+                span=demo_span,
+                output_data={
+                    "error": type(exc).__name__,
+                    "message": str(exc),
+                    "conversation_id": session_id,
+                    "turn_id": turn_id,
+                    "selected_tool": selected_tool,
+                    "store_id": store_id,
+                },
+                tags={**tags, "error.type": type(exc).__name__},
+            )
+            raise
+
+        if result is not None:
+            _llmobs_annotate_safe(
+                span=demo_span,
+                output_data=result,
+                tags={
+                    **tags,
+                    "demo.incident_id": result.get("demo.incident_id"),
+                    "demo.scenario": result.get("demo.scenario"),
+                    "demo.correlation_key": result.get("demo.correlation_key"),
+                },
+            )
+        return result
 
 
 def _id(prefix: str) -> str:
@@ -1408,6 +1481,27 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                 frame,
                                 auth_required=auth_required,
                                 selected_tool=selected_tool,
+                            )
+
+                        demo_reconciliation = _run_demo_available_to_promise_reconciliation(
+                            db,
+                            session_id=session.id,
+                            turn_id=turn_metadata.get("turn_id"),
+                            selected_tool=selected_tool,
+                            store_id=req.context.store_id,
+                            turn_metadata=turn_metadata,
+                        )
+                        if demo_reconciliation is not None:
+                            response.tool_trace.append(
+                                ChatToolTrace(
+                                    name="available_to_promise_reconciliation",
+                                    decision=(
+                                        "demo_observability="
+                                        f"{demo_reconciliation.get('mode')}; "
+                                        f"incident_id={demo_reconciliation.get('demo.incident_id')}; "
+                                        f"correlation_key={demo_reconciliation.get('demo.correlation_key')}"
+                                    ),
+                                )
                             )
 
                         _llmobs_annotate_safe(

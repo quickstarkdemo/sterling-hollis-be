@@ -6,6 +6,29 @@ from enum import Enum
 from pydantic import BaseModel, Field, model_validator
 
 
+class DemoObservabilityMode(str, Enum):
+    off = "off"
+    latency = "latency"
+    error = "error"
+    latency_and_error = "latency_and_error"
+
+
+class DemoObservabilityUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    mode: DemoObservabilityMode | None = None
+    latency_seconds: float | None = Field(default=None, ge=0, le=60)
+    target_store_id: str | None = Field(default=None, max_length=64)
+
+
+class DemoObservabilityStateResponse(BaseModel):
+    enabled: bool
+    mode: DemoObservabilityMode
+    latency_seconds: float
+    target_store_id: str | None = None
+    incident_id: str
+    correlation_key: str
+
+
 class SyntheticVolumes(BaseModel):
     stores: int = 36
     products: int = 6000
