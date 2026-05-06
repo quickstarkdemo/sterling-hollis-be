@@ -82,6 +82,7 @@ frontend actions.
 | Get Datadog demo fault state | `GET` | `/admin/demo/observability` |
 | Toggle Datadog demo faults | `POST` | `/admin/demo/observability` |
 | Disable Datadog demo faults | `POST` | `/admin/demo/observability/reset` |
+| Trigger Datadog demo unhandled error | `POST` | `/admin/demo/observability/trigger-error` |
 | Health check | `GET` | `/health` |
 
 ## Recommended Frontend Flow
@@ -241,9 +242,12 @@ content-type: application/json
 Supported `mode` values are `off`, `latency`, `error`, and
 `latency_and_error`. Use `POST /admin/demo/observability/reset` to turn it off.
 When enabled for a matching `store_id`, the next `/api/chat` turn emits an
-`available_to_promise_reconciliation` `tool_trace` entry. Error modes return a
-real backend 500 from chat so Datadog Error Management can group
-`DemoSupplierFeedSchemaError`.
+`available_to_promise_reconciliation` `tool_trace` entry. Error modes degrade
+that reconciliation step but still return the normal chat response.
+
+Use `POST /admin/demo/observability/trigger-error` only when the demo needs a
+real unhandled backend 500 for Datadog Error Management grouping. Do not call
+that endpoint from the shopper chat flow.
 
 Blocked auth example:
 

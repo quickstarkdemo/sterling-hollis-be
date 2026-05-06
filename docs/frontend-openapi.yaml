@@ -447,6 +447,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DemoObservabilityStateResponse"
+  /admin/demo/observability/trigger-error:
+    post:
+      tags: [admin]
+      summary: Trigger unhandled demo supplier feed error
+      description: >
+        Explicitly raises the fictitious supplier-feed schema exception for
+        Datadog Error Management demos. This endpoint intentionally returns 500;
+        normal chat requests should not be used to trigger unhandled failures.
+      responses:
+        "500":
+          description: Intentional DemoSupplierFeedSchemaError.
   /health:
     get:
       tags: [admin]

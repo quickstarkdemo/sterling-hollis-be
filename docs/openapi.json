@@ -2839,6 +2839,25 @@
         ]
       }
     },
+    "/admin/demo/observability/trigger-error": {
+      "post": {
+        "operationId": "trigger_demo_observability_error_admin_demo_observability_trigger_error_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Trigger Demo Observability Error",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/product-images/generate": {
       "post": {
         "operationId": "generate_product_images_admin_product_images_generate_post",

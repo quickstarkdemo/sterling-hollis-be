@@ -28,6 +28,7 @@ from app.schemas import (
 )
 from app.services.demo_observability import (
     get_demo_observability_state,
+    raise_unhandled_demo_supplier_feed_error,
     reset_demo_observability_state,
     update_demo_observability_state,
 )
@@ -67,6 +68,12 @@ def set_demo_observability_state(req: DemoObservabilityUpdateRequest):
 @router.post("/demo/observability/reset", response_model=DemoObservabilityStateResponse)
 def reset_demo_observability():
     return reset_demo_observability_state()
+
+
+@router.post("/demo/observability/trigger-error")
+def trigger_demo_observability_error():
+    raise_unhandled_demo_supplier_feed_error()
+    return {"status": "unreachable"}
 
 
 @router.post("/synthetic/generate", response_model=SyntheticGenerateResponse)

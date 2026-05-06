@@ -33,6 +33,8 @@ from app.services.chat.tools import (
 )
 from app.services.chat.triage import OUTFIT_TERMS, PAIRING_TERMS, TriageDecision, triage_chat
 from app.services.demo_observability import (
+    CORRELATION_KEY,
+    INCIDENT_ID,
     demo_observability_active_for_store,
     run_available_to_promise_reconciliation,
 )
@@ -129,7 +131,15 @@ def _run_demo_available_to_promise_reconciliation(
                 },
                 tags={**tags, "error.type": type(exc).__name__},
             )
-            raise
+            logger.exception("Demo available-to-promise reconciliation failed unexpectedly; continuing chat")
+            return {
+                "demo.incident_id": INCIDENT_ID,
+                "demo.correlation_key": CORRELATION_KEY,
+                "mode": "unexpected_error",
+                "status": "degraded",
+                "error": type(exc).__name__,
+                "error_message": str(exc),
+            }
 
         if result is not None:
             _llmobs_annotate_safe(
@@ -1498,6 +1508,7 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                     decision=(
                                         "demo_observability="
                                         f"{demo_reconciliation.get('mode')}; "
+                                        f"status={demo_reconciliation.get('status', 'completed')}; "
                                         f"incident_id={demo_reconciliation.get('demo.incident_id')}; "
                                         f"correlation_key={demo_reconciliation.get('demo.correlation_key')}"
                                     ),

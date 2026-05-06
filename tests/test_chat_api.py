@@ -1916,11 +1916,11 @@ def test_chat_demo_observability_latency_records_llmobs_tool_trace(monkeypatch):
     assert demo_annotations[0]["output_data"]["mode"] == "latency"
 
 
-def test_chat_demo_observability_error_returns_unhandled_500_and_error_trace(monkeypatch):
+def test_chat_demo_observability_error_degrades_without_failing_chat(monkeypatch):
     fake = _patch_chat_llmobs(monkeypatch)
     monkeypatch.setattr(demo_observability, "_sleep", lambda seconds: None)
 
-    with _chat_client(monkeypatch, raise_server_exceptions=False) as (client, _):
+    with _chat_client(monkeypatch) as (client, _):
         toggle = client.post(
             "/admin/demo/observability",
             json={
@@ -1933,7 +1933,10 @@ def test_chat_demo_observability_error_returns_unhandled_500_and_error_trace(mon
         response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
 
     assert toggle.status_code == 200
-    assert response.status_code == 500
+    assert response.status_code == 200
+    payload = response.json()
+    demo_trace = next(trace for trace in payload["tool_trace"] if trace["name"] == "available_to_promise_reconciliation")
+    assert "status=degraded" in demo_trace["decision"]
     span_pairs = [(span["kind"], span["name"]) for span in fake.spans]
     assert ("tool", "available_to_promise_reconciliation") in span_pairs
     error_annotations = [
@@ -1943,6 +1946,13 @@ def test_chat_demo_observability_error_returns_unhandled_500_and_error_trace(mon
         and annotation.get("output_data", {}).get("error") == "DemoSupplierFeedSchemaError"
     ]
     assert error_annotations
+
+
+def test_demo_observability_explicit_error_trigger_returns_unhandled_500(monkeypatch):
+    with _chat_client(monkeypatch, raise_server_exceptions=False) as (client, _):
+        response = client.post("/admin/demo/observability/trigger-error")
+
+    assert response.status_code == 500
 
 
 def test_chat_safety_guard_blocks_prompt_injection_before_intake(monkeypatch):

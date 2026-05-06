@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 from threading import Lock
 import time
+import traceback
 from typing import Any
 
 from sqlalchemy import func, select
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 INCIDENT_ID = "demo-atp-supplier-feed-2026-05-06"
 CORRELATION_KEY = "sterling-hollis-atp-reconciliation"
 APM_SPAN_NAME = "demo.inventory_reconciliation"
+ERROR_MESSAGE = (
+    "Supplier feed schema mismatch while reconciling available-to-promise inventory: "
+    "expected availability_status, received fulfillment_state."
+)
 
 
 class DemoSupplierFeedSchemaError(RuntimeError):
@@ -164,6 +169,7 @@ def run_available_to_promise_reconciliation(
     turn_id: str | None,
     selected_tool: str | None,
     store_id: str | None,
+    raise_on_error: bool = False,
 ) -> dict[str, Any] | None:
     state = _current_state()
     if not state.active:
@@ -208,12 +214,39 @@ def run_available_to_promise_reconciliation(
         }
 
         if state.mode in {DemoObservabilityMode.error, DemoObservabilityMode.latency_and_error}:
-            message = (
-                "Supplier feed schema mismatch while reconciling available-to-promise inventory: "
-                "expected availability_status, received fulfillment_state."
+            exc = DemoSupplierFeedSchemaError(ERROR_MESSAGE)
+            result.update(
+                {
+                    "status": "degraded",
+                    "error": type(exc).__name__,
+                    "error_message": str(exc),
+                }
             )
-            logger.error(message, extra=result)
-            raise DemoSupplierFeedSchemaError(message)
+            span.error = 1
+            span.set_exc_info(type(exc), exc, exc.__traceback__)
+            span.set_tag("error.type", type(exc).__name__)
+            span.set_tag("error.message", str(exc))
+            span.set_tag("error.stack", "".join(traceback.format_exception_only(type(exc), exc)).strip())
+            logger.error(ERROR_MESSAGE, extra=result)
+            if raise_on_error:
+                raise exc
+            return result
 
         logger.info("Completed demo available-to-promise reconciliation", extra=result)
         return result
+
+
+def raise_unhandled_demo_supplier_feed_error() -> None:
+    state = _current_state()
+    tags = {
+        "demo.incident_id": state.incident_id,
+        "demo.scenario": "unhandled_error_trigger",
+        "demo.correlation_key": state.correlation_key,
+        "store_id": state.target_store_id,
+    }
+
+    from ddtrace import tracer
+
+    with tracer.trace(APM_SPAN_NAME, resource="unhandled_supplier_feed_error") as span:
+        _set_span_tags(span, tags)
+        raise DemoSupplierFeedSchemaError(ERROR_MESSAGE)
