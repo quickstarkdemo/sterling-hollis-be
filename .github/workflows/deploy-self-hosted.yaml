@@ -110,7 +110,7 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
-          if echo "$CHANGED_FILES" | grep -Eq '^(app/|alembic/|scripts/|deploy/docker-compose\.prod\.yml$|Dockerfile$|pyproject\.toml$|requirements[^/]*\.txt$|uv\.lock$)'; then
+          if echo "$CHANGED_FILES" | grep -Eq '^(app/|alembic/|scripts/|deploy/docker-compose\.prod\.yml$|Dockerfile$|pyproject\.toml$|setup\.py$|requirements[^/]*\.txt$|uv\.lock$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Runtime image inputs changed."
           elif ! docker manifest inspect "${DOCKERHUB_IMAGE}:latest" >/dev/null 2>&1; then
@@ -127,6 +127,8 @@ jobs:
           docker build \
             -t "${DOCKERHUB_IMAGE}:latest" \
             -t "${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}" \
+            --build-arg DD_GIT_REPOSITORY_URL=https://github.com/${{ github.repository }} \
+            --build-arg DD_GIT_COMMIT_SHA=${{ github.sha }} \
             .
           docker push "${DOCKERHUB_IMAGE}:latest"
           docker push "${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}"
@@ -182,6 +184,9 @@ jobs:
           DD_ENV=${{ secrets.DD_ENV || 'prod' }}
           DD_SERVICE=${{ secrets.DD_SERVICE || 'sterling-hollis-be' }}
           DD_VERSION=${{ steps.version.outputs.version }}
+          DD_MAIN_PACKAGE=${{ secrets.DD_MAIN_PACKAGE || 'app' }}
+          DD_GIT_REPOSITORY_URL=https://github.com/${{ github.repository }}
+          DD_GIT_COMMIT_SHA=${{ github.sha }}
           DD_SITE=${{ secrets.DD_SITE || 'datadoghq.com' }}
           DD_API_KEY=${{ secrets.DD_API_KEY }}
           DD_APP_KEY=${{ secrets.DD_APP_KEY }}

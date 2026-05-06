@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Synthetic fashion data platform with FastAPI, Postgres, and Pinecone"
 readme = "README.md"
 requires-python = ">=3.11"
+dynamic = ["urls"]
 dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.6",
@@ -33,7 +34,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=68.0", "ddtrace>=4.8.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

@@ -5,6 +5,7 @@ import time
 
 from app.config import get_settings
 from app.database import SessionLocal
+from app.observability.logging import configure_datadog_logging
 from app.services.image_jobs import process_next_image_generation_job
 from app.services.index_jobs import process_next_index_job
 
@@ -44,7 +45,7 @@ def run_background_worker() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_datadog_logging()
     run_background_worker()
 
 

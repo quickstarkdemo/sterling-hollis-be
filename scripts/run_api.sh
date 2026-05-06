@@ -5,6 +5,7 @@ DB_HOST="${DB_HOST:-${PGHOST:-postgres}}"
 DB_PORT="${DB_PORT:-${PGPORT:-5432}}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-60}"
 UVICORN_RELOAD="${UVICORN_RELOAD:-false}"
+UVICORN_LOG_CONFIG="${UVICORN_LOG_CONFIG:-app/observability/logging.json}"
 
 run_with_optional_datadog() {
   if [ -n "${APP_BUILD_VERSION:-}" ] && [ -z "${DD_VERSION:-}" ]; then
@@ -105,7 +106,7 @@ fi
 
 alembic upgrade head
 if [ "$UVICORN_RELOAD" = "true" ]; then
-  run_with_optional_datadog uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips="*"
+  run_with_optional_datadog uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --proxy-headers --forwarded-allow-ips="*" --log-config "$UVICORN_LOG_CONFIG"
 fi
 
-run_with_optional_datadog uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+run_with_optional_datadog uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*" --log-config "$UVICORN_LOG_CONFIG"

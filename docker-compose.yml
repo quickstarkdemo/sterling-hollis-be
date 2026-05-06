@@ -6,6 +6,9 @@ x-datadog-env: &datadog-env
   DD_ENV: ${DD_ENV:-dev}
   DD_SERVICE: ${DD_SERVICE:-sterling-hollis-be}
   DD_VERSION: ${DD_VERSION:-}
+  DD_MAIN_PACKAGE: ${DD_MAIN_PACKAGE:-app}
+  DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
+  DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
   DD_SITE: ${DD_SITE:-datadoghq.com}
   DD_API_KEY: ${DD_API_KEY:-}
   DD_APP_KEY: ${DD_APP_KEY:-}
@@ -48,7 +51,11 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
+        DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
     command: ./scripts/run_api.sh
     environment:
       <<: *datadog-env
@@ -81,7 +88,11 @@ services:
       - postgres
 
   index-worker:
-    build: .
+    build:
+      context: .
+      args:
+        DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
+        DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
     command: ./scripts/run_index_worker.sh
     environment:
       <<: *datadog-env
