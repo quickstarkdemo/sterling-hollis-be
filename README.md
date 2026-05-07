@@ -157,6 +157,9 @@ Datadog:
 - `DD_ENV`
 - `DD_SERVICE`
 - `DD_VERSION`
+- `DD_MAIN_PACKAGE`
+- `DD_GIT_REPOSITORY_URL`
+- `DD_GIT_COMMIT_SHA`
 - `DD_SITE`
 - `DD_API_KEY`
 - `DD_APP_KEY`
@@ -176,6 +179,7 @@ Datadog:
 - `DD_DYNAMIC_INSTRUMENTATION_ENABLED`
 - `DD_REMOTE_CONFIGURATION_ENABLED`
 - `DD_CODE_ORIGIN_FOR_SPANS_ENABLED`
+- `DD_EXCEPTION_REPLAY_ENABLED`
 - `DD_SYMBOL_DATABASE_UPLOAD_ENABLED`
 - `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED`
 - `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`
@@ -193,7 +197,7 @@ Notes:
 - FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
 - `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add every production storefront origin, including the deployed FE host.
-- Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`.
+- Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`, and the Docker build embeds `DD_GIT_REPOSITORY_URL` and `DD_GIT_COMMIT_SHA` for source-code linking.
 - The demo observability harness is off by default. To create a Datadog demo incident, enable it with `POST /admin/demo/observability`; latency mode adds a slow `demo.inventory_reconciliation` APM span inside `/api/chat`, while error modes mark the reconciliation step degraded without failing chat. Use `POST /admin/demo/observability/trigger-error` only when you intentionally need an unhandled `DemoSupplierFeedSchemaError` 500 for Error Management.
 - Datadog LLM Observability uses `DD_LLMOBS_ENABLED=true` for the canonical app-level chat traces. Keep `STRANDS_OTEL_ENABLED=false` by default to avoid duplicate Strands-native OTEL traces; set it to `true` only when debugging Strands event-loop telemetry. When Strands OTEL is enabled and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
 - MCP client LLM Observability uses Datadog's automatic MCP Python SDK instrumentation. Run `make mcp-smoke` with `DD_LLMOBS_ENABLED=true`, `DD_LLMOBS_AGENTLESS_ENABLED=true`, and `DD_API_KEY` to emit MCP client spans.

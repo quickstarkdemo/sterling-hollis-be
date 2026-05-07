@@ -148,6 +148,14 @@ def _set_span_tags(span: Any, tags: dict[str, Any]) -> None:
             logger.debug("Failed to set Datadog demo span tag %s", key, exc_info=True)
 
 
+def _set_span_exception(span: Any, exc: BaseException) -> None:
+    span.error = 1
+    span.set_exc_info(type(exc), exc, exc.__traceback__)
+    span.set_tag("error.type", type(exc).__name__)
+    span.set_tag("error.message", str(exc))
+    span.set_tag("error.stack", "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip())
+
+
 def _inventory_summary(db: Session, store_id: str | None) -> dict[str, int]:
     query = select(
         func.count(Product.id).label("sku_count"),
@@ -214,23 +222,21 @@ def run_available_to_promise_reconciliation(
         }
 
         if state.mode in {DemoObservabilityMode.error, DemoObservabilityMode.latency_and_error}:
-            exc = DemoSupplierFeedSchemaError(ERROR_MESSAGE)
-            result.update(
-                {
-                    "status": "degraded",
-                    "error": type(exc).__name__,
-                    "error_message": str(exc),
-                }
-            )
-            span.error = 1
-            span.set_exc_info(type(exc), exc, exc.__traceback__)
-            span.set_tag("error.type", type(exc).__name__)
-            span.set_tag("error.message", str(exc))
-            span.set_tag("error.stack", "".join(traceback.format_exception_only(type(exc), exc)).strip())
-            logger.error(ERROR_MESSAGE, extra=result)
-            if raise_on_error:
-                raise exc
-            return result
+            try:
+                raise DemoSupplierFeedSchemaError(ERROR_MESSAGE)
+            except DemoSupplierFeedSchemaError as exc:
+                result.update(
+                    {
+                        "status": "degraded",
+                        "error": type(exc).__name__,
+                        "error_message": str(exc),
+                    }
+                )
+                _set_span_exception(span, exc)
+                logger.exception(ERROR_MESSAGE, extra=result)
+                if raise_on_error:
+                    raise
+                return result
 
         logger.info("Completed demo available-to-promise reconciliation", extra=result)
         return result
@@ -249,4 +255,9 @@ def raise_unhandled_demo_supplier_feed_error() -> None:
 
     with tracer.trace(APM_SPAN_NAME, resource="unhandled_supplier_feed_error") as span:
         _set_span_tags(span, tags)
-        raise DemoSupplierFeedSchemaError(ERROR_MESSAGE)
+        try:
+            raise DemoSupplierFeedSchemaError(ERROR_MESSAGE)
+        except DemoSupplierFeedSchemaError as exc:
+            _set_span_exception(span, exc)
+            logger.exception(ERROR_MESSAGE, extra=tags)
+            raise
