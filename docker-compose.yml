@@ -3,6 +3,7 @@ x-datadog-env: &datadog-env
   DD_AGENT_HOST: ${DD_AGENT_HOST:-}
   DD_TRACE_AGENT_PORT: ${DD_TRACE_AGENT_PORT:-8126}
   DD_TRACE_AGENT_URL: ${DD_TRACE_AGENT_URL:-}
+  DD_TRACE_REPORT_HOSTNAME: ${DD_TRACE_REPORT_HOSTNAME:-}
   DD_ENV: ${DD_ENV:-dev}
   DD_SERVICE: ${DD_SERVICE:-sterling-hollis-be}
   DD_VERSION: ${DD_VERSION:-}
@@ -83,6 +84,8 @@ services:
       ASSOCIATE_PRIORITY_TAGS_ENABLED: ${ASSOCIATE_PRIORITY_TAGS_ENABLED:-false}
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./:/app
     depends_on:
@@ -119,6 +122,8 @@ services:
       ASSOCIATE_PRIORITY_TAGS_ENABLED: ${ASSOCIATE_PRIORITY_TAGS_ENABLED:-false}
     volumes:
       - ./:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - postgres
 
