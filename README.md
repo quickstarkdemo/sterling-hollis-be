@@ -65,6 +65,7 @@ Optional for vector cloud indexing:
 Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic Instrumentation, and LLM Observability:
 - `DD_TRACE_ENABLED=true`
 - `DD_AGENT_HOST` and `DD_TRACE_AGENT_PORT` for the Datadog Agent reachable from the app container
+- `DD_TRACE_REPORT_HOSTNAME=true`
 - `DD_ENV`, `DD_SERVICE`, and `DD_VERSION`
 - `DD_SITE`, `DD_API_KEY`, and `DD_APP_KEY`
 - `DD_AI_GUARD_ENABLED=true` to enable the inline chat AI Guard check
@@ -72,9 +73,11 @@ Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic I
 - `DD_AI_GUARD_DEMO_FALLBACK_ENABLED=true` only for local/offline demos
 - `DD_PROFILING_ENABLED=true`
 - `DD_RUNTIME_METRICS_ENABLED=true`
+- `DD_RUNTIME_METRICS_RUNTIME_ID_ENABLED=true`
+- `DD_DOGSTATSD_PORT=8125`
 - `DD_LLMOBS_ENABLED=true`
 - `STRANDS_OTEL_ENABLED=false` to keep Strands-native OTEL traces disabled unless debugging agent event loops
-- `DD_LLMOBS_AGENTLESS_ENABLED=true`
+- `DD_LLMOBS_AGENTLESS_ENABLED=false` when using the Datadog Agent
 - `DD_LLMOBS_ML_APP=sterling-hollis-be`
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`
 - `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`
@@ -154,6 +157,7 @@ Datadog:
 - `DD_AGENT_HOST`
 - `DD_TRACE_AGENT_PORT`
 - `DD_TRACE_AGENT_URL`
+- `DD_TRACE_REPORT_HOSTNAME`
 - `DD_ENV`
 - `DD_SERVICE`
 - `DD_VERSION`
@@ -169,6 +173,7 @@ Datadog:
 - `DD_PROFILING_ENABLED`
 - `DD_PROFILING_TIMELINE_ENABLED`
 - `DD_RUNTIME_METRICS_ENABLED`
+- `DD_RUNTIME_METRICS_RUNTIME_ID_ENABLED`
 - `DD_LLMOBS_ENABLED`
 - `STRANDS_OTEL_ENABLED`
 - `DD_LLMOBS_AGENTLESS_ENABLED`
@@ -184,6 +189,7 @@ Datadog:
 - `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED`
 - `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`
 - `DD_DOGSTATSD_DISABLE`
+- `DD_DOGSTATSD_PORT`
 - `OTEL_SERVICE_NAME`
 - `OTEL_SEMCONV_STABILITY_OPT_IN`
 - `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`
@@ -202,6 +208,7 @@ Notes:
 - Datadog LLM Observability uses `DD_LLMOBS_ENABLED=true` for the canonical app-level chat traces. Keep `STRANDS_OTEL_ENABLED=false` by default to avoid duplicate Strands-native OTEL traces; set it to `true` only when debugging Strands event-loop telemetry. When Strands OTEL is enabled and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
 - MCP client LLM Observability uses Datadog's automatic MCP Python SDK instrumentation. Run `make mcp-smoke` with `DD_LLMOBS_ENABLED=true`, `DD_LLMOBS_AGENTLESS_ENABLED=true`, and `DD_API_KEY` to emit MCP client spans.
 - `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.
+- Runtime metrics require `DD_RUNTIME_METRICS_ENABLED=true` in the app container and DogStatsD UDP ingestion on the Agent. For host-level Agents receiving metrics from Docker containers, ensure the Agent accepts non-local DogStatsD traffic on UDP `8125`.
 - Keep `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=true` unless you intentionally want SQL query values to appear in trace metadata.
 
 ### 2) Run with Docker Compose

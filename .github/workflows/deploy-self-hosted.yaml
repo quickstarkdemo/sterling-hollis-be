@@ -181,6 +181,7 @@ jobs:
           DD_TRACE_ENABLED=${{ secrets.DD_TRACE_ENABLED || 'true' }}
           DD_AGENT_HOST=${{ secrets.DD_AGENT_HOST || 'host.docker.internal' }}
           DD_TRACE_AGENT_PORT=${{ secrets.DD_TRACE_AGENT_PORT || '8126' }}
+          DD_TRACE_REPORT_HOSTNAME=${{ secrets.DD_TRACE_REPORT_HOSTNAME || 'true' }}
           DD_ENV=${{ secrets.DD_ENV || 'prod' }}
           DD_SERVICE=${{ secrets.DD_SERVICE || 'sterling-hollis-be' }}
           DD_VERSION=${{ steps.version.outputs.version }}
@@ -196,9 +197,11 @@ jobs:
           DD_PROFILING_ENABLED=${{ secrets.DD_PROFILING_ENABLED || 'true' }}
           DD_PROFILING_TIMELINE_ENABLED=${{ secrets.DD_PROFILING_TIMELINE_ENABLED || 'true' }}
           DD_RUNTIME_METRICS_ENABLED=${{ secrets.DD_RUNTIME_METRICS_ENABLED || 'true' }}
+          DD_RUNTIME_METRICS_RUNTIME_ID_ENABLED=${{ secrets.DD_RUNTIME_METRICS_RUNTIME_ID_ENABLED || 'true' }}
           DD_LLMOBS_ENABLED=${{ secrets.DD_LLMOBS_ENABLED || 'true' }}
-          DD_LLMOBS_AGENTLESS_ENABLED=${{ secrets.DD_LLMOBS_AGENTLESS_ENABLED || 'true' }}
+          DD_LLMOBS_AGENTLESS_ENABLED=${{ secrets.DD_LLMOBS_AGENTLESS_ENABLED || 'false' }}
           DD_LLMOBS_ML_APP=${{ secrets.DD_LLMOBS_ML_APP || 'sterling-hollis-be' }}
+          STRANDS_OTEL_ENABLED=${{ secrets.STRANDS_OTEL_ENABLED || 'false' }}
           DD_LOGS_INJECTION=${{ secrets.DD_LOGS_INJECTION || 'true' }}
           DD_DATA_STREAMS_ENABLED=${{ secrets.DD_DATA_STREAMS_ENABLED || 'true' }}
           DD_DBM_PROPAGATION_MODE=${{ secrets.DD_DBM_PROPAGATION_MODE || 'full' }}
@@ -210,6 +213,7 @@ jobs:
           DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=${{ secrets.DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED || 'true' }}
           DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED=${{ secrets.DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED || 'true' }}
           DD_DOGSTATSD_DISABLE=${{ secrets.DD_DOGSTATSD_DISABLE || 'false' }}
+          DD_DOGSTATSD_PORT=${{ secrets.DD_DOGSTATSD_PORT || '8125' }}
           OTEL_SERVICE_NAME=${{ secrets.OTEL_SERVICE_NAME || secrets.DD_LLMOBS_ML_APP || secrets.DD_SERVICE || 'sterling-hollis-be' }}
           OTEL_SEMCONV_STABILITY_OPT_IN=${{ secrets.OTEL_SEMCONV_STABILITY_OPT_IN || 'gen_ai_latest_experimental' }}
           OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=${{ secrets.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL || 'http/protobuf' }}
