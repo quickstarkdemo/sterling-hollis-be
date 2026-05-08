@@ -262,9 +262,16 @@ When enabled for a matching `store_id`, the next `/api/chat` turn emits an
 `available_to_promise_reconciliation` `tool_trace` entry. Error modes degrade
 that reconciliation step but still return the normal chat response.
 
-For a network outage demo, send the `snmp_trap_log` payload from
-`GET /api/demo/observability` or the update response to Datadog Logs intake
-first, then enable `network_outage`. While active, app-facing API paths return
+For a network outage demo, first call:
+
+```http
+POST /admin/demo/observability/network-outage-log
+```
+
+That endpoint sends the `snmp_trap_log` payload to Datadog Logs HTTP Intake
+with the backend `DD_API_KEY`, using the same `http-intake.logs.<site>/api/v2/logs`
+path as the standalone simulator projects. After it succeeds, enable
+`network_outage`. While active, app-facing API paths return
 `503 Service Unavailable` with the same `incident_id` and `correlation_key`;
 `/health`, `/admin/demo/observability/reset`, and
 `/api/demo/observability/reset` remain available so the demo is recoverable

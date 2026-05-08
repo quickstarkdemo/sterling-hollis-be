@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     demo_observability_target_store_id: str | None = "1001"
     demo_observability_clerk_authorized_emails: str = ""
     demo_observability_clerk_authorized_subjects: str = ""
+    dd_site: str = "datadoghq.com"
+    dd_api_key: str | None = None
 
     pinecone_api_key: str | None = None
     pinecone_cloud: str = "aws"

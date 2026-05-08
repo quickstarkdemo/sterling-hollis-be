@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.config import get_settings
 from app.services import demo_observability
 
 
@@ -55,3 +56,42 @@ def test_network_outage_state_uses_network_correlation_payload():
     assert "correlation_key:sterling-hollis-network-outage" in state.snmp_trap_log["ddtags"]
 
     demo_observability.reset_demo_observability_state()
+
+
+def test_network_outage_snmp_trap_log_posts_to_datadog_logs_intake(monkeypatch):
+    captured = {}
+
+    class _FakeResponse:
+        status_code = 202
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setenv("DD_API_KEY", "test-api-key")
+    monkeypatch.setenv("DD_SITE", "api.datadoghq.com")
+    get_settings.cache_clear()
+    monkeypatch.setattr(demo_observability.httpx, "post", fake_post)
+
+    result = demo_observability.send_network_outage_snmp_trap_log()
+
+    assert result["success"] is True
+    assert result["intake_url"] == "https://http-intake.logs.datadoghq.com/api/v2/logs"
+    assert captured["url"] == "https://http-intake.logs.datadoghq.com/api/v2/logs"
+    assert captured["headers"]["DD-API-KEY"] == "test-api-key"
+    assert captured["json"][0]["ddsource"] == "snmp-traps"
+    assert captured["json"][0]["hostname"] == "datacenter-user-sw11a"
+    assert captured["json"][0]["trap_name"] == "linkDown"
+    assert captured["json"][0]["tags"] == captured["json"][0]["ddtags"]
+
+    get_settings.cache_clear()

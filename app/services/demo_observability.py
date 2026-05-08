@@ -7,6 +7,7 @@ import time
 import traceback
 from typing import Any
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -209,6 +210,7 @@ def network_outage_snmp_trap_log() -> dict[str, Any]:
             "SNMP Trap: DATACENTER-USER-SW11A linkDown - uplink interface Gi1/0/48 unreachable, "
             "packet loss 100%, affected services: sterling-hollis-be"
         ),
+        "level": "ERROR",
         "ddsource": "snmp-traps",
         "service": "network-device-monitoring",
         "hostname": NETWORK_DEVICE_HOSTNAME,
@@ -225,11 +227,68 @@ def network_outage_snmp_trap_log() -> dict[str, Any]:
         "correlation_key": NETWORK_CORRELATION_KEY,
         "affected_service": NETWORK_AFFECTED_SERVICE,
         "outage_scope": NETWORK_OUTAGE_SCOPE,
+        "timestamp": int(time.time() * 1000),
+        "tags": (
+            "env:production,source:snmp-traps,category:network,event_type:trigger,severity:critical,"
+            "device:datacenter-user-sw11a,site:dc01,service:sterling-hollis-be,"
+            "incident_id:demo-network-outage-2026-05-08,correlation_key:sterling-hollis-network-outage"
+        ),
         "ddtags": (
             "env:production,source:snmp-traps,category:network,event_type:trigger,severity:critical,"
             "device:datacenter-user-sw11a,site:dc01,service:sterling-hollis-be,"
             "incident_id:demo-network-outage-2026-05-08,correlation_key:sterling-hollis-network-outage"
         ),
+    }
+
+
+def datadog_logs_intake_url(site: str | None) -> str:
+    normalized = (site or "datadoghq.com").strip() or "datadoghq.com"
+    if normalized.startswith("api."):
+        normalized = normalized.removeprefix("api.")
+    return f"https://http-intake.logs.{normalized}/api/v2/logs"
+
+
+def send_network_outage_snmp_trap_log() -> dict[str, Any]:
+    settings = get_settings()
+    if not settings.dd_api_key:
+        raise RuntimeError("DD_API_KEY is required to send the network outage SNMP log to Datadog Logs intake.")
+
+    payload = network_outage_snmp_trap_log()
+    url = datadog_logs_intake_url(settings.dd_site)
+    try:
+        response = httpx.post(
+            url,
+            json=[payload],
+            headers={
+                "Content-Type": "application/json",
+                "DD-API-KEY": settings.dd_api_key,
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Datadog Logs intake rejected network outage SNMP log: {exc}") from exc
+
+    datadog_response: Any
+    try:
+        datadog_response = response.json()
+    except ValueError:
+        datadog_response = {"status_code": response.status_code, "text": response.text}
+
+    logger.info(
+        "Sent demo network outage SNMP trap log to Datadog Logs intake",
+        extra={
+            "demo.incident_id": NETWORK_INCIDENT_ID,
+            "demo.correlation_key": NETWORK_CORRELATION_KEY,
+            "demo.network_device": NETWORK_DEVICE,
+            "demo.network_site": NETWORK_SITE,
+        },
+    )
+    return {
+        "success": True,
+        "intake_url": url,
+        "payload": payload,
+        "datadog_response": datadog_response,
     }
 
 

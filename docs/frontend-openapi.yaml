@@ -531,6 +531,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DemoObservabilityStateResponse"
+  /admin/demo/observability/network-outage-log:
+    post:
+      tags: [admin]
+      summary: Send demo network outage SNMP log
+      description: >
+        Sends the canonical SNMP-trap-shaped network outage log to Datadog Logs
+        HTTP Intake using the backend DD_API_KEY. Call this before enabling
+        network_outage mode.
+      responses:
+        "200":
+          description: Datadog Logs intake accepted the SNMP-shaped demo log.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityLogSendResponse"
+        "502":
+          description: Datadog Logs intake rejected the payload or DD_API_KEY is missing.
   /admin/demo/observability/trigger-error:
     post:
       tags: [admin]
@@ -892,6 +909,19 @@ components:
         snmp_trap_log:
           type: object
           additionalProperties: true
+    DemoObservabilityLogSendResponse:
+      type: object
+      required: [success, intake_url, payload]
+      properties:
+        success:
+          type: boolean
+        intake_url:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        datadog_response:
+          nullable: true
     CategoryListResponse:
       type: object
       required: [categories]

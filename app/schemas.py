@@ -35,6 +35,13 @@ class DemoObservabilityStateResponse(BaseModel):
     snmp_trap_log: dict[str, Any]
 
 
+class DemoObservabilityLogSendResponse(BaseModel):
+    success: bool
+    intake_url: str
+    payload: dict[str, Any]
+    datadog_response: Any | None = None
+
+
 class SyntheticVolumes(BaseModel):
     stores: int = 36
     products: int = 6000

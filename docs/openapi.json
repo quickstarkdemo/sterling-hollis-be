@@ -989,6 +989,39 @@
         "title": "CustomerRecommendationResponse",
         "type": "object"
       },
+      "DemoObservabilityLogSendResponse": {
+        "properties": {
+          "datadog_response": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datadog Response"
+          },
+          "intake_url": {
+            "title": "Intake Url",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "intake_url",
+          "payload"
+        ],
+        "title": "DemoObservabilityLogSendResponse",
+        "type": "object"
+      },
       "DemoObservabilityMode": {
         "enum": [
           "off",
@@ -2835,6 +2868,27 @@
           }
         },
         "summary": "Set Demo Observability State",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/demo/observability/network-outage-log": {
+      "post": {
+        "operationId": "send_demo_network_outage_log_admin_demo_observability_network_outage_log_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityLogSendResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Send Demo Network Outage Log",
         "tags": [
           "admin"
         ]

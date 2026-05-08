@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    DemoObservabilityLogSendResponse,
     DemoObservabilityStateResponse,
     DemoObservabilityUpdateRequest,
     ImageGenerationJobListResponse,
@@ -30,6 +31,7 @@ from app.services.demo_observability import (
     get_demo_observability_state,
     raise_unhandled_demo_supplier_feed_error,
     reset_demo_observability_state,
+    send_network_outage_snmp_trap_log,
     update_demo_observability_state,
 )
 from app.services.image_jobs import (
@@ -68,6 +70,14 @@ def set_demo_observability_state(req: DemoObservabilityUpdateRequest):
 @router.post("/demo/observability/reset", response_model=DemoObservabilityStateResponse)
 def reset_demo_observability():
     return reset_demo_observability_state()
+
+
+@router.post("/demo/observability/network-outage-log", response_model=DemoObservabilityLogSendResponse)
+def send_demo_network_outage_log():
+    try:
+        return send_network_outage_snmp_trap_log()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/demo/observability/trigger-error")
