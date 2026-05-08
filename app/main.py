@@ -14,10 +14,33 @@ from app.observability.llm_otel import initialize_llm_otel
 from app.routers.admin_synthetic import router as admin_router
 from app.routers.catalog import router as catalog_router
 from app.routers.chat import router as chat_router
+from app.routers.demo_observability import router as demo_observability_router
 from app.routers.recommendations import router as rec_router
+from app.services.demo_observability import (
+    annotate_network_outage_span,
+    demo_network_outage_active,
+    demo_network_outage_response_payload,
+    log_network_outage_block,
+)
 
 
 OAI_SANDBOX_ORIGIN_RE = re.compile(r"^https://.*\.oaiusercontent\.com$")
+
+DEMO_NETWORK_OUTAGE_EXEMPT_PREFIXES = (
+    "/admin/demo/observability",
+    "/api/demo/observability",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/ui-assets",
+    "/mcp",
+)
+DEMO_NETWORK_OUTAGE_BLOCKED_PREFIXES = (
+    "/api/",
+    "/recommendations/",
+    "/feeds/",
+)
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -56,6 +79,16 @@ def _widget_cors_headers(origin: str | None, public_base_url: str) -> dict[str, 
     return {}
 
 
+def _demo_network_outage_should_block(path: str, *, product_image_path: str) -> bool:
+    if path in {"/api", "/recommendations", "/feeds"}:
+        return True
+    if path.startswith(product_image_path.rstrip("/") + "/"):
+        return False
+    if path.startswith(DEMO_NETWORK_OUTAGE_EXEMPT_PREFIXES):
+        return False
+    return path.startswith(DEMO_NETWORK_OUTAGE_BLOCKED_PREFIXES)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     initialize_llm_otel()
@@ -84,6 +117,25 @@ def create_app() -> FastAPI:
     static_dir = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
     product_image_dir = Path(settings.product_image_output_dir)
     product_image_dir.mkdir(parents=True, exist_ok=True)
+    product_image_url_path = settings.product_image_url_path.rstrip("/") or "/product-images"
+
+    @app.middleware("http")
+    async def demo_network_outage_middleware(request: Request, call_next):
+        path = request.url.path
+        if (
+            request.method == "OPTIONS"
+            or not demo_network_outage_active()
+            or not _demo_network_outage_should_block(path, product_image_path=product_image_url_path)
+        ):
+            return await call_next(request)
+
+        annotate_network_outage_span(path=path, method=request.method)
+        log_network_outage_block(path=path, method=request.method)
+        return JSONResponse(
+            demo_network_outage_response_payload(),
+            status_code=503,
+            headers={"Retry-After": "30"},
+        )
 
     @app.get("/health")
     def health() -> dict:
@@ -99,11 +151,12 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     app.include_router(admin_router)
+    app.include_router(demo_observability_router)
     app.include_router(catalog_router)
     app.include_router(chat_router)
     app.include_router(rec_router)
     app.mount(
-        settings.product_image_url_path.rstrip("/") or "/product-images",
+        product_image_url_path,
         StaticFiles(directory=product_image_dir, check_dir=False),
         name="product-images",
     )

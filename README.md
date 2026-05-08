@@ -137,6 +137,8 @@ Demo observability harness:
 - `DEMO_OBSERVABILITY_MODE`
 - `DEMO_OBSERVABILITY_LATENCY_SECONDS`
 - `DEMO_OBSERVABILITY_TARGET_STORE_ID`
+- `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS`
+- `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS`
 
 Twilio:
 - `TWILIO_ACCOUNT_SID`
@@ -204,7 +206,7 @@ Notes:
 - `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
 - `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add every production storefront origin, including the deployed FE host.
 - Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`, and the Docker build embeds `DD_GIT_REPOSITORY_URL` and `DD_GIT_COMMIT_SHA` for source-code linking.
-- The demo observability harness is off by default. To create a Datadog demo incident, enable it with `POST /admin/demo/observability`; latency mode adds a slow `demo.inventory_reconciliation` APM span inside `/api/chat`, while error modes mark the reconciliation step degraded without failing chat. Use `POST /admin/demo/observability/trigger-error` only when you intentionally need an unhandled `DemoSupplierFeedSchemaError` 500 for Error Management.
+- The demo observability harness is off by default. To create a Datadog demo incident, enable it with `POST /admin/demo/observability`; latency mode adds a slow `demo.inventory_reconciliation` APM span inside `/api/chat`, while error modes mark the reconciliation step degraded without failing chat. Clerk-authenticated frontends can use `/api/demo/observability` when the caller is allowlisted by `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS`, `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS`, or `CLERK_DEMO_CUSTOMER_EMAIL`. `network_outage` mode returns controlled 503s from app-facing API paths while leaving `/health` and demo reset controls available; the state response includes a canonical `snmp_trap_log` payload for Datadog Logs correlation. Use `POST /admin/demo/observability/trigger-error` only when you intentionally need an unhandled `DemoSupplierFeedSchemaError` 500 for Error Management.
 - Datadog LLM Observability uses `DD_LLMOBS_ENABLED=true` for the canonical app-level chat traces. Keep `STRANDS_OTEL_ENABLED=false` by default to avoid duplicate Strands-native OTEL traces; set it to `true` only when debugging Strands event-loop telemetry. When Strands OTEL is enabled and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
 - MCP client LLM Observability uses Datadog's automatic MCP Python SDK instrumentation. Run `make mcp-smoke` with `DD_LLMOBS_ENABLED=true`, `DD_LLMOBS_AGENTLESS_ENABLED=true`, and `DD_API_KEY` to emit MCP client spans.
 - `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.

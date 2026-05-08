@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -11,6 +12,7 @@ class DemoObservabilityMode(str, Enum):
     latency = "latency"
     error = "error"
     latency_and_error = "latency_and_error"
+    network_outage = "network_outage"
 
 
 class DemoObservabilityUpdateRequest(BaseModel):
@@ -27,6 +29,10 @@ class DemoObservabilityStateResponse(BaseModel):
     target_store_id: str | None = None
     incident_id: str
     correlation_key: str
+    network_device: str
+    network_site: str
+    outage_scope: str
+    snmp_trap_log: dict[str, Any]
 
 
 class SyntheticVolumes(BaseModel):

@@ -233,3 +233,16 @@ def optional_chat_identity(
     except ClerkAuthError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+def require_clerk_principal(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> AuthenticatedPrincipal:
+    token = bearer_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Clerk session token is required.")
+    try:
+        return verify_clerk_token(token, settings)
+    except ClerkAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc

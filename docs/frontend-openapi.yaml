@@ -17,6 +17,7 @@ tags:
   - name: recommendations
   - name: images
   - name: admin
+  - name: demo
 paths:
   /api/chat:
     post:
@@ -335,6 +336,84 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ImageRecommendationResponse"
+  /api/demo/observability:
+    get:
+      tags: [demo]
+      summary: Get Clerk demo observability state
+      description: >
+        Clerk-authenticated demo-panel endpoint for reading Datadog fault
+        harness state. Caller must be allowlisted by email or Clerk subject.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current demo observability state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityStateResponse"
+        "401":
+          description: Missing or invalid Clerk token.
+        "403":
+          description: Clerk user is not allowed to control demo toggles.
+    post:
+      tags: [demo]
+      summary: Update Clerk demo observability state
+      description: >
+        Clerk-authenticated demo-panel endpoint for enabling latency, degraded
+        supplier-feed errors, or controlled network outage simulation.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoObservabilityUpdateRequest"
+            examples:
+              network_outage:
+                summary: Enable controlled network outage demo
+                value:
+                  enabled: true
+                  mode: network_outage
+              latency:
+                summary: Enable latency demo
+                value:
+                  enabled: true
+                  mode: latency
+                  latency_seconds: 8
+                  target_store_id: "1001"
+      responses:
+        "200":
+          description: Updated demo observability state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityStateResponse"
+        "401":
+          description: Missing or invalid Clerk token.
+        "403":
+          description: Clerk user is not allowed to control demo toggles.
+        "422":
+          description: Invalid request shape.
+  /api/demo/observability/reset:
+    post:
+      tags: [demo]
+      summary: Reset Clerk demo observability state
+      description: Clerk-authenticated reset endpoint that remains available during network outage demos.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Disabled demo observability state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityStateResponse"
+        "401":
+          description: Missing or invalid Clerk token.
+        "403":
+          description: Clerk user is not allowed to control demo toggles.
   /admin/product-images/generate:
     post:
       tags: [admin, images]
@@ -426,6 +505,11 @@ paths:
                 value:
                   enabled: false
                   mode: off
+              network_outage:
+                summary: Enable controlled network outage demo
+                value:
+                  enabled: true
+                  mode: network_outage
       responses:
         "200":
           description: Updated demo observability state.
@@ -753,7 +837,7 @@ components:
       enum: [queued, running, succeeded, failed]
     DemoObservabilityMode:
       type: string
-      enum: [off, latency, error, latency_and_error]
+      enum: [off, latency, error, latency_and_error, network_outage]
     DemoObservabilityUpdateRequest:
       type: object
       properties:
@@ -781,6 +865,10 @@ components:
         - latency_seconds
         - incident_id
         - correlation_key
+        - network_device
+        - network_site
+        - outage_scope
+        - snmp_trap_log
       properties:
         enabled:
           type: boolean
@@ -795,6 +883,15 @@ components:
           type: string
         correlation_key:
           type: string
+        network_device:
+          type: string
+        network_site:
+          type: string
+        outage_scope:
+          type: string
+        snmp_trap_log:
+          type: object
+          additionalProperties: true
     CategoryListResponse:
       type: object
       required: [categories]

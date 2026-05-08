@@ -1948,6 +1948,84 @@ def test_chat_demo_observability_error_degrades_without_failing_chat(monkeypatch
     assert error_annotations
 
 
+def test_demo_observability_network_outage_blocks_chat_but_keeps_recovery_paths(monkeypatch):
+    with _chat_client(monkeypatch) as (client, _):
+        toggle = client.post(
+            "/admin/demo/observability",
+            json={
+                "enabled": True,
+                "mode": "network_outage",
+                "latency_seconds": 0.0,
+                "target_store_id": "1001",
+            },
+        )
+        chat_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+        health_response = client.get("/health")
+        state_response = client.get("/admin/demo/observability")
+        reset_response = client.post("/admin/demo/observability/reset")
+        restored_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+
+    assert toggle.status_code == 200
+    assert toggle.json()["mode"] == "network_outage"
+    assert toggle.json()["incident_id"] == "demo-network-outage-2026-05-08"
+    assert toggle.json()["correlation_key"] == "sterling-hollis-network-outage"
+    assert toggle.json()["snmp_trap_log"]["ddsource"] == "snmp-traps"
+    assert chat_response.status_code == 503
+    assert chat_response.headers["retry-after"] == "30"
+    assert chat_response.json() == {
+        "detail": "Demo network outage active: upstream access switch DATACENTER-USER-SW11A is unreachable.",
+        "incident_id": "demo-network-outage-2026-05-08",
+        "correlation_key": "sterling-hollis-network-outage",
+        "affected_device": "DATACENTER-USER-SW11A",
+        "network_device": "DATACENTER-USER-SW11A",
+        "site": "dc01",
+        "outage_scope": "storefront_api",
+    }
+    assert health_response.status_code == 200
+    assert state_response.status_code == 200
+    assert state_response.json()["mode"] == "network_outage"
+    assert reset_response.status_code == 200
+    assert reset_response.json()["mode"] == "off"
+    assert restored_response.status_code == 200
+
+
+def test_clerk_demo_observability_toggle_can_enable_and_reset_network_outage(monkeypatch):
+    monkeypatch.setenv("CLERK_DEMO_CUSTOMER_EMAIL", "demo-admin@example.com")
+
+    def verify_token(token, settings=None):
+        assert token == "demo-token"
+        return AuthenticatedPrincipal(
+            provider="clerk",
+            provider_user_id="user_demo_admin",
+            email="demo-admin@example.com",
+        )
+
+    monkeypatch.setattr("app.services.auth.clerk.verify_clerk_token", verify_token)
+    headers = {"Authorization": "Bearer demo-token"}
+
+    with _chat_client(monkeypatch) as (client, _):
+        unauthenticated = client.get("/api/demo/observability")
+        toggle = client.post(
+            "/api/demo/observability",
+            headers=headers,
+            json={"enabled": True, "mode": "network_outage", "target_store_id": "1001"},
+        )
+        chat_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+        state_response = client.get("/api/demo/observability", headers=headers)
+        reset_response = client.post("/api/demo/observability/reset", headers=headers)
+        restored_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
+
+    assert unauthenticated.status_code == 401
+    assert toggle.status_code == 200
+    assert toggle.json()["mode"] == "network_outage"
+    assert chat_response.status_code == 503
+    assert state_response.status_code == 200
+    assert state_response.json()["mode"] == "network_outage"
+    assert reset_response.status_code == 200
+    assert reset_response.json()["mode"] == "off"
+    assert restored_response.status_code == 200
+
+
 def test_demo_observability_explicit_error_trigger_returns_unhandled_500(monkeypatch):
     with _chat_client(monkeypatch, raise_server_exceptions=False) as (client, _):
         response = client.post("/admin/demo/observability/trigger-error")

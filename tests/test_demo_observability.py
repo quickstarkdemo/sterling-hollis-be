@@ -31,3 +31,27 @@ def test_demo_span_exception_records_real_traceback():
     assert tb is exc.__traceback__
     assert "test_demo_span_exception_records_real_traceback" in span.tags["error.stack"]
     assert "DemoSupplierFeedSchemaError" in span.tags["error.stack"]
+
+
+def test_network_outage_state_uses_network_correlation_payload():
+    demo_observability.update_demo_observability_state(
+        demo_observability.DemoObservabilityUpdateRequest(
+            enabled=True,
+            mode=demo_observability.DemoObservabilityMode.network_outage,
+        )
+    )
+
+    state = demo_observability.get_demo_observability_state()
+
+    assert state.enabled is True
+    assert state.mode == "network_outage"
+    assert state.incident_id == "demo-network-outage-2026-05-08"
+    assert state.correlation_key == "sterling-hollis-network-outage"
+    assert state.network_device == "DATACENTER-USER-SW11A"
+    assert state.network_site == "dc01"
+    assert state.outage_scope == "storefront_api"
+    assert state.snmp_trap_log["ddsource"] == "snmp-traps"
+    assert state.snmp_trap_log["trap_name"] == "linkDown"
+    assert "correlation_key:sterling-hollis-network-outage" in state.snmp_trap_log["ddtags"]
+
+    demo_observability.reset_demo_observability_state()

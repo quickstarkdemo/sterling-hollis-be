@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 INCIDENT_ID = "demo-atp-supplier-feed-2026-05-06"
 CORRELATION_KEY = "sterling-hollis-atp-reconciliation"
+NETWORK_INCIDENT_ID = "demo-network-outage-2026-05-08"
+NETWORK_CORRELATION_KEY = "sterling-hollis-network-outage"
+NETWORK_DEVICE = "DATACENTER-USER-SW11A"
+NETWORK_DEVICE_HOSTNAME = "datacenter-user-sw11a"
+NETWORK_SITE = "dc01"
+NETWORK_OUTAGE_SCOPE = "storefront_api"
+NETWORK_AFFECTED_SERVICE = "sterling-hollis-be"
 APM_SPAN_NAME = "demo.inventory_reconciliation"
 ERROR_MESSAGE = (
     "Supplier feed schema mismatch while reconciling available-to-promise inventory: "
@@ -41,6 +48,9 @@ class DemoObservabilityState:
     target_store_id: str | None
     incident_id: str = INCIDENT_ID
     correlation_key: str = CORRELATION_KEY
+    network_device: str = NETWORK_DEVICE
+    network_site: str = NETWORK_SITE
+    outage_scope: str = NETWORK_OUTAGE_SCOPE
 
     def response(self) -> DemoObservabilityStateResponse:
         return DemoObservabilityStateResponse(
@@ -50,6 +60,10 @@ class DemoObservabilityState:
             target_store_id=self.target_store_id,
             incident_id=self.incident_id,
             correlation_key=self.correlation_key,
+            network_device=self.network_device,
+            network_site=self.network_site,
+            outage_scope=self.outage_scope,
+            snmp_trap_log=network_outage_snmp_trap_log(),
         )
 
     @property
@@ -70,6 +84,8 @@ def _default_state() -> DemoObservabilityState:
         mode=mode if enabled else DemoObservabilityMode.off,
         latency_seconds=max(0.0, float(settings.demo_observability_latency_seconds)),
         target_store_id=settings.demo_observability_target_store_id,
+        incident_id=_incident_id_for_mode(mode if enabled else DemoObservabilityMode.off),
+        correlation_key=_correlation_key_for_mode(mode if enabled else DemoObservabilityMode.off),
     )
 
 
@@ -100,6 +116,8 @@ def update_demo_observability_state(req: DemoObservabilityUpdateRequest) -> Demo
             mode=mode,
             latency_seconds=max(0.0, float(latency_seconds)),
             target_store_id=target_store_id,
+            incident_id=_incident_id_for_mode(mode),
+            correlation_key=_correlation_key_for_mode(mode),
         )
         return _STATE.response()
 
@@ -120,6 +138,111 @@ def reset_demo_observability_state() -> DemoObservabilityStateResponse:
 def demo_observability_active_for_store(store_id: str | None) -> bool:
     state = _current_state()
     return bool(state.active and (not state.target_store_id or not store_id or store_id == state.target_store_id))
+
+
+def demo_network_outage_active() -> bool:
+    state = _current_state()
+    return bool(state.enabled and state.mode == DemoObservabilityMode.network_outage)
+
+
+def demo_network_outage_response_payload() -> dict[str, str]:
+    state = _current_state()
+    return {
+        "detail": f"Demo network outage active: upstream access switch {state.network_device} is unreachable.",
+        "incident_id": state.incident_id,
+        "correlation_key": state.correlation_key,
+        "affected_device": state.network_device,
+        "network_device": state.network_device,
+        "site": state.network_site,
+        "outage_scope": state.outage_scope,
+    }
+
+
+def network_outage_tags(*, path: str | None = None, method: str | None = None) -> dict[str, str]:
+    state = _current_state()
+    tags = {
+        "demo.incident_id": state.incident_id,
+        "demo.scenario": DemoObservabilityMode.network_outage.value,
+        "demo.correlation_key": state.correlation_key,
+        "demo.network_device": state.network_device,
+        "demo.network_site": state.network_site,
+        "demo.outage_scope": state.outage_scope,
+        "service": NETWORK_AFFECTED_SERVICE,
+        "env": "production",
+    }
+    if path is not None:
+        tags["http.path"] = path
+    if method is not None:
+        tags["http.method"] = method
+    return tags
+
+
+def annotate_network_outage_span(*, path: str, method: str) -> None:
+    try:
+        from ddtrace import tracer
+
+        span = tracer.current_span()
+        if span is not None:
+            span.error = 1
+            _set_span_tags(span, network_outage_tags(path=path, method=method))
+            span.set_tag("http.status_code", 503)
+            span.set_tag("error.type", "DemoNetworkOutage")
+            span.set_tag("error.message", demo_network_outage_response_payload()["detail"])
+    except Exception:
+        logger.debug("Failed to annotate Datadog network outage span", exc_info=True)
+
+
+def log_network_outage_block(*, path: str, method: str) -> None:
+    logger.warning(
+        "Demo network outage blocked API request",
+        extra={
+            **network_outage_tags(path=path, method=method),
+            "http.status_code": 503,
+            "affected_device": NETWORK_DEVICE,
+        },
+    )
+
+
+def network_outage_snmp_trap_log() -> dict[str, Any]:
+    return {
+        "message": (
+            "SNMP Trap: DATACENTER-USER-SW11A linkDown - uplink interface Gi1/0/48 unreachable, "
+            "packet loss 100%, affected services: sterling-hollis-be"
+        ),
+        "ddsource": "snmp-traps",
+        "service": "network-device-monitoring",
+        "hostname": NETWORK_DEVICE_HOSTNAME,
+        "status": "critical",
+        "device_name": NETWORK_DEVICE,
+        "device_role": "access_switch",
+        "device_vendor": "cisco",
+        "trap_name": "linkDown",
+        "trap_oid": "1.3.6.1.6.3.1.1.5.3",
+        "interface": "Gi1/0/48",
+        "site": NETWORK_SITE,
+        "namespace": NETWORK_SITE,
+        "incident_id": NETWORK_INCIDENT_ID,
+        "correlation_key": NETWORK_CORRELATION_KEY,
+        "affected_service": NETWORK_AFFECTED_SERVICE,
+        "outage_scope": NETWORK_OUTAGE_SCOPE,
+        "ddtags": (
+            "env:production,source:snmp-traps,category:network,event_type:trigger,severity:critical,"
+            "device:datacenter-user-sw11a,site:dc01,service:sterling-hollis-be,"
+            "incident_id:demo-network-outage-2026-05-08,correlation_key:sterling-hollis-network-outage"
+        ),
+    }
+
+
+def _incident_id_for_mode(mode: DemoObservabilityMode) -> str:
+    if mode == DemoObservabilityMode.network_outage:
+        return NETWORK_INCIDENT_ID
+    return INCIDENT_ID
+
+
+def _correlation_key_for_mode(mode: DemoObservabilityMode) -> str:
+    if mode == DemoObservabilityMode.network_outage:
+        return NETWORK_CORRELATION_KEY
+    return CORRELATION_KEY
 
 
 def _current_state() -> DemoObservabilityState:

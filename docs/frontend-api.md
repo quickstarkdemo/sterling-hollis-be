@@ -68,6 +68,9 @@ Generated image files are served from:
 | Image analysis | `POST` | `/api/image-analysis` |
 | Image recommendations | `POST` | `/api/recommendations/image` |
 | Storefront chat | `POST` | `/api/chat` |
+| Clerk demo fault state | `GET` | `/api/demo/observability` |
+| Clerk demo fault toggle | `POST` | `/api/demo/observability` |
+| Clerk demo fault reset | `POST` | `/api/demo/observability/reset` |
 
 ## Admin/Operations Endpoints Useful During Buildout
 
@@ -203,11 +206,15 @@ Supported selected tools:
 
 ## Demo Observability Toggle
 
-The Datadog demo fault harness is an admin/operator control. Do not expose it as
-a normal shopper-facing setting. A front-end demo panel can call:
+The Datadog demo fault harness is an operator/demo control. Do not expose it as
+a normal shopper-facing setting. Clerk-authenticated demo panels should call
+the `/api/demo/observability` endpoints with `Authorization: Bearer <Clerk token>`.
+The caller must match `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS`,
+`DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS`, or `CLERK_DEMO_CUSTOMER_EMAIL`.
+Local/admin tooling can use the `/admin/demo/observability` endpoints.
 
 ```http
-GET /admin/demo/observability
+GET /api/demo/observability
 ```
 
 Response:
@@ -219,14 +226,23 @@ Response:
   "latency_seconds": 8,
   "target_store_id": "1001",
   "incident_id": "demo-atp-supplier-feed-2026-05-06",
-  "correlation_key": "sterling-hollis-atp-reconciliation"
+  "correlation_key": "sterling-hollis-atp-reconciliation",
+  "network_device": "DATACENTER-USER-SW11A",
+  "network_site": "dc01",
+  "outage_scope": "storefront_api",
+  "snmp_trap_log": {
+    "ddsource": "snmp-traps",
+    "hostname": "datacenter-user-sw11a",
+    "correlation_key": "sterling-hollis-network-outage"
+  }
 }
 ```
 
 To enable latency in the chat path:
 
 ```http
-POST /admin/demo/observability
+POST /api/demo/observability
+authorization: Bearer <Clerk token>
 content-type: application/json
 ```
 
@@ -240,10 +256,19 @@ content-type: application/json
 ```
 
 Supported `mode` values are `off`, `latency`, `error`, and
-`latency_and_error`. Use `POST /admin/demo/observability/reset` to turn it off.
+`latency_and_error`, and `network_outage`. Use
+`POST /api/demo/observability/reset` to turn it off from the Clerk demo panel.
 When enabled for a matching `store_id`, the next `/api/chat` turn emits an
 `available_to_promise_reconciliation` `tool_trace` entry. Error modes degrade
 that reconciliation step but still return the normal chat response.
+
+For a network outage demo, send the `snmp_trap_log` payload from
+`GET /api/demo/observability` or the update response to Datadog Logs intake
+first, then enable `network_outage`. While active, app-facing API paths return
+`503 Service Unavailable` with the same `incident_id` and `correlation_key`;
+`/health`, `/admin/demo/observability/reset`, and
+`/api/demo/observability/reset` remain available so the demo is recoverable
+from the frontend.
 
 Use `POST /admin/demo/observability/trigger-error` only when the demo needs a
 real unhandled backend 500 for Datadog Error Management grouping. Do not call

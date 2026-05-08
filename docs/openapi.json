@@ -994,7 +994,8 @@
           "off",
           "latency",
           "error",
-          "latency_and_error"
+          "latency_and_error",
+          "network_outage"
         ],
         "title": "DemoObservabilityMode",
         "type": "string"
@@ -1020,6 +1021,23 @@
           "mode": {
             "$ref": "#/components/schemas/DemoObservabilityMode"
           },
+          "network_device": {
+            "title": "Network Device",
+            "type": "string"
+          },
+          "network_site": {
+            "title": "Network Site",
+            "type": "string"
+          },
+          "outage_scope": {
+            "title": "Outage Scope",
+            "type": "string"
+          },
+          "snmp_trap_log": {
+            "additionalProperties": true,
+            "title": "Snmp Trap Log",
+            "type": "object"
+          },
           "target_store_id": {
             "anyOf": [
               {
@@ -1037,7 +1055,11 @@
           "mode",
           "latency_seconds",
           "incident_id",
-          "correlation_key"
+          "correlation_key",
+          "network_device",
+          "network_site",
+          "outage_scope",
+          "snmp_trap_log"
         ],
         "title": "DemoObservabilityStateResponse",
         "type": "object"
@@ -3823,6 +3845,87 @@
         "summary": "Chat",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/api/demo/observability": {
+      "get": {
+        "operationId": "clerk_demo_observability_state_api_demo_observability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Clerk Demo Observability State",
+        "tags": [
+          "demo"
+        ]
+      },
+      "post": {
+        "operationId": "set_clerk_demo_observability_state_api_demo_observability_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoObservabilityUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Clerk Demo Observability State",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/observability/reset": {
+      "post": {
+        "operationId": "reset_clerk_demo_observability_api_demo_observability_reset_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityStateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reset Clerk Demo Observability",
+        "tags": [
+          "demo"
         ]
       }
     },
