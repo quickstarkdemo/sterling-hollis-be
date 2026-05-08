@@ -90,6 +90,7 @@ def test_network_outage_snmp_trap_log_posts_to_datadog_logs_intake(monkeypatch):
     assert captured["url"] == "https://http-intake.logs.datadoghq.com/api/v2/logs"
     assert captured["headers"]["DD-API-KEY"] == "test-api-key"
     assert captured["json"][0]["ddsource"] == "snmp-traps"
+    assert captured["json"][0]["source"] == "snmp-traps"
     assert captured["json"][0]["hostname"] == "datacenter-user-sw11a"
     assert captured["json"][0]["trap_name"] == "linkDown"
     assert captured["json"][0]["tags"] == captured["json"][0]["ddtags"]

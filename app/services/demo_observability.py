@@ -212,6 +212,7 @@ def network_outage_snmp_trap_log() -> dict[str, Any]:
         ),
         "level": "ERROR",
         "ddsource": "snmp-traps",
+        "source": "snmp-traps",
         "service": "network-device-monitoring",
         "hostname": NETWORK_DEVICE_HOSTNAME,
         "status": "critical",

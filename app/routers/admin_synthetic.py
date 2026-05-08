@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
     DemoObservabilityLogSendResponse,
+    DemoObservabilityMode,
     DemoObservabilityStateResponse,
     DemoObservabilityUpdateRequest,
     ImageGenerationJobListResponse,
@@ -64,6 +65,11 @@ def demo_observability_state():
 
 @router.post("/demo/observability", response_model=DemoObservabilityStateResponse)
 def set_demo_observability_state(req: DemoObservabilityUpdateRequest):
+    if req.mode == DemoObservabilityMode.network_outage and req.enabled is not False:
+        try:
+            send_network_outage_snmp_trap_log()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     return update_demo_observability_state(req)
 
 
