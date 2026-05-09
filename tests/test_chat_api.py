@@ -17,6 +17,7 @@ from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecision
 from app.services.chat.evaluator import ChatEvaluationConstraints
+from app.services.chat.intent_frame import build_chat_intent_frame
 from app.services.chat.safety import ChatSafetyDecision
 from app.services.chat.schemas import ChatAction, ChatRequest, ChatResponse, ChatToolTrace
 from app.services.chat.strands_agent import ShoppingAgentResult
@@ -376,6 +377,82 @@ def _chat_payload(message: str, current_product_id: str = "prod_1", **context):
             **context,
         },
     }
+
+
+def test_complementary_intent_frame_does_not_infer_unisex_from_current_product():
+    decision = TriageDecision(
+        intent="complementary_products",
+        route="semantic_catalog_search",
+        reason="outfit pairing request",
+        target_categories=["womens_apparel", "shoes", "handbags"],
+        use_current_product=True,
+        tool="semantic_catalog_search",
+    )
+    orchestration = ChatOrchestrationDecision(
+        decision=decision,
+        selected_agent="StorefrontShoppingAgent",
+        selected_tool="strands_agent",
+        evaluator_confidence=1.0,
+        evaluator_source="test",
+        requires_auth=False,
+    )
+    req = ChatRequest.model_validate(
+        _chat_payload(
+            "Build an outfit around this",
+            current_product_id="cat_d05c17ff82e4d926e7e5",
+            current_product={
+                "id": "cat_d05c17ff82e4d926e7e5",
+                "title": "Jimmy Choo Black Dress",
+                "category": "kids",
+                "brand": "Jimmy Choo",
+                "attributes": {"color": "Black", "material": "jersey", "gender": "unisex"},
+            },
+            category="kids",
+        )
+    )
+
+    frame = build_chat_intent_frame(req, orchestration)
+
+    assert frame.target_genders == []
+    assert frame.target_gender_source == "none"
+
+
+def test_complementary_intent_frame_keeps_explicit_unisex_request():
+    decision = TriageDecision(
+        intent="complementary_products",
+        route="semantic_catalog_search",
+        reason="outfit pairing request",
+        target_categories=["womens_apparel", "shoes", "handbags"],
+        use_current_product=True,
+        tool="semantic_catalog_search",
+    )
+    orchestration = ChatOrchestrationDecision(
+        decision=decision,
+        selected_agent="StorefrontShoppingAgent",
+        selected_tool="strands_agent",
+        evaluator_confidence=1.0,
+        evaluator_source="test",
+        requires_auth=False,
+    )
+    req = ChatRequest.model_validate(
+        _chat_payload(
+            "Build a unisex outfit around this",
+            current_product_id="cat_d05c17ff82e4d926e7e5",
+            current_product={
+                "id": "cat_d05c17ff82e4d926e7e5",
+                "title": "Jimmy Choo Black Dress",
+                "category": "kids",
+                "brand": "Jimmy Choo",
+                "attributes": {"color": "Black", "material": "jersey", "gender": "unisex"},
+            },
+            category="kids",
+        )
+    )
+
+    frame = build_chat_intent_frame(req, orchestration)
+
+    assert frame.target_genders == ["unisex"]
+    assert frame.target_gender_source == "message"
 
 
 class _FakeLLMObsSpan:
@@ -828,6 +905,49 @@ def test_strands_product_mode_completes_outfit_cards_when_agent_returns_too_few(
     assert len(payload["cards"]) == 3
     assert "womens_apparel" in {card["category"] for card in payload["cards"]}
     assert all(action["type"] == "view_product" for action in payload["actions"])
+    assert any(trace["name"] == "complete_outfit_cards" for trace in payload["tool_trace"])
+
+
+def test_strands_product_mode_broadens_unisex_inferred_outfit(monkeypatch):
+    def fake_invoke_storefront_shopping_agent(prompt, tools):
+        return ShoppingAgentResult(
+            message="Here is a polished outfit direction around this black dress.",
+            intent="complementary_products",
+            route="semantic_catalog_search",
+            primary_tool="strands_agent",
+            product_ids=[],
+            rationale="Agent did not select enough product ids for a full outfit.",
+        )
+
+    monkeypatch.setattr("app.services.chat.strands_orchestrator.invoke_storefront_shopping_agent", fake_invoke_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json=_chat_payload(
+                "Build an outfit around this",
+                current_product_id="cat_d05c17ff82e4d926e7e5",
+                current_product={
+                    "id": "cat_d05c17ff82e4d926e7e5",
+                    "title": "Jimmy Choo Black Dress",
+                    "category": "kids",
+                    "brand": "Jimmy Choo",
+                    "attributes": {"color": "Black", "material": "jersey", "gender": "unisex"},
+                },
+                category="kids",
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_agent"] == "StorefrontShoppingAgent"
+    assert len(payload["cards"]) == 3
+    assert payload["requires_followup"] is False
+    assert {card["category"] for card in payload["cards"]} >= {"womens_apparel", "shoes", "handbags"}
+    assert any(
+        trace["name"] == "intent_frame" and "target_genders=any" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
     assert any(trace["name"] == "complete_outfit_cards" for trace in payload["tool_trace"])
 
 

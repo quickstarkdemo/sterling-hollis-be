@@ -199,6 +199,8 @@ def _current_gender(req: ChatRequest) -> str | None:
 
 
 def _strict_gender(frame: ChatIntentFrame) -> bool:
+    if frame.target_gender_source == "current_product" and frame.target_genders == ["unisex"]:
+        return False
     return bool(frame.target_genders)
 
 

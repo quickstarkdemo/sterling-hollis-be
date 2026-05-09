@@ -60,6 +60,7 @@ class ChatIntentFrame:
     target_categories: list[str] = field(default_factory=list)
     exclude_categories: list[str] = field(default_factory=list)
     target_genders: list[str] = field(default_factory=list)
+    target_gender_source: str = "none"
     current_product_id: str | None = None
     use_current_product: bool = False
     requires_followup: bool = False
@@ -135,22 +136,43 @@ def _current_product_id(req: ChatRequest) -> str | None:
     return req.context.current_product.id if req.context.current_product else req.context.product_id
 
 
-def _current_product_genders(req: ChatRequest) -> list[str]:
+def _current_product_genders(req: ChatRequest, *, include_unisex: bool = True) -> list[str]:
     if not req.context.current_product:
         return []
-    return normalize_genders([req.context.current_product.attributes.get("gender", "")])
+    genders = normalize_genders([req.context.current_product.attributes.get("gender", "")])
+    if include_unisex:
+        return genders
+    return [gender for gender in genders if gender != "unisex"]
 
 
 def _message_genders(message: str) -> list[str]:
     return normalize_genders(gender_targets_from_text(message))
 
 
+def _target_genders_and_source(req: ChatRequest, decision: TriageDecision) -> tuple[list[str], str]:
+    message_genders = _message_genders(req.message)
+    if message_genders:
+        return message_genders, "message"
+
+    constraint_genders = normalize_genders(decision.constraints.target_genders)
+    if constraint_genders:
+        return constraint_genders, "constraints"
+
+    current_genders = _current_product_genders(
+        req,
+        include_unisex=decision.intent != "complementary_products",
+    )
+    if current_genders:
+        return current_genders, "current_product"
+
+    return [], "none"
+
+
 def build_chat_intent_frame(req: ChatRequest, orchestration: ChatOrchestrationDecision) -> ChatIntentFrame:
     decision: TriageDecision = orchestration.decision
     constraints = decision.constraints
     query = constraints.query
-    message_genders = _message_genders(req.message)
-    target_genders = message_genders or normalize_genders(constraints.target_genders) or _current_product_genders(req)
+    target_genders, target_gender_source = _target_genders_and_source(req, decision)
     target_categories = normalize_categories(decision.target_categories, query)
     exclude_categories = normalize_categories(decision.exclude_categories)
 
@@ -169,6 +191,7 @@ def build_chat_intent_frame(req: ChatRequest, orchestration: ChatOrchestrationDe
         target_categories=target_categories,
         exclude_categories=exclude_categories,
         target_genders=target_genders,
+        target_gender_source=target_gender_source,
         current_product_id=_current_product_id(req),
         use_current_product=decision.use_current_product,
         requires_followup=orchestration.requires_followup,

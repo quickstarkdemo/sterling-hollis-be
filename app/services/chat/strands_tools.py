@@ -60,7 +60,11 @@ def _current_category(req: ChatRequest) -> str | None:
 def _safe_target_genders(frame: ChatIntentFrame, requested: list[str] | None) -> list[str]:
     if frame.target_genders:
         return frame.target_genders
-    return requested or []
+    requested_genders = requested or []
+    normalized_requested = {" ".join(str(gender).lower().split()) for gender in requested_genders}
+    if frame.intent == "complementary_products" and normalized_requested == {"unisex"}:
+        return []
+    return requested_genders
 
 
 def _safe_target_categories(frame: ChatIntentFrame, requested: list[str] | None) -> list[str]:
@@ -80,6 +84,8 @@ def _safe_search_category(frame: ChatIntentFrame, requested: str | None, fallbac
 
 
 def _strict_gender(frame: ChatIntentFrame) -> bool:
+    if frame.target_gender_source == "current_product" and frame.target_genders == ["unisex"]:
+        return False
     return bool(frame.target_genders)
 
 

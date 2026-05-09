@@ -27,6 +27,7 @@ NETWORK_INCIDENT_ID = "demo-network-outage-2026-05-08"
 NETWORK_CORRELATION_KEY = "sterling-hollis-network-outage"
 NETWORK_DEVICE = "DATACENTER-USER-SW11A"
 NETWORK_DEVICE_HOSTNAME = "datacenter-user-sw11a"
+NETWORK_DEVICE_IP = "10.100.1.48"
 NETWORK_SITE = "dc01"
 NETWORK_OUTAGE_SCOPE = "storefront_api"
 NETWORK_AFFECTED_SERVICE = "sterling-hollis-be"
@@ -205,40 +206,79 @@ def log_network_outage_block(*, path: str, method: str) -> None:
 
 
 def network_outage_snmp_trap_log() -> dict[str, Any]:
+    timestamp = int(time.time() * 1000)
+    history_index = timestamp % 100000
+    uptime = 530073760
+    facility = "IOSXE"
+    message_name = "PLATFORM"
+    severity = "alert"
+    message_text = (
+        "%LINK-2-CHANGED: Interface GigabitEthernet1/0/48, "
+        "changed state to down; uplink to distribution switch unreachable"
+    )
+    tags = (
+        "env:production,source:snmp-traps,category:network,event_type:trigger,severity:alert,"
+        "device_vendor:cisco,device_namespace:dc01,device_hostname:datacenter-user-sw11a,"
+        "device_ip:10.100.1.48,site:dc01,incident_id:demo-network-outage-2026-05-08,"
+        "correlation_key:sterling-hollis-network-outage"
+    )
     return {
-        "message": (
-            "SNMP Trap: DATACENTER-USER-SW11A linkDown - uplink interface Gi1/0/48 unreachable, "
-            "packet loss 100%, affected services: sterling-hollis-be"
-        ),
-        "level": "ERROR",
+        "message": message_text,
+        "level": "ALERT",
         "ddsource": "snmp-traps",
         "source": "snmp-traps",
         "service": "network-device-monitoring",
         "hostname": NETWORK_DEVICE_HOSTNAME,
-        "status": "critical",
-        "device_name": NETWORK_DEVICE,
+        "network_device": NETWORK_DEVICE_IP,
+        "status": severity,
+        "device_hostname": NETWORK_DEVICE_HOSTNAME,
+        "device_ip": NETWORK_DEVICE_IP,
+        "device_namespace": NETWORK_SITE,
         "device_role": "access_switch",
         "device_vendor": "cisco",
-        "trap_name": "linkDown",
-        "trap_oid": "1.3.6.1.6.3.1.1.5.3",
-        "interface": "Gi1/0/48",
+        "clogHistFacility": facility,
+        "clogHistMsgName": message_name,
+        "clogHistMsgText": message_text,
+        "clogHistSeverity": severity,
+        "clogHistTimestamp": uptime - 1,
+        "snmpTrapMIB": "CISCO-SYSLOG-MIB",
+        "snmpTrapName": "clogMessageGenerated",
+        "snmpTrapOID": "1.3.6.1.4.1.9.9.41.2.0.1",
+        "uptime": uptime,
+        "variables": [
+            {
+                "oid": f"1.3.6.1.4.1.9.9.41.1.2.3.1.2.{history_index}",
+                "type": "string",
+                "value": facility,
+            },
+            {
+                "oid": f"1.3.6.1.4.1.9.9.41.1.2.3.1.3.{history_index}",
+                "type": "integer",
+                "value": 2,
+            },
+            {
+                "oid": f"1.3.6.1.4.1.9.9.41.1.2.3.1.4.{history_index}",
+                "type": "string",
+                "value": message_name,
+            },
+            {
+                "oid": f"1.3.6.1.4.1.9.9.41.1.2.3.1.5.{history_index}",
+                "type": "string",
+                "value": message_text,
+            },
+            {
+                "oid": f"1.3.6.1.4.1.9.9.41.1.2.3.1.6.{history_index}",
+                "type": "time-ticks",
+                "value": uptime - 1,
+            },
+        ],
         "site": NETWORK_SITE,
         "namespace": NETWORK_SITE,
         "incident_id": NETWORK_INCIDENT_ID,
         "correlation_key": NETWORK_CORRELATION_KEY,
-        "affected_service": NETWORK_AFFECTED_SERVICE,
-        "outage_scope": NETWORK_OUTAGE_SCOPE,
-        "timestamp": int(time.time() * 1000),
-        "tags": (
-            "env:production,source:snmp-traps,category:network,event_type:trigger,severity:critical,"
-            "device:datacenter-user-sw11a,site:dc01,service:sterling-hollis-be,"
-            "incident_id:demo-network-outage-2026-05-08,correlation_key:sterling-hollis-network-outage"
-        ),
-        "ddtags": (
-            "env:production,source:snmp-traps,category:network,event_type:trigger,severity:critical,"
-            "device:datacenter-user-sw11a,site:dc01,service:sterling-hollis-be,"
-            "incident_id:demo-network-outage-2026-05-08,correlation_key:sterling-hollis-network-outage"
-        ),
+        "timestamp": timestamp,
+        "tags": tags,
+        "ddtags": tags,
     }
 
 

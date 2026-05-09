@@ -52,7 +52,13 @@ def test_network_outage_state_uses_network_correlation_payload():
     assert state.network_site == "dc01"
     assert state.outage_scope == "storefront_api"
     assert state.snmp_trap_log["ddsource"] == "snmp-traps"
-    assert state.snmp_trap_log["trap_name"] == "linkDown"
+    assert state.snmp_trap_log["status"] == "alert"
+    assert state.snmp_trap_log["snmpTrapName"] == "clogMessageGenerated"
+    assert state.snmp_trap_log["snmpTrapMIB"] == "CISCO-SYSLOG-MIB"
+    assert state.snmp_trap_log["snmpTrapOID"] == "1.3.6.1.4.1.9.9.41.2.0.1"
+    assert "affected_service" not in state.snmp_trap_log
+    assert "outage_scope" not in state.snmp_trap_log
+    assert "service:sterling-hollis-be" not in state.snmp_trap_log["ddtags"]
     assert "correlation_key:sterling-hollis-network-outage" in state.snmp_trap_log["ddtags"]
 
     demo_observability.reset_demo_observability_state()
@@ -92,7 +98,15 @@ def test_network_outage_snmp_trap_log_posts_to_datadog_logs_intake(monkeypatch):
     assert captured["json"][0]["ddsource"] == "snmp-traps"
     assert captured["json"][0]["source"] == "snmp-traps"
     assert captured["json"][0]["hostname"] == "datacenter-user-sw11a"
-    assert captured["json"][0]["trap_name"] == "linkDown"
+    assert captured["json"][0]["status"] == "alert"
+    assert captured["json"][0]["clogHistMsgName"] == "PLATFORM"
+    assert captured["json"][0]["clogHistFacility"] == "IOSXE"
+    assert captured["json"][0]["snmpTrapName"] == "clogMessageGenerated"
+    assert captured["json"][0]["snmpTrapMIB"] == "CISCO-SYSLOG-MIB"
+    assert captured["json"][0]["snmpTrapOID"] == "1.3.6.1.4.1.9.9.41.2.0.1"
+    assert captured["json"][0]["variables"][3]["value"] == captured["json"][0]["clogHistMsgText"]
+    assert "sterling-hollis-be" not in captured["json"][0]["message"]
+    assert "affected_service" not in captured["json"][0]
     assert captured["json"][0]["tags"] == captured["json"][0]["ddtags"]
 
     get_settings.cache_clear()
