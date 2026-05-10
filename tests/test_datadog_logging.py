@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 
-from app.observability.logging import DATADOG_LOG_FORMAT, DatadogLogFormatter
+from app.observability.logging import DATADOG_ACCESS_LOG_FORMAT, DATADOG_LOG_FORMAT, DatadogLogFormatter
 
 
 def _format_record(message: str = "hello") -> str:
@@ -63,3 +64,36 @@ def test_datadog_formatter_preserves_injected_trace_ids():
 
     assert "dd.trace_id=123" in rendered
     assert "dd.span_id=456" in rendered
+
+
+def test_datadog_access_formatter_unpacks_uvicorn_access_args():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:53808", "GET", "/health", "1.1", HTTPStatus.OK),
+        exc_info=None,
+    )
+
+    rendered = DatadogLogFormatter(DATADOG_ACCESS_LOG_FORMAT).format(record)
+
+    assert '127.0.0.1:53808 - "GET /health HTTP/1.1" 200' in rendered
+    assert "dd.service=sterling-hollis-be" in rendered
+
+
+def test_datadog_access_formatter_handles_missing_access_args():
+    record = logging.LogRecord(
+        name="test.logger",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="plain message",
+        args=(),
+        exc_info=None,
+    )
+
+    rendered = DatadogLogFormatter(DATADOG_ACCESS_LOG_FORMAT).format(record)
+
+    assert '- "plain message" -' in rendered

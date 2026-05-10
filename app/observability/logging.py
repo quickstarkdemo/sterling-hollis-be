@@ -56,11 +56,33 @@ def _set_missing_datadog_fields(record: logging.LogRecord, context: dict[str, st
             record.__dict__[key] = value
 
 
+def _set_missing_access_fields(record: logging.LogRecord) -> None:
+    access_args = record.args if isinstance(record.args, tuple) else ()
+    if record.name == "uvicorn.access" and len(access_args) >= 5:
+        client_addr, method, path, http_version, status_code = access_args[:5]
+        request_line = f"{method} {path} HTTP/{http_version}"
+    else:
+        client_addr = "-"
+        request_line = record.getMessage()
+        status_code = "-"
+
+    defaults = {
+        "client_addr": client_addr,
+        "request_line": request_line,
+        "status_code": status_code,
+    }
+    for key, value in defaults.items():
+        current_value: Any = record.__dict__.get(key)
+        if current_value in (None, ""):
+            record.__dict__[key] = value
+
+
 class DatadogLogFormatter(logging.Formatter):
     """Formatter that guarantees Datadog correlation fields exist on every record."""
 
     def format(self, record: logging.LogRecord) -> str:
         _set_missing_datadog_fields(record, _datadog_correlation_context())
+        _set_missing_access_fields(record)
         return super().format(record)
 
 
