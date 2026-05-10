@@ -28,9 +28,16 @@ NETWORK_CORRELATION_KEY = "sterling-hollis-network-outage"
 NETWORK_DEVICE = "DATACENTER-USER-SW11A"
 NETWORK_DEVICE_HOSTNAME = "datacenter-user-sw11a"
 NETWORK_DEVICE_IP = "10.100.1.48"
+NETWORK_DOWNSTREAM_DEVICE = "STORE-FULFILLMENT-EDGE01"
+NETWORK_DOWNSTREAM_DEVICE_HOSTNAME = "store-fulfillment-edge01"
+NETWORK_DOWNSTREAM_DEVICE_IP = "10.100.12.21"
+NETWORK_PARENT_INTERFACE = "GigabitEthernet1/0/48"
+NETWORK_DOWNSTREAM_INTERFACE = "TenGigabitEthernet0/1"
 NETWORK_SITE = "dc01"
 NETWORK_OUTAGE_SCOPE = "storefront_api"
 NETWORK_AFFECTED_SERVICE = "sterling-hollis-be"
+NETWORK_EVENT_COUNT_MIN = 1
+NETWORK_EVENT_COUNT_MAX = 25
 APM_SPAN_NAME = "demo.inventory_reconciliation"
 ERROR_MESSAGE = (
     "Supplier feed schema mismatch while reconciling available-to-promise inventory: "
@@ -53,8 +60,10 @@ class DemoObservabilityState:
     network_device: str = NETWORK_DEVICE
     network_site: str = NETWORK_SITE
     outage_scope: str = NETWORK_OUTAGE_SCOPE
+    network_event_count: int = 2
 
     def response(self) -> DemoObservabilityStateResponse:
+        snmp_trap_logs = network_outage_snmp_trap_logs(count=self.network_event_count)
         return DemoObservabilityStateResponse(
             enabled=self.enabled,
             mode=self.mode,
@@ -65,7 +74,9 @@ class DemoObservabilityState:
             network_device=self.network_device,
             network_site=self.network_site,
             outage_scope=self.outage_scope,
-            snmp_trap_log=network_outage_snmp_trap_log(),
+            network_event_count=self.network_event_count,
+            snmp_trap_log=snmp_trap_logs[0],
+            snmp_trap_logs=snmp_trap_logs,
         )
 
     @property
@@ -88,6 +99,7 @@ def _default_state() -> DemoObservabilityState:
         target_store_id=settings.demo_observability_target_store_id,
         incident_id=_incident_id_for_mode(mode if enabled else DemoObservabilityMode.off),
         correlation_key=_correlation_key_for_mode(mode if enabled else DemoObservabilityMode.off),
+        network_event_count=_normalize_network_event_count(settings.demo_observability_network_event_count),
     )
 
 
@@ -101,6 +113,9 @@ def update_demo_observability_state(req: DemoObservabilityUpdateRequest) -> Demo
         enabled = current.enabled if req.enabled is None else req.enabled
         mode = current.mode if req.mode is None else req.mode
         latency_seconds = current.latency_seconds if req.latency_seconds is None else req.latency_seconds
+        network_event_count = (
+            current.network_event_count if req.network_event_count is None else req.network_event_count
+        )
         target_store_id = current.target_store_id
         if "target_store_id" in req.model_fields_set:
             target_store_id = req.target_store_id
@@ -120,6 +135,7 @@ def update_demo_observability_state(req: DemoObservabilityUpdateRequest) -> Demo
             target_store_id=target_store_id,
             incident_id=_incident_id_for_mode(mode),
             correlation_key=_correlation_key_for_mode(mode),
+            network_event_count=_normalize_network_event_count(network_event_count),
         )
         return _STATE.response()
 
@@ -133,6 +149,7 @@ def reset_demo_observability_state() -> DemoObservabilityStateResponse:
             mode=DemoObservabilityMode.off,
             latency_seconds=current.latency_seconds,
             target_store_id=current.target_store_id,
+            network_event_count=current.network_event_count,
         )
         return _STATE.response()
 
@@ -205,37 +222,97 @@ def log_network_outage_block(*, path: str, method: str) -> None:
     )
 
 
+def network_outage_snmp_trap_logs(*, count: int | None = None) -> list[dict[str, Any]]:
+    event_count = _normalize_network_event_count(count if count is not None else _current_state().network_event_count)
+    base_timestamp = int(time.time() * 1000)
+    return [
+        _network_outage_snmp_trap_log(sequence=sequence, total_events=event_count, base_timestamp=base_timestamp)
+        for sequence in range(event_count)
+    ]
+
+
 def network_outage_snmp_trap_log() -> dict[str, Any]:
-    timestamp = int(time.time() * 1000)
-    history_index = timestamp % 100000
-    uptime = 530073760
+    return _network_outage_snmp_trap_log(sequence=0, total_events=1, base_timestamp=int(time.time() * 1000))
+
+
+def _network_outage_snmp_trap_log(*, sequence: int, total_events: int, base_timestamp: int) -> dict[str, Any]:
+    timestamp = base_timestamp + (sequence * 1500)
+    history_index = (timestamp + sequence) % 100000
+    uptime = 530073760 + (sequence * 137)
     facility = "IOSXE"
     message_name = "PLATFORM"
-    severity = "alert"
-    message_text = (
-        "%LINK-2-CHANGED: Interface GigabitEthernet1/0/48, "
-        "changed state to down; uplink to distribution switch unreachable"
-    )
-    tags = (
-        "env:production,source:snmp-traps,category:network,event_type:trigger,severity:alert,"
-        "device_vendor:cisco,device_namespace:dc01,device_hostname:datacenter-user-sw11a,"
-        "device_ip:10.100.1.48,site:dc01,incident_id:demo-network-outage-2026-05-08,"
-        "correlation_key:sterling-hollis-network-outage"
+    reported_state = "down" if sequence % 4 in {0, 1} else "up"
+    severity = "alert" if reported_state == "down" else "warning"
+    is_downstream = sequence % 2 == 1
+    if is_downstream:
+        device_name = NETWORK_DOWNSTREAM_DEVICE
+        device_hostname = NETWORK_DOWNSTREAM_DEVICE_HOSTNAME
+        device_ip = NETWORK_DOWNSTREAM_DEVICE_IP
+        device_role = "downstream_edge_switch"
+        interface = NETWORK_DOWNSTREAM_INTERFACE
+        topology_role = "child"
+        message_text = (
+            f"%LINK-2-CHANGED: Interface {interface}, changed state to {reported_state}; "
+            f"upstream dependency {NETWORK_DEVICE_HOSTNAME} {NETWORK_PARENT_INTERFACE} is unstable"
+        )
+    else:
+        device_name = NETWORK_DEVICE
+        device_hostname = NETWORK_DEVICE_HOSTNAME
+        device_ip = NETWORK_DEVICE_IP
+        device_role = "access_switch"
+        interface = NETWORK_PARENT_INTERFACE
+        topology_role = "parent"
+        message_text = (
+            f"%LINK-2-CHANGED: Interface {interface}, changed state to {reported_state}; "
+            f"downstream device {NETWORK_DOWNSTREAM_DEVICE_HOSTNAME} impacted by uplink instability"
+        )
+
+    dependency_path = f"{NETWORK_DEVICE_HOSTNAME}>{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}"
+    tags = ",".join(
+        [
+            "env:production",
+            "source:snmp-traps",
+            "category:network",
+            "event_type:trigger",
+            f"severity:{severity}",
+            "device_vendor:cisco",
+            f"device_namespace:{NETWORK_SITE}",
+            f"device_hostname:{device_hostname}",
+            f"device_ip:{device_ip}",
+            f"site:{NETWORK_SITE}",
+            f"incident_id:{NETWORK_INCIDENT_ID}",
+            f"correlation_key:{NETWORK_CORRELATION_KEY}",
+            f"topology_role:{topology_role}",
+            f"topology_parent_device:{NETWORK_DEVICE_HOSTNAME}",
+            f"topology_child_device:{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}",
+        ]
     )
     return {
         "message": message_text,
-        "level": "ALERT",
+        "level": severity.upper(),
         "ddsource": "snmp-traps",
         "source": "snmp-traps",
         "service": "network-device-monitoring",
-        "hostname": NETWORK_DEVICE_HOSTNAME,
-        "network_device": NETWORK_DEVICE_IP,
+        "hostname": device_hostname,
+        "network_device": device_ip,
         "status": severity,
-        "device_hostname": NETWORK_DEVICE_HOSTNAME,
-        "device_ip": NETWORK_DEVICE_IP,
+        "device_name": device_name,
+        "device_hostname": device_hostname,
+        "device_ip": device_ip,
         "device_namespace": NETWORK_SITE,
-        "device_role": "access_switch",
+        "device_role": device_role,
         "device_vendor": "cisco",
+        "interface": interface,
+        "interface_state": reported_state,
+        "event_sequence": sequence + 1,
+        "event_count": total_events,
+        "topology_role": topology_role,
+        "topology_parent_device": NETWORK_DEVICE_HOSTNAME,
+        "topology_parent_ip": NETWORK_DEVICE_IP,
+        "topology_parent_interface": NETWORK_PARENT_INTERFACE,
+        "topology_child_device": NETWORK_DOWNSTREAM_DEVICE_HOSTNAME,
+        "topology_child_ip": NETWORK_DOWNSTREAM_DEVICE_IP,
+        "dependency_path": dependency_path,
         "clogHistFacility": facility,
         "clogHistMsgName": message_name,
         "clogHistMsgText": message_text,
@@ -289,17 +366,17 @@ def datadog_logs_intake_url(site: str | None) -> str:
     return f"https://http-intake.logs.{normalized}/api/v2/logs"
 
 
-def send_network_outage_snmp_trap_log() -> dict[str, Any]:
+def send_network_outage_snmp_trap_log(*, event_count: int | None = None) -> dict[str, Any]:
     settings = get_settings()
     if not settings.dd_api_key:
         raise RuntimeError("DD_API_KEY is required to send the network outage SNMP log to Datadog Logs intake.")
 
-    payload = network_outage_snmp_trap_log()
+    payloads = network_outage_snmp_trap_logs(count=event_count)
     url = datadog_logs_intake_url(settings.dd_site)
     try:
         response = httpx.post(
             url,
-            json=[payload],
+            json=payloads,
             headers={
                 "Content-Type": "application/json",
                 "DD-API-KEY": settings.dd_api_key,
@@ -323,12 +400,15 @@ def send_network_outage_snmp_trap_log() -> dict[str, Any]:
             "demo.correlation_key": NETWORK_CORRELATION_KEY,
             "demo.network_device": NETWORK_DEVICE,
             "demo.network_site": NETWORK_SITE,
+            "demo.network_event_count": len(payloads),
         },
     )
     return {
         "success": True,
         "intake_url": url,
-        "payload": payload,
+        "payload": payloads[0],
+        "payloads": payloads,
+        "event_count": len(payloads),
         "datadog_response": datadog_response,
     }
 
@@ -343,6 +423,14 @@ def _correlation_key_for_mode(mode: DemoObservabilityMode) -> str:
     if mode == DemoObservabilityMode.network_outage:
         return NETWORK_CORRELATION_KEY
     return CORRELATION_KEY
+
+
+def _normalize_network_event_count(value: int | float | None) -> int:
+    try:
+        count = int(value if value is not None else 2)
+    except (TypeError, ValueError):
+        count = 2
+    return min(NETWORK_EVENT_COUNT_MAX, max(NETWORK_EVENT_COUNT_MIN, count))
 
 
 def _current_state() -> DemoObservabilityState:

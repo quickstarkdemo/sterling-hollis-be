@@ -20,6 +20,7 @@ class DemoObservabilityUpdateRequest(BaseModel):
     mode: DemoObservabilityMode | None = None
     latency_seconds: float | None = Field(default=None, ge=0, le=60)
     target_store_id: str | None = Field(default=None, max_length=64)
+    network_event_count: int | None = Field(default=None, ge=1, le=25)
 
 
 class DemoObservabilityStateResponse(BaseModel):
@@ -32,13 +33,17 @@ class DemoObservabilityStateResponse(BaseModel):
     network_device: str
     network_site: str
     outage_scope: str
+    network_event_count: int
     snmp_trap_log: dict[str, Any]
+    snmp_trap_logs: list[dict[str, Any]]
 
 
 class DemoObservabilityLogSendResponse(BaseModel):
     success: bool
     intake_url: str
     payload: dict[str, Any]
+    payloads: list[dict[str, Any]]
+    event_count: int
     datadog_response: Any | None = None
 
 

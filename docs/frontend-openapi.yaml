@@ -376,6 +376,7 @@ paths:
                 value:
                   enabled: true
                   mode: network_outage
+                  network_event_count: 2
               latency:
                 summary: Enable latency demo
                 value:
@@ -383,6 +384,7 @@ paths:
                   mode: latency
                   latency_seconds: 8
                   target_store_id: "1001"
+                  network_event_count: 2
       responses:
         "200":
           description: Updated demo observability state.
@@ -396,6 +398,29 @@ paths:
           description: Clerk user is not allowed to control demo toggles.
         "422":
           description: Invalid request shape.
+  /api/demo/observability/network-outage-log:
+    post:
+      tags: [demo]
+      summary: Send Clerk demo network outage SNMP logs
+      description: >
+        Clerk-authenticated demo-panel endpoint that sends the configured
+        SNMP-trap-shaped network outage log events to Datadog Logs HTTP Intake
+        using the backend DD_API_KEY.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Datadog Logs intake accepted the SNMP-shaped demo logs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoObservabilityLogSendResponse"
+        "401":
+          description: Missing or invalid Clerk token.
+        "403":
+          description: Clerk user is not allowed to control demo toggles.
+        "502":
+          description: Datadog Logs intake rejected the payload or DD_API_KEY is missing.
   /api/demo/observability/reset:
     post:
       tags: [demo]
@@ -510,6 +535,7 @@ paths:
                 value:
                   enabled: true
                   mode: network_outage
+                  network_event_count: 2
       responses:
         "200":
           description: Updated demo observability state.
@@ -536,9 +562,9 @@ paths:
       tags: [admin]
       summary: Send demo network outage SNMP log
       description: >
-        Sends the canonical SNMP-trap-shaped network outage log to Datadog Logs
-        HTTP Intake using the backend DD_API_KEY. Call this before enabling
-        network_outage mode.
+        Sends the configured SNMP-trap-shaped network outage log events to
+        Datadog Logs HTTP Intake using the backend DD_API_KEY. Call this before
+        enabling network_outage mode.
       responses:
         "200":
           description: Datadog Logs intake accepted the SNMP-shaped demo log.
@@ -874,6 +900,11 @@ components:
           type: string
           maxLength: 64
           nullable: true
+        network_event_count:
+          type: integer
+          minimum: 1
+          maximum: 25
+          nullable: true
     DemoObservabilityStateResponse:
       type: object
       required:
@@ -885,7 +916,9 @@ components:
         - network_device
         - network_site
         - outage_scope
+        - network_event_count
         - snmp_trap_log
+        - snmp_trap_logs
       properties:
         enabled:
           type: boolean
@@ -906,12 +939,19 @@ components:
           type: string
         outage_scope:
           type: string
+        network_event_count:
+          type: integer
         snmp_trap_log:
           type: object
           additionalProperties: true
+        snmp_trap_logs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
     DemoObservabilityLogSendResponse:
       type: object
-      required: [success, intake_url, payload]
+      required: [success, intake_url, payload, payloads, event_count]
       properties:
         success:
           type: boolean
@@ -920,6 +960,13 @@ components:
         payload:
           type: object
           additionalProperties: true
+        payloads:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        event_count:
+          type: integer
         datadog_response:
           nullable: true
     CategoryListResponse:

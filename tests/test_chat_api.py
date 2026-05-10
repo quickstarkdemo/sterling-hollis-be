@@ -2070,7 +2070,10 @@ def test_chat_demo_observability_error_degrades_without_failing_chat(monkeypatch
 
 def test_demo_observability_network_outage_blocks_chat_but_keeps_recovery_paths(monkeypatch):
     sent_logs = []
-    monkeypatch.setattr("app.routers.admin_synthetic.send_network_outage_snmp_trap_log", lambda: sent_logs.append(True))
+    monkeypatch.setattr(
+        "app.routers.admin_synthetic.send_network_outage_snmp_trap_log",
+        lambda **kwargs: sent_logs.append(kwargs),
+    )
 
     with _chat_client(monkeypatch) as (client, _):
         toggle = client.post(
@@ -2080,6 +2083,7 @@ def test_demo_observability_network_outage_blocks_chat_but_keeps_recovery_paths(
                 "mode": "network_outage",
                 "latency_seconds": 0.0,
                 "target_store_id": "1001",
+                "network_event_count": 3,
             },
         )
         chat_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
@@ -2089,11 +2093,13 @@ def test_demo_observability_network_outage_blocks_chat_but_keeps_recovery_paths(
         restored_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
 
     assert toggle.status_code == 200
-    assert sent_logs == [True]
+    assert sent_logs == [{"event_count": 3}]
     assert toggle.json()["mode"] == "network_outage"
+    assert toggle.json()["network_event_count"] == 3
     assert toggle.json()["incident_id"] == "demo-network-outage-2026-05-08"
     assert toggle.json()["correlation_key"] == "sterling-hollis-network-outage"
     assert toggle.json()["snmp_trap_log"]["ddsource"] == "snmp-traps"
+    assert toggle.json()["snmp_trap_logs"][1]["topology_role"] == "child"
     assert chat_response.status_code == 503
     assert chat_response.headers["retry-after"] == "30"
     assert chat_response.json() == {
@@ -2116,7 +2122,10 @@ def test_demo_observability_network_outage_blocks_chat_but_keeps_recovery_paths(
 def test_clerk_demo_observability_toggle_can_enable_and_reset_network_outage(monkeypatch):
     monkeypatch.setenv("CLERK_DEMO_CUSTOMER_EMAIL", "demo-admin@example.com")
     sent_logs = []
-    monkeypatch.setattr("app.routers.demo_observability.send_network_outage_snmp_trap_log", lambda: sent_logs.append(True))
+    monkeypatch.setattr(
+        "app.routers.demo_observability.send_network_outage_snmp_trap_log",
+        lambda **kwargs: sent_logs.append(kwargs),
+    )
 
     def verify_token(token, settings=None):
         assert token == "demo-token"
@@ -2134,7 +2143,12 @@ def test_clerk_demo_observability_toggle_can_enable_and_reset_network_outage(mon
         toggle = client.post(
             "/api/demo/observability",
             headers=headers,
-            json={"enabled": True, "mode": "network_outage", "target_store_id": "1001"},
+            json={
+                "enabled": True,
+                "mode": "network_outage",
+                "target_store_id": "1001",
+                "network_event_count": 2,
+            },
         )
         chat_response = client.post("/api/chat", json=_chat_payload("do you have a moisturizer under $150"))
         state_response = client.get("/api/demo/observability", headers=headers)
@@ -2143,8 +2157,9 @@ def test_clerk_demo_observability_toggle_can_enable_and_reset_network_outage(mon
 
     assert unauthenticated.status_code == 401
     assert toggle.status_code == 200
-    assert sent_logs == [True]
+    assert sent_logs == [{"event_count": 2}]
     assert toggle.json()["mode"] == "network_outage"
+    assert toggle.json()["snmp_trap_logs"][1]["topology_role"] == "child"
     assert chat_response.status_code == 503
     assert state_response.status_code == 200
     assert state_response.json()["mode"] == "network_outage"

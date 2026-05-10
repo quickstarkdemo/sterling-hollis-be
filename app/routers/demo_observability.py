@@ -3,7 +3,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.config import Settings, get_settings
-from app.schemas import DemoObservabilityMode, DemoObservabilityStateResponse, DemoObservabilityUpdateRequest
+from app.schemas import (
+    DemoObservabilityLogSendResponse,
+    DemoObservabilityMode,
+    DemoObservabilityStateResponse,
+    DemoObservabilityUpdateRequest,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal, require_clerk_principal
 from app.services.demo_observability import (
     get_demo_observability_state,
@@ -55,7 +60,7 @@ def set_clerk_demo_observability_state(
 ):
     if req.mode == DemoObservabilityMode.network_outage and req.enabled is not False:
         try:
-            send_network_outage_snmp_trap_log()
+            send_network_outage_snmp_trap_log(event_count=req.network_event_count)
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     return update_demo_observability_state(req)
@@ -66,3 +71,13 @@ def reset_clerk_demo_observability(
     _: AuthenticatedPrincipal = Depends(require_demo_toggle_principal),
 ):
     return reset_demo_observability_state()
+
+
+@router.post("/network-outage-log", response_model=DemoObservabilityLogSendResponse)
+def send_clerk_demo_network_outage_log(
+    _: AuthenticatedPrincipal = Depends(require_demo_toggle_principal),
+):
+    try:
+        return send_network_outage_snmp_trap_log()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

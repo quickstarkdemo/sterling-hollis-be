@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     demo_observability_mode: Literal["off", "latency", "error", "latency_and_error", "network_outage"] = "off"
     demo_observability_latency_seconds: float = 8.0
     demo_observability_target_store_id: str | None = "1001"
+    demo_observability_network_event_count: int = 2
     demo_observability_clerk_authorized_emails: str = ""
     demo_observability_clerk_authorized_subjects: str = ""
     dd_site: str = "datadoghq.com"

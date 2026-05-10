@@ -1000,6 +1000,10 @@
             ],
             "title": "Datadog Response"
           },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
           "intake_url": {
             "title": "Intake Url",
             "type": "string"
@@ -1009,6 +1013,14 @@
             "title": "Payload",
             "type": "object"
           },
+          "payloads": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Payloads",
+            "type": "array"
+          },
           "success": {
             "title": "Success",
             "type": "boolean"
@@ -1017,7 +1029,9 @@
         "required": [
           "success",
           "intake_url",
-          "payload"
+          "payload",
+          "payloads",
+          "event_count"
         ],
         "title": "DemoObservabilityLogSendResponse",
         "type": "object"
@@ -1058,6 +1072,10 @@
             "title": "Network Device",
             "type": "string"
           },
+          "network_event_count": {
+            "title": "Network Event Count",
+            "type": "integer"
+          },
           "network_site": {
             "title": "Network Site",
             "type": "string"
@@ -1070,6 +1088,14 @@
             "additionalProperties": true,
             "title": "Snmp Trap Log",
             "type": "object"
+          },
+          "snmp_trap_logs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Snmp Trap Logs",
+            "type": "array"
           },
           "target_store_id": {
             "anyOf": [
@@ -1092,7 +1118,9 @@
           "network_device",
           "network_site",
           "outage_scope",
-          "snmp_trap_log"
+          "network_event_count",
+          "snmp_trap_log",
+          "snmp_trap_logs"
         ],
         "title": "DemoObservabilityStateResponse",
         "type": "object"
@@ -1132,6 +1160,19 @@
                 "type": "null"
               }
             ]
+          },
+          "network_event_count": {
+            "anyOf": [
+              {
+                "maximum": 25.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network Event Count"
           },
           "target_store_id": {
             "anyOf": [
@@ -3957,6 +3998,27 @@
           }
         },
         "summary": "Set Clerk Demo Observability State",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/observability/network-outage-log": {
+      "post": {
+        "operationId": "send_clerk_demo_network_outage_log_api_demo_observability_network_outage_log_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoObservabilityLogSendResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Send Clerk Demo Network Outage Log",
         "tags": [
           "demo"
         ]

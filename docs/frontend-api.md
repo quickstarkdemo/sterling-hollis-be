@@ -230,11 +230,29 @@ Response:
   "network_device": "DATACENTER-USER-SW11A",
   "network_site": "dc01",
   "outage_scope": "storefront_api",
+  "network_event_count": 2,
   "snmp_trap_log": {
     "ddsource": "snmp-traps",
     "hostname": "datacenter-user-sw11a",
+    "topology_role": "parent",
     "correlation_key": "sterling-hollis-network-outage"
-  }
+  },
+  "snmp_trap_logs": [
+    {
+      "ddsource": "snmp-traps",
+      "hostname": "datacenter-user-sw11a",
+      "topology_role": "parent",
+      "topology_child_device": "store-fulfillment-edge01",
+      "correlation_key": "sterling-hollis-network-outage"
+    },
+    {
+      "ddsource": "snmp-traps",
+      "hostname": "store-fulfillment-edge01",
+      "topology_role": "child",
+      "topology_parent_device": "datacenter-user-sw11a",
+      "correlation_key": "sterling-hollis-network-outage"
+    }
+  ]
 }
 ```
 
@@ -251,7 +269,8 @@ content-type: application/json
   "enabled": true,
   "mode": "latency",
   "latency_seconds": 8,
-  "target_store_id": "1001"
+  "target_store_id": "1001",
+  "network_event_count": 2
 }
 ```
 
@@ -268,10 +287,20 @@ For a network outage demo, first call:
 POST /admin/demo/observability/network-outage-log
 ```
 
-That endpoint sends the `snmp_trap_log` payload to Datadog Logs HTTP Intake
+Clerk-authenticated demo panels can call the equivalent endpoint:
+
+```http
+POST /api/demo/observability/network-outage-log
+authorization: Bearer <Clerk token>
+```
+
+Those endpoints send the `snmp_trap_logs` payload list to Datadog Logs HTTP Intake
 with the backend `DD_API_KEY`, using the same `http-intake.logs.<site>/api/v2/logs`
-path as the standalone simulator projects. After it succeeds, enable
-`network_outage`. While active, app-facing API paths return
+path as the standalone simulator projects. `network_event_count` controls the
+number of emitted log events, capped at 25. The default of 2 emits one parent
+switch trap and one downstream child trap. Larger counts alternate parent/child
+events and interface down/up states to mimic a flapping network dependency.
+After the log send succeeds, enable `network_outage`. While active, app-facing API paths return
 `503 Service Unavailable` with the same `incident_id` and `correlation_key`;
 `/health`, `/admin/demo/observability/reset`, and
 `/api/demo/observability/reset` remain available so the demo is recoverable

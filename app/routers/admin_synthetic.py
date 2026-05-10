@@ -67,7 +67,7 @@ def demo_observability_state():
 def set_demo_observability_state(req: DemoObservabilityUpdateRequest):
     if req.mode == DemoObservabilityMode.network_outage and req.enabled is not False:
         try:
-            send_network_outage_snmp_trap_log()
+            send_network_outage_snmp_trap_log(event_count=req.network_event_count)
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     return update_demo_observability_state(req)
