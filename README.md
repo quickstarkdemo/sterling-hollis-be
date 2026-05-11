@@ -65,7 +65,7 @@ Optional for vector cloud indexing:
 Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic Instrumentation, and LLM Observability:
 - `DD_TRACE_ENABLED=true`
 - `DD_AGENT_HOST` and `DD_TRACE_AGENT_PORT` for the Datadog Agent reachable from the app container
-- `DD_TRACE_REPORT_HOSTNAME=true`
+- `DD_TRACE_REPORT_HOSTNAME=false`
 - `DD_ENV`, `DD_SERVICE`, and `DD_VERSION`
 - `DD_SITE`, `DD_API_KEY`, and `DD_APP_KEY`
 - `DD_AI_GUARD_ENABLED=true` to enable the inline chat AI Guard check
