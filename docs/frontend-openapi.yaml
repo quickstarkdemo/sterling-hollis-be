@@ -376,7 +376,7 @@ paths:
                 value:
                   enabled: true
                   mode: network_outage
-                  network_event_count: 2
+                  network_event_count: 3
               latency:
                 summary: Enable latency demo
                 value:
@@ -384,7 +384,7 @@ paths:
                   mode: latency
                   latency_seconds: 8
                   target_store_id: "1001"
-                  network_event_count: 2
+                  network_event_count: 3
       responses:
         "200":
           description: Updated demo observability state.
@@ -535,7 +535,7 @@ paths:
                 value:
                   enabled: true
                   mode: network_outage
-                  network_event_count: 2
+                  network_event_count: 3
       responses:
         "200":
           description: Updated demo observability state.

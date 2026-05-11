@@ -31,13 +31,19 @@ NETWORK_DEVICE_IP = "10.100.1.48"
 NETWORK_DOWNSTREAM_DEVICE = "STORE-FULFILLMENT-EDGE01"
 NETWORK_DOWNSTREAM_DEVICE_HOSTNAME = "store-fulfillment-edge01"
 NETWORK_DOWNSTREAM_DEVICE_IP = "10.100.12.21"
+NETWORK_SERVER_DEVICE = "GMTEK5000"
+NETWORK_SERVER_HOSTNAME = "gmtek5000"
+NETWORK_SERVER_IP = "10.100.12.50"
 NETWORK_PARENT_INTERFACE = "GigabitEthernet1/0/48"
 NETWORK_DOWNSTREAM_INTERFACE = "TenGigabitEthernet0/1"
+NETWORK_SERVER_INTERFACE = "bond0"
 NETWORK_SITE = "dc01"
 NETWORK_OUTAGE_SCOPE = "storefront_api"
 NETWORK_AFFECTED_SERVICE = "sterling-hollis-be"
 NETWORK_EVENT_COUNT_MIN = 1
 NETWORK_EVENT_COUNT_MAX = 25
+NETWORK_DEFAULT_EVENT_COUNT = 3
+NETWORK_GMTEK_ERROR_TYPE = "gmtek5000_network_dependency_error"
 APM_SPAN_NAME = "demo.inventory_reconciliation"
 ERROR_MESSAGE = (
     "Supplier feed schema mismatch while reconciling available-to-promise inventory: "
@@ -60,7 +66,7 @@ class DemoObservabilityState:
     network_device: str = NETWORK_DEVICE
     network_site: str = NETWORK_SITE
     outage_scope: str = NETWORK_OUTAGE_SCOPE
-    network_event_count: int = 2
+    network_event_count: int = NETWORK_DEFAULT_EVENT_COUNT
 
     def response(self) -> DemoObservabilityStateResponse:
         snmp_trap_logs = network_outage_snmp_trap_logs(count=self.network_event_count)
@@ -235,6 +241,59 @@ def network_outage_snmp_trap_log() -> dict[str, Any]:
     return _network_outage_snmp_trap_log(sequence=0, total_events=1, base_timestamp=int(time.time() * 1000))
 
 
+def _network_event_device(sequence: int) -> dict[str, str]:
+    event_kind = sequence % NETWORK_DEFAULT_EVENT_COUNT
+    if event_kind == 1:
+        return {
+            "name": NETWORK_DOWNSTREAM_DEVICE,
+            "hostname": NETWORK_DOWNSTREAM_DEVICE_HOSTNAME,
+            "ip": NETWORK_DOWNSTREAM_DEVICE_IP,
+            "role": "downstream_edge_switch",
+            "vendor": "cisco",
+            "interface": NETWORK_DOWNSTREAM_INTERFACE,
+            "topology_role": "child",
+            "parent_hostname": NETWORK_DEVICE_HOSTNAME,
+            "parent_ip": NETWORK_DEVICE_IP,
+            "child_hostname": NETWORK_SERVER_HOSTNAME,
+            "child_ip": NETWORK_SERVER_IP,
+            "dependency_path": f"{NETWORK_DEVICE_HOSTNAME}>{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}",
+            "error_type": "link_state_change",
+        }
+    if event_kind == 2:
+        return {
+            "name": NETWORK_SERVER_DEVICE,
+            "hostname": NETWORK_SERVER_HOSTNAME,
+            "ip": NETWORK_SERVER_IP,
+            "role": "application_server",
+            "vendor": "gmtek",
+            "interface": NETWORK_SERVER_INTERFACE,
+            "topology_role": "dependent_server",
+            "parent_hostname": NETWORK_DOWNSTREAM_DEVICE_HOSTNAME,
+            "parent_ip": NETWORK_DOWNSTREAM_DEVICE_IP,
+            "child_hostname": NETWORK_SERVER_HOSTNAME,
+            "child_ip": NETWORK_SERVER_IP,
+            "dependency_path": (
+                f"{NETWORK_DEVICE_HOSTNAME}>{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}>{NETWORK_SERVER_HOSTNAME}"
+            ),
+            "error_type": NETWORK_GMTEK_ERROR_TYPE,
+        }
+    return {
+        "name": NETWORK_DEVICE,
+        "hostname": NETWORK_DEVICE_HOSTNAME,
+        "ip": NETWORK_DEVICE_IP,
+        "role": "access_switch",
+        "vendor": "cisco",
+        "interface": NETWORK_PARENT_INTERFACE,
+        "topology_role": "parent",
+        "parent_hostname": NETWORK_DEVICE_HOSTNAME,
+        "parent_ip": NETWORK_DEVICE_IP,
+        "child_hostname": NETWORK_DOWNSTREAM_DEVICE_HOSTNAME,
+        "child_ip": NETWORK_DOWNSTREAM_DEVICE_IP,
+        "dependency_path": f"{NETWORK_DEVICE_HOSTNAME}>{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}",
+        "error_type": "link_state_change",
+    }
+
+
 def _network_outage_snmp_trap_log(*, sequence: int, total_events: int, base_timestamp: int) -> dict[str, Any]:
     timestamp = base_timestamp + (sequence * 1500)
     history_index = (timestamp + sequence) % 100000
@@ -243,31 +302,41 @@ def _network_outage_snmp_trap_log(*, sequence: int, total_events: int, base_time
     message_name = "PLATFORM"
     reported_state = "down" if sequence % 4 in {0, 1} else "up"
     severity = "alert" if reported_state == "down" else "warning"
-    is_downstream = sequence % 2 == 1
-    if is_downstream:
-        device_name = NETWORK_DOWNSTREAM_DEVICE
-        device_hostname = NETWORK_DOWNSTREAM_DEVICE_HOSTNAME
-        device_ip = NETWORK_DOWNSTREAM_DEVICE_IP
-        device_role = "downstream_edge_switch"
-        interface = NETWORK_DOWNSTREAM_INTERFACE
-        topology_role = "child"
+    device = _network_event_device(sequence)
+    device_name = device["name"]
+    device_hostname = device["hostname"]
+    device_ip = device["ip"]
+    device_role = device["role"]
+    device_vendor = device["vendor"]
+    interface = device["interface"]
+    topology_role = device["topology_role"]
+    direct_parent_hostname = device["parent_hostname"]
+    direct_parent_ip = device["parent_ip"]
+    topology_child_device = device["child_hostname"]
+    topology_child_ip = device["child_ip"]
+    error_type = device["error_type"]
+    dependency_path = device["dependency_path"]
+
+    if topology_role == "dependent_server":
+        reported_state = "logical_error"
+        severity = "error"
+        facility = "GMTEK"
+        message_name = "NETWORK_DEPENDENCY"
+        message_text = (
+            f"GMTEK5000-3-NETWORK_DEPENDENCY: {NETWORK_SERVER_HOSTNAME} checkout and product "
+            f"lookup services cannot reach default gateway through {NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}; "
+            "application sessions are timing out while the upstream switch path flaps"
+        )
+    elif topology_role == "child":
         message_text = (
             f"%LINK-2-CHANGED: Interface {interface}, changed state to {reported_state}; "
-            f"upstream dependency {NETWORK_DEVICE_HOSTNAME} {NETWORK_PARENT_INTERFACE} is unstable"
+            f"upstream dependency {direct_parent_hostname} is unstable"
         )
     else:
-        device_name = NETWORK_DEVICE
-        device_hostname = NETWORK_DEVICE_HOSTNAME
-        device_ip = NETWORK_DEVICE_IP
-        device_role = "access_switch"
-        interface = NETWORK_PARENT_INTERFACE
-        topology_role = "parent"
         message_text = (
             f"%LINK-2-CHANGED: Interface {interface}, changed state to {reported_state}; "
             f"downstream device {NETWORK_DOWNSTREAM_DEVICE_HOSTNAME} impacted by uplink instability"
         )
-
-    dependency_path = f"{NETWORK_DEVICE_HOSTNAME}>{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}"
     tags = ",".join(
         [
             "env:production",
@@ -275,7 +344,7 @@ def _network_outage_snmp_trap_log(*, sequence: int, total_events: int, base_time
             "category:network",
             "event_type:trigger",
             f"severity:{severity}",
-            "device_vendor:cisco",
+            f"device_vendor:{device_vendor}",
             f"device_namespace:{NETWORK_SITE}",
             f"device_hostname:{device_hostname}",
             f"device_ip:{device_ip}",
@@ -283,8 +352,11 @@ def _network_outage_snmp_trap_log(*, sequence: int, total_events: int, base_time
             f"incident_id:{NETWORK_INCIDENT_ID}",
             f"correlation_key:{NETWORK_CORRELATION_KEY}",
             f"topology_role:{topology_role}",
-            f"topology_parent_device:{NETWORK_DEVICE_HOSTNAME}",
-            f"topology_child_device:{NETWORK_DOWNSTREAM_DEVICE_HOSTNAME}",
+            f"topology_parent_device:{direct_parent_hostname}",
+            f"topology_root_device:{NETWORK_DEVICE_HOSTNAME}",
+            f"topology_child_device:{topology_child_device}",
+            f"dependency_path:{dependency_path.replace('>', '_to_')}",
+            f"error_type:{error_type}",
         ]
     )
     return {
@@ -301,17 +373,20 @@ def _network_outage_snmp_trap_log(*, sequence: int, total_events: int, base_time
         "device_ip": device_ip,
         "device_namespace": NETWORK_SITE,
         "device_role": device_role,
-        "device_vendor": "cisco",
+        "device_vendor": device_vendor,
         "interface": interface,
         "interface_state": reported_state,
         "event_sequence": sequence + 1,
         "event_count": total_events,
+        "error_type": error_type,
         "topology_role": topology_role,
-        "topology_parent_device": NETWORK_DEVICE_HOSTNAME,
-        "topology_parent_ip": NETWORK_DEVICE_IP,
+        "topology_parent_device": direct_parent_hostname,
+        "topology_parent_ip": direct_parent_ip,
         "topology_parent_interface": NETWORK_PARENT_INTERFACE,
-        "topology_child_device": NETWORK_DOWNSTREAM_DEVICE_HOSTNAME,
-        "topology_child_ip": NETWORK_DOWNSTREAM_DEVICE_IP,
+        "topology_root_device": NETWORK_DEVICE_HOSTNAME,
+        "topology_root_ip": NETWORK_DEVICE_IP,
+        "topology_child_device": topology_child_device,
+        "topology_child_ip": topology_child_ip,
         "dependency_path": dependency_path,
         "clogHistFacility": facility,
         "clogHistMsgName": message_name,
@@ -427,9 +502,9 @@ def _correlation_key_for_mode(mode: DemoObservabilityMode) -> str:
 
 def _normalize_network_event_count(value: int | float | None) -> int:
     try:
-        count = int(value if value is not None else 2)
+        count = int(value if value is not None else NETWORK_DEFAULT_EVENT_COUNT)
     except (TypeError, ValueError):
-        count = 2
+        count = NETWORK_DEFAULT_EVENT_COUNT
     return min(NETWORK_EVENT_COUNT_MAX, max(NETWORK_EVENT_COUNT_MIN, count))
 
 

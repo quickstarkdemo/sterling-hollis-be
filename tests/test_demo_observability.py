@@ -63,7 +63,14 @@ def test_network_outage_state_uses_network_correlation_payload():
     assert state.snmp_trap_logs[1]["topology_role"] == "child"
     assert state.snmp_trap_logs[1]["hostname"] == "store-fulfillment-edge01"
     assert state.snmp_trap_logs[1]["topology_parent_device"] == "datacenter-user-sw11a"
+    assert state.snmp_trap_logs[2]["topology_role"] == "dependent_server"
+    assert state.snmp_trap_logs[2]["hostname"] == "gmtek5000"
+    assert state.snmp_trap_logs[2]["status"] == "error"
+    assert state.snmp_trap_logs[2]["error_type"] == "gmtek5000_network_dependency_error"
+    assert state.snmp_trap_logs[2]["topology_parent_device"] == "store-fulfillment-edge01"
+    assert state.snmp_trap_logs[2]["dependency_path"] == "datacenter-user-sw11a>store-fulfillment-edge01>gmtek5000"
     assert state.snmp_trap_logs[1].keys() == state.snmp_trap_log.keys()
+    assert state.snmp_trap_logs[2].keys() == state.snmp_trap_log.keys()
     assert "affected_service" not in state.snmp_trap_log
     assert "outage_scope" not in state.snmp_trap_log
     assert "service:sterling-hollis-be" not in state.snmp_trap_log["ddtags"]
@@ -122,7 +129,14 @@ def test_network_outage_snmp_trap_log_posts_to_datadog_logs_intake(monkeypatch):
     assert captured["json"][1]["hostname"] == "store-fulfillment-edge01"
     assert captured["json"][1]["topology_role"] == "child"
     assert captured["json"][1]["topology_parent_device"] == "datacenter-user-sw11a"
+    assert captured["json"][2]["hostname"] == "gmtek5000"
+    assert captured["json"][2]["status"] == "error"
+    assert captured["json"][2]["topology_role"] == "dependent_server"
+    assert captured["json"][2]["topology_parent_device"] == "store-fulfillment-edge01"
+    assert captured["json"][2]["error_type"] == "gmtek5000_network_dependency_error"
+    assert "error_type:gmtek5000_network_dependency_error" in captured["json"][2]["ddtags"]
     assert captured["json"][1].keys() == captured["json"][0].keys()
+    assert captured["json"][2].keys() == captured["json"][0].keys()
     assert captured["json"][0]["clogHistMsgName"] == "PLATFORM"
     assert captured["json"][0]["clogHistFacility"] == "IOSXE"
     assert captured["json"][0]["snmpTrapName"] == "clogMessageGenerated"

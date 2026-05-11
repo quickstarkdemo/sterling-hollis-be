@@ -230,7 +230,7 @@ Response:
   "network_device": "DATACENTER-USER-SW11A",
   "network_site": "dc01",
   "outage_scope": "storefront_api",
-  "network_event_count": 2,
+  "network_event_count": 3,
   "snmp_trap_log": {
     "ddsource": "snmp-traps",
     "hostname": "datacenter-user-sw11a",
@@ -251,6 +251,15 @@ Response:
       "topology_role": "child",
       "topology_parent_device": "datacenter-user-sw11a",
       "correlation_key": "sterling-hollis-network-outage"
+    },
+    {
+      "ddsource": "snmp-traps",
+      "hostname": "gmtek5000",
+      "status": "error",
+      "topology_role": "dependent_server",
+      "topology_parent_device": "store-fulfillment-edge01",
+      "error_type": "gmtek5000_network_dependency_error",
+      "correlation_key": "sterling-hollis-network-outage"
     }
   ]
 }
@@ -270,7 +279,7 @@ content-type: application/json
   "mode": "latency",
   "latency_seconds": 8,
   "target_store_id": "1001",
-  "network_event_count": 2
+  "network_event_count": 3
 }
 ```
 
@@ -297,9 +306,10 @@ authorization: Bearer <Clerk token>
 Those endpoints send the `snmp_trap_logs` payload list to Datadog Logs HTTP Intake
 with the backend `DD_API_KEY`, using the same `http-intake.logs.<site>/api/v2/logs`
 path as the standalone simulator projects. `network_event_count` controls the
-number of emitted log events, capped at 25. The default of 2 emits one parent
-switch trap and one downstream child trap. Larger counts alternate parent/child
-events and interface down/up states to mimic a flapping network dependency.
+number of emitted log events, capped at 25. The default of 3 emits one parent
+switch trap, one downstream child trap, and one `gmtek5000` dependent-server
+logical error. Larger counts rotate through those three nodes and interface
+down/up states to mimic a flapping network dependency.
 After the log send succeeds, enable `network_outage`. While active, app-facing API paths return
 `503 Service Unavailable` with the same `incident_id` and `correlation_key`;
 `/health`, `/admin/demo/observability/reset`, and
