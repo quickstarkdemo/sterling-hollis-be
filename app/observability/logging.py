@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -9,17 +11,7 @@ DEFAULT_SERVICE = "sterling-hollis-be"
 DEFAULT_ENV = "dev"
 DEFAULT_VERSION = "dev"
 
-DATADOG_LOG_FORMAT = (
-    "%(asctime)s %(levelname)s %(name)s "
-    "[dd.service=%(dd.service)s dd.env=%(dd.env)s dd.version=%(dd.version)s "
-    "dd.trace_id=%(dd.trace_id)s dd.span_id=%(dd.span_id)s]: %(message)s"
-)
-
-DATADOG_ACCESS_LOG_FORMAT = (
-    "%(asctime)s %(levelname)s %(name)s "
-    "[dd.service=%(dd.service)s dd.env=%(dd.env)s dd.version=%(dd.version)s "
-    'dd.trace_id=%(dd.trace_id)s dd.span_id=%(dd.span_id)s]: %(client_addr)s - "%(request_line)s" %(status_code)s'
-)
+_STANDARD_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
 
 def _fallback_correlation_context() -> dict[str, str]:
@@ -57,8 +49,11 @@ def _set_missing_datadog_fields(record: logging.LogRecord, context: dict[str, st
 
 
 def _set_missing_access_fields(record: logging.LogRecord) -> None:
+    if record.name != "uvicorn.access":
+        return
+
     access_args = record.args if isinstance(record.args, tuple) else ()
-    if record.name == "uvicorn.access" and len(access_args) >= 5:
+    if len(access_args) >= 5:
         client_addr, method, path, http_version, status_code = access_args[:5]
         request_line = f"{method} {path} HTTP/{http_version}"
     else:
@@ -77,18 +72,55 @@ def _set_missing_access_fields(record: logging.LogRecord) -> None:
             record.__dict__[key] = value
 
 
-class DatadogLogFormatter(logging.Formatter):
-    """Formatter that guarantees Datadog correlation fields exist on every record."""
+class DatadogJSONFormatter(logging.Formatter):
+    """JSON formatter that emits Datadog log correlation fields as attributes."""
 
     def format(self, record: logging.LogRecord) -> str:
         _set_missing_datadog_fields(record, _datadog_correlation_context())
         _set_missing_access_fields(record)
-        return super().format(record)
+
+        payload: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds").replace(
+                "+00:00", "Z"
+            ),
+            "level": record.levelname,
+            "status": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+            "dd.service": record.__dict__.get("dd.service"),
+            "dd.env": record.__dict__.get("dd.env"),
+            "dd.version": record.__dict__.get("dd.version"),
+            "dd.trace_id": record.__dict__.get("dd.trace_id"),
+            "dd.span_id": record.__dict__.get("dd.span_id"),
+            "module": record.module,
+            "pathname": record.pathname,
+            "lineno": record.lineno,
+            "process": record.process,
+            "thread": record.thread,
+        }
+
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        elif record.exc_text:
+            payload["exc_info"] = record.exc_text
+
+        if record.stack_info:
+            payload["stack_info"] = self.formatStack(record.stack_info)
+
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOG_RECORD_FIELDS or key in payload:
+                continue
+            payload[key] = value
+
+        return json.dumps(payload, default=str, separators=(",", ":"))
+
+
+DatadogLogFormatter = DatadogJSONFormatter
 
 
 def configure_datadog_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler()
-    handler.setFormatter(DatadogLogFormatter(DATADOG_LOG_FORMAT))
+    handler.setFormatter(DatadogJSONFormatter())
 
     root_logger = logging.getLogger()
     root_logger.handlers = [handler]

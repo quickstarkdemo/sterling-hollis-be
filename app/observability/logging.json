@@ -3,12 +3,10 @@
   "disable_existing_loggers": false,
   "formatters": {
     "default": {
-      "()": "app.observability.logging.DatadogLogFormatter",
-      "format": "%(asctime)s %(levelname)s %(name)s [dd.service=%(dd.service)s dd.env=%(dd.env)s dd.version=%(dd.version)s dd.trace_id=%(dd.trace_id)s dd.span_id=%(dd.span_id)s]: %(message)s"
+      "()": "app.observability.logging.DatadogJSONFormatter"
     },
     "access": {
-      "()": "app.observability.logging.DatadogLogFormatter",
-      "format": "%(asctime)s %(levelname)s %(name)s [dd.service=%(dd.service)s dd.env=%(dd.env)s dd.version=%(dd.version)s dd.trace_id=%(dd.trace_id)s dd.span_id=%(dd.span_id)s]: %(client_addr)s - \"%(request_line)s\" %(status_code)s"
+      "()": "app.observability.logging.DatadogJSONFormatter"
     }
   },
   "handlers": {
