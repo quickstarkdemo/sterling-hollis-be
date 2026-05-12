@@ -89,7 +89,10 @@ Optional for Twilio-assisted customer communication:
 - `TWILIO_API_KEY_SECRET`
 - `TWILIO_SENDER_NUMBER`
 - `TWILIO_TEST_TO_NUMBER`
-- `INDEX_WORKER_POLL_SECONDS` if you want a non-default worker poll interval
+- `INDEX_WORKER_POLL_SECONDS` if you want a non-default worker base poll interval
+- `INDEX_WORKER_MAX_IDLE_SECONDS` to cap adaptive idle backoff
+- `INDEX_WORKER_STALE_RECOVERY_SECONDS` to control how often the worker scans for stale image jobs
+- `IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS` to throttle stale-job recovery checks from admin job reads
 
 Optional for Clerk storefront authentication:
 - `CLERK_ISSUER`
@@ -148,6 +151,9 @@ Twilio:
 - `TWILIO_SENDER_NUMBER`
 - `TWILIO_TEST_TO_NUMBER`
 - `INDEX_WORKER_POLL_SECONDS`
+- `INDEX_WORKER_MAX_IDLE_SECONDS`
+- `INDEX_WORKER_STALE_RECOVERY_SECONDS`
+- `IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS`
 
 Deployment:
 - `DOCKERHUB_USER`
@@ -514,6 +520,12 @@ indexing and image generation jobs. Keep it running with `OPENAI_API_KEY`
 configured. In production, the API and worker both mount
 `deploy_products_data:/app/data`, so worker-generated files under
 `/app/data/product-images` are served immediately from `/product-images/...`.
+When no jobs are queued, the worker uses adaptive idle backoff: it starts at
+`INDEX_WORKER_POLL_SECONDS`, doubles empty-poll sleeps up to
+`INDEX_WORKER_MAX_IDLE_SECONDS`, and resets after any job is processed. Stale
+image generation jobs are recovered on a separate periodic cadence controlled
+by `INDEX_WORKER_STALE_RECOVERY_SECONDS`; admin job reads use the bounded
+`IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS` cadence.
 The volume intentionally keeps the original Compose-created Docker volume name
 so previously generated image files remain attached after the backend container
 rename. The deploy workflow also copies any files from temporary rename-era

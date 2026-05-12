@@ -17,6 +17,8 @@ from app.schemas import ImageGenerationJobRequest
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.image_jobs import (
     enqueue_image_generation_job,
+    list_image_generation_jobs,
+    maybe_recover_stale_image_generation_jobs,
     process_next_image_generation_job,
     recover_stale_image_generation_jobs,
 )
@@ -260,3 +262,49 @@ def test_stale_running_image_generation_job_is_failed(monkeypatch):
         assert "No heartbeat since" in (refreshed.error_message or "")
     finally:
         engine.dispose()
+
+
+def test_process_next_image_generation_job_does_not_recover_stale_jobs_on_empty_poll(monkeypatch):
+    engine, TestingSessionLocal = _session_factory()
+    calls = 0
+
+    def recover(_db):
+        nonlocal calls
+        calls += 1
+        return 0
+
+    monkeypatch.setattr("app.services.image_jobs.recover_stale_image_generation_jobs", recover)
+    try:
+        result = process_next_image_generation_job(TestingSessionLocal)
+    finally:
+        engine.dispose()
+
+    assert result is None
+    assert calls == 0
+
+
+def test_admin_stale_recovery_is_throttled(monkeypatch):
+    import app.services.image_jobs as image_jobs
+
+    engine, TestingSessionLocal = _session_factory()
+    calls = 0
+
+    def recover(_db):
+        nonlocal calls
+        calls += 1
+        return 0
+
+    monkeypatch.setattr(image_jobs, "_last_admin_stale_recovery_at", None)
+    monkeypatch.setattr(image_jobs, "recover_stale_image_generation_jobs", recover)
+    monkeypatch.setattr(image_jobs.time, "monotonic", lambda: 180.0)
+    try:
+        with TestingSessionLocal() as session:
+            maybe_recover_stale_image_generation_jobs(session, min_interval_seconds=60, now_monotonic=100.0)
+            maybe_recover_stale_image_generation_jobs(session, min_interval_seconds=60, now_monotonic=120.0)
+            maybe_recover_stale_image_generation_jobs(session, min_interval_seconds=60, now_monotonic=161.0)
+            list_image_generation_jobs(session)
+    finally:
+        monkeypatch.setattr(image_jobs, "_last_admin_stale_recovery_at", None)
+        engine.dispose()
+
+    assert calls == 2

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ from app.services.product_images import (
 )
 
 logger = logging.getLogger(__name__)
+_last_admin_stale_recovery_at: float | None = None
 
 
 def _to_response(job: ImageGenerationJob) -> ImageGenerationJobResponse:
@@ -121,7 +123,7 @@ def enqueue_image_generation_job(db: Session, req: ImageGenerationJobRequest) ->
 
 
 def get_image_generation_job(db: Session, job_id: str) -> ImageGenerationJobResponse:
-    recover_stale_image_generation_jobs(db)
+    maybe_recover_stale_image_generation_jobs(db)
     job = db.get(ImageGenerationJob, job_id)
     if not job:
         raise ValueError(f"Image generation job {job_id} was not found.")
@@ -134,7 +136,7 @@ def list_image_generation_jobs(
     status: IndexJobStatus | None = None,
     limit: int = 20,
 ) -> ImageGenerationJobListResponse:
-    recover_stale_image_generation_jobs(db)
+    maybe_recover_stale_image_generation_jobs(db)
     query = select(ImageGenerationJob)
     if status:
         query = query.where(ImageGenerationJob.status == status.value)
@@ -188,8 +190,39 @@ def recover_stale_image_generation_jobs(
     return recovered
 
 
+def maybe_recover_stale_image_generation_jobs(
+    db: Session,
+    *,
+    min_interval_seconds: float | None = None,
+    now_monotonic: float | None = None,
+) -> int:
+    global _last_admin_stale_recovery_at
+
+    settings = get_settings()
+    min_interval = (
+        float(min_interval_seconds)
+        if min_interval_seconds is not None
+        else float(settings.image_job_admin_stale_recovery_seconds)
+    )
+    current_monotonic = now_monotonic if now_monotonic is not None else time.monotonic()
+    if (
+        min_interval > 0
+        and _last_admin_stale_recovery_at is not None
+        and current_monotonic - _last_admin_stale_recovery_at < min_interval
+    ):
+        return 0
+
+    recovered = recover_stale_image_generation_jobs(db)
+    _last_admin_stale_recovery_at = current_monotonic
+    if recovered:
+        logger.warning(
+            "recovered stale image generation jobs during admin read",
+            extra={"job_type": "image_generation", "job_status": "failed", "stale_recovered_count": recovered},
+        )
+    return recovered
+
+
 def claim_next_image_generation_job(db: Session) -> ImageGenerationJob | None:
-    recover_stale_image_generation_jobs(db)
     candidate_id = db.scalar(
         select(ImageGenerationJob.id)
         .where(ImageGenerationJob.status == IndexJobStatus.queued.value)
@@ -213,7 +246,13 @@ def claim_next_image_generation_job(db: Session) -> ImageGenerationJob | None:
     db.commit()
     if not updated.rowcount:
         return None
-    return db.get(ImageGenerationJob, candidate_id)
+    job = db.get(ImageGenerationJob, candidate_id)
+    if job:
+        logger.info(
+            "claimed image generation job",
+            extra={"job_type": "image_generation", "job_id": job.id, "job_status": job.status},
+        )
+    return job
 
 
 def _sample_result(result: ProductImageGenerationResult) -> dict:
@@ -327,6 +366,10 @@ def process_image_generation_job(SessionLocal: sessionmaker, job_id: str) -> Ima
             job.finished_at = datetime.now(timezone.utc)
             db.add(job)
             db.commit()
+            logger.info(
+                "image generation job completed",
+                extra={"job_type": "image_generation", "job_id": job.id, "job_status": job.status},
+            )
             return _to_response(job)
         except Exception as exc:
             job = db.get(ImageGenerationJob, job_id)
@@ -337,7 +380,11 @@ def process_image_generation_job(SessionLocal: sessionmaker, job_id: str) -> Ima
             job.finished_at = datetime.now(timezone.utc)
             db.add(job)
             db.commit()
-            logger.exception("image generation job %s failed", job_id)
+            logger.exception(
+                "image generation job %s failed",
+                job_id,
+                extra={"job_type": "image_generation", "job_id": job_id, "job_status": job.status},
+            )
             return _to_response(job)
 
 

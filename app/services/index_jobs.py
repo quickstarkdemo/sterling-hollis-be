@@ -98,7 +98,10 @@ def claim_next_index_job(db: Session) -> IndexJob | None:
     db.commit()
     if not updated.rowcount:
         return None
-    return db.get(IndexJob, candidate_id)
+    job = db.get(IndexJob, candidate_id)
+    if job:
+        logger.info("claimed index job", extra={"job_type": "index", "job_id": job.id, "job_status": job.status})
+    return job
 
 
 def process_index_job(SessionLocal: sessionmaker, job_id: str) -> IndexJobResponse:
@@ -131,6 +134,7 @@ def process_index_job(SessionLocal: sessionmaker, job_id: str) -> IndexJobRespon
             db.add(run)
             db.add(job)
             db.commit()
+            logger.info("index job completed", extra={"job_type": "index", "job_id": job.id, "job_status": job.status})
             return _to_response(job)
         except Exception as exc:
             job.status = IndexJobStatus.failed.value
@@ -138,7 +142,11 @@ def process_index_job(SessionLocal: sessionmaker, job_id: str) -> IndexJobRespon
             job.finished_at = datetime.now(timezone.utc)
             db.add(job)
             db.commit()
-            logger.exception("index job %s failed", job.id)
+            logger.exception(
+                "index job %s failed",
+                job.id,
+                extra={"job_type": "index", "job_id": job.id, "job_status": job.status},
+            )
             return _to_response(job)
 
 

@@ -86,6 +86,9 @@ class Settings(BaseSettings):
 
     vector_top_k: int = 50
     index_worker_poll_seconds: float = 2.0
+    index_worker_max_idle_seconds: float = 30.0
+    index_worker_stale_recovery_seconds: float = 60.0
+    image_job_admin_stale_recovery_seconds: float = 60.0
 
     enable_mcp_adapter: bool = True
     enable_openai_apps_ui: bool = True
