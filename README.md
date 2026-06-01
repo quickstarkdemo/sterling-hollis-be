@@ -1,226 +1,133 @@
 # sterling-hollis-be
 
-Synthetic fashion data platform with:
-- Postgres as source of truth
-- Pinecone as vector retrieval layer
-- FastAPI for generation, ingestion, indexing, and recommendation APIs
-- MCP-first operator workflows for store associates and merchandisers
-- ChatGPT Apps SDK-ready widget rendering for high-level operator actions
+FastAPI backend for the Sterling Hollis synthetic fashion retail platform.
 
-## What this implements
+The service owns the Postgres data model, synthetic retail data generation,
+catalog normalization, recommendation APIs, storefront chat, MCP operator tools,
+ChatGPT Apps SDK widgets, and the Datadog demo/observability harness.
 
-- Live store seeding from configurable source endpoints
-- Deterministic synthetic generators for:
-  - `stores`, `customers`, `products`, `orders`, `order_items`, `store_daily_metrics`, `analyst_store_category_v1`
-- CSV run artifacts under `data/runs/<run_id>/`
-- Admin load and finalize endpoints
-- Product embedding/index endpoint (OpenAI + Pinecone when configured, deterministic fallback otherwise)
-- Durable async product indexing jobs backed by Postgres and a lightweight worker service
-- Customer and merchandising recommendation endpoints
-- Human-first MCP tools for store resolution, customer resolution, associate recommendations, and merch workflows
-- Customer search by name, email, and synthetic phone number
-- Unified customer lookup tool that resolves exact identifiers or returns candidate lists for ambiguous searches
-- Dedicated demo customer seeded with a stable real-number lookup target for demos
-- Draft-then-send Twilio SMS support using a global test destination number
-- Editable SMS drafts, history, and Twilio smoke-test support
-- Apps SDK render tool for a minimal customer-search workspace
-- External ChatGPT UI bundle served from `/ui-assets` instead of inline widget HTML
-- Archived legacy workspace assets under `app/static/chatgpt-ui/archive/legacy-workspaces`
-- Automatic fast-path recommendation mode for structured associate requests
-- OpenAI-commerce-style product feed endpoint
+## What This Implements
 
-## Project structure
+- Postgres source of truth managed by Alembic.
+- Live or cached store-source ingestion.
+- Deterministic synthetic generators for stores, customers, products, orders,
+  order items, store daily metrics, supplier product offers, and analyst story
+  samples.
+- Normalized catalog APIs for retail frontends.
+- OpenAI and Pinecone product indexing when configured, with deterministic local
+  vector fallback when provider keys are absent.
+- Durable background jobs for product indexing and product image generation.
+- Product image analysis and image-based recommendations.
+- Storefront chat with optional Clerk authentication for account-specific flows.
+- MCP tools for admin, associate, merchandising, inventory, and executive
+  workflows.
+- Apps SDK widget resources served from `/ui-assets`.
+- Draft-first SMS and email workflows backed by persisted communication rows.
+- Datadog tracing, LLM Observability, AI Guard, runtime metrics, and demo fault
+  toggles.
 
-- `app/models.py`: SQLAlchemy schema
-- `app/services/store_source.py`: live store ingestion + normalization
-- `app/services/synthetic_generator.py`: deterministic synthetic dataset generation
-- `app/services/loader.py`: CSV ingestion into Postgres
-- `app/services/indexing.py`: embedding generation + Pinecone upsert
-- `app/services/recommendations.py`: customer + merchandising recommenders
-- `app/routers/admin_synthetic.py`: admin APIs
-- `app/routers/recommendations.py`: recommendation/feed APIs
+## Project Structure
 
-## Quick start
+- `app/main.py`: FastAPI app factory, middleware, mounts, and health route.
+- `app/config.py`: environment-backed runtime settings.
+- `app/models.py`: SQLAlchemy schema.
+- `app/routers/`: REST API routes.
+- `app/services/`: generation, loading, indexing, recommendations, chat, image,
+  observability, and widget services.
+- `app/mcp_server.py`: MCP tools and widget resources.
+- `alembic/versions/`: database migrations.
+- `scripts/`: local operations, OpenAPI export, deployment, image generation,
+  and smoke-test helpers.
+- `deploy/`: production Docker Compose runtime assets.
+- `docs/`: active integration and operations documentation.
 
-### 1) Configure env
+## Documentation
+
+Active docs live under `docs/`:
+
+- [docs/README.md](docs/README.md): documentation index.
+- [docs/frontend-api.md](docs/frontend-api.md): retail frontend integration
+  guide.
+- [docs/frontend-openapi.yaml](docs/frontend-openapi.yaml): curated frontend
+  OpenAPI contract.
+- [docs/openapi.json](docs/openapi.json): generated FastAPI schema export.
+- [docs/chat-flow.excalidraw](docs/chat-flow.excalidraw): storefront chat flow
+  diagram.
+- [docs/datadog-reference-tables/README.md](docs/datadog-reference-tables/README.md):
+  Datadog reference table import notes.
+
+External OpenAI and MCP reference pages are intentionally not vendored in this
+repo. Use the official upstream docs for those platforms so local docs do not
+drift.
+
+## Quick Start
+
+### 1. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Set at minimum:
-- `DATABASE_URL` or the `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER` / `PGPASSWORD` group
-- `STORE_SOURCE_INDEX_URL`
-- `STORE_SOURCE_DETAIL_URL_TEMPLATE`
-- `MCP_ALLOWED_HOSTS` for any non-local MCP hostname
-- `MCP_ALLOWED_ORIGINS` if your MCP clients send `Origin`
+For local Docker Compose, the bundled Postgres service and default local
+settings are enough to boot the app. For direct local runs or production, set
+`DATABASE_URL` or the `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and
+`PGPASSWORD` group.
 
-Optional for vector cloud indexing:
-- `OPENAI_API_KEY`
-- `PINECONE_API_KEY`
-- `PINECONE_INDEX_NAME` if you want a non-default index name
-- `PINECONE_CLOUD` / `PINECONE_REGION` if your Pinecone project is not `aws/us-east-1`
-- `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` if you intentionally change embedding models
+Useful optional groups:
 
-Optional for Datadog APM, profiling, runtime metrics, DBM propagation, Dynamic Instrumentation, and LLM Observability:
-- `DD_TRACE_ENABLED=true`
-- `DD_AGENT_HOST` and `DD_TRACE_AGENT_PORT` for the Datadog Agent reachable from the app container
-- `DD_TRACE_REPORT_HOSTNAME=false`
-- `DD_ENV`, `DD_SERVICE`, and `DD_VERSION`
-- `DD_SITE`, `DD_API_KEY`, and `DD_APP_KEY`
-- `DD_AI_GUARD_ENABLED=true` to enable the inline chat AI Guard check
-- `DD_AI_GUARD_ENDPOINT` only when overriding the SDK-derived endpoint
-- `DD_AI_GUARD_DEMO_FALLBACK_ENABLED=true` only for local/offline demos
-- `DD_PROFILING_ENABLED=true`
-- `DD_RUNTIME_METRICS_ENABLED=true`
-- `DD_RUNTIME_METRICS_RUNTIME_ID_ENABLED=true`
-- `DD_DOGSTATSD_PORT=8125`
-- `DD_LLMOBS_ENABLED=true`
-- `STRANDS_OTEL_ENABLED=false` to keep Strands-native OTEL traces disabled unless debugging agent event loops
-- `DD_LLMOBS_AGENTLESS_ENABLED=false` when using the Datadog Agent
-- `DD_LLMOBS_ML_APP=sterling-hollis-be`
-- `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`
-- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf`
-- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://otlp.datadoghq.com/v1/traces`
+- Store source: `STORE_SOURCE_INDEX_URL`,
+  `STORE_SOURCE_DETAIL_URL_TEMPLATE`, `STORE_SOURCE_CACHE_PATH`.
+- Vector and recommendation providers: `OPENAI_API_KEY`, `PINECONE_API_KEY`,
+  `PINECONE_INDEX_NAME`, `PINECONE_CATALOG_NAMESPACE`, `EMBEDDING_MODEL`,
+  `EMBEDDING_DIMENSION`.
+- Storefront/chat: `CHAT_ORCHESTRATION_MODE`, `CHAT_ORCHESTRATION_MODEL`,
+  `CHAT_ORCHESTRATION_MIN_CONFIDENCE`.
+- Public frontend/MCP deployment: `PUBLIC_BASE_URL`, `MCP_ALLOWED_HOSTS`,
+  `MCP_ALLOWED_ORIGINS`, `CORS_ALLOWED_ORIGINS`,
+  `ENABLE_MCP_ADAPTER`, `ENABLE_OPENAI_APPS_UI`.
+- Clerk auth: `CLERK_ISSUER`, `CLERK_JWKS_URL`,
+  `CLERK_AUTHORIZED_PARTIES`, `CLERK_DEMO_CUSTOMER_ID`,
+  `CLERK_DEMO_CUSTOMER_EMAIL`.
+- Product images and image recommendations: `IMAGE_ANALYSIS_MODEL`,
+  `IMAGE_ANALYSIS_DETAIL`, `IMAGE_UPLOAD_MAX_BYTES`, and the
+  `PRODUCT_IMAGE_*` settings.
+- Customer communication: Twilio `TWILIO_*` values for SMS and
+  `SES_REGION`, `SES_FROM_EMAIL`, `AMAZON_KEY_ID`, `AMAZON_KEY_SECRET` for
+  email delivery.
+- Datadog/OTEL: `DD_*`, `OTEL_*`, and `STRANDS_OTEL_ENABLED`.
+- Feature gates: `EXEC_AUTO_OPTIMIZE_ENABLED`, `STRATEGY_PACKET_ENABLED`,
+  `MERCH_STRATEGY_CONTEXT_ENABLED`, `ASSOCIATE_PRIORITY_TAGS_ENABLED`.
+- Deployment: `DOCKERHUB_USER`, `DOCKERHUB_TOKEN`, `DOCKERHUB_IMAGE`,
+  `API_PORT`.
 
-Optional for Twilio-assisted customer communication:
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_API_KEY_SID`
-- `TWILIO_API_KEY_SECRET`
-- `TWILIO_SENDER_NUMBER`
-- `TWILIO_TEST_TO_NUMBER`
-- `INDEX_WORKER_POLL_SECONDS` if you want a non-default worker base poll interval
-- `INDEX_WORKER_MAX_IDLE_SECONDS` to cap adaptive idle backoff
-- `INDEX_WORKER_STALE_RECOVERY_SECONDS` to control how often the worker scans for stale image jobs
-- `IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS` to throttle stale-job recovery checks from admin job reads
+`.env.example` is the detailed local reference. Keep secret values out of the
+repo.
 
-Optional for Clerk storefront authentication:
-- `CLERK_ISSUER`
-- `CLERK_JWKS_URL`
-- `CLERK_AUTHORIZED_PARTIES`, for example `http://localhost,http://127.0.0.1,https://sterling-hollis-fe.quickstark.com,https://sterling-hollis.quickstark.com`
+Important environment notes:
 
-Deployment-related values:
-- `DOCKERHUB_USER`
-- `DOCKERHUB_TOKEN`
-- `DOCKERHUB_IMAGE` such as `quickstark/sterling-hollis-be`
-- `API_PORT` if you do not want to expose the API on `8000`
-- `PUBLIC_BASE_URL` for remote MCP/App widget deployment, for example `https://sterling-hollis-be.quickstark.com`
+- `DOCKERHUB_IMAGE` must be lowercase and include a Docker Hub namespace, for
+  example `quickstark/sterling-hollis-be`.
+- `.env` and `deploy/runtime.env` are local/runtime secret files. They must not
+  be committed, shared, or logged.
+- The default embedding pairing is `text-embedding-3-small` with dimension
+  `1536`. If you change model dimensions, use a new Pinecone index or recreate
+  the old one.
+- `PUBLIC_BASE_URL` must match the externally reachable scheme and host when
+  using remote MCP clients or Apps SDK widgets.
+- FastMCP validates request hosts. Add remote MCP hostnames to
+  `MCP_ALLOWED_HOSTS`; add matching origins to `MCP_ALLOWED_ORIGINS` when the
+  client sends `Origin`.
+- `CLERK_AUTHORIZED_PARTIES` should include every frontend origin allowed to
+  send Clerk session tokens.
+- `DD_AGENT_HOST` must resolve from inside containers. The production compose
+  file maps `host.docker.internal` to the Docker host.
+- Runtime metrics require `DD_RUNTIME_METRICS_ENABLED=true` and DogStatsD UDP
+  ingestion on the Datadog Agent.
+- Use separate provider keys per environment. Rotate OpenAI, Pinecone, Datadog,
+  Twilio, Docker Hub, Clerk, Postgres, SES, and AWS credentials after exposure
+  or personnel changes.
 
-### Environment reference
-
-Runtime / database:
-- `DATABASE_URL`
-- `PGHOST`
-- `PGPORT`
-- `PGDATABASE`
-- `PGUSER`
-- `PGPASSWORD`
-- `DATA_DIR`
-- `STORE_SOURCE_INDEX_URL`
-- `STORE_SOURCE_DETAIL_URL_TEMPLATE`
-- `STORE_SOURCE_CACHE_PATH`
-- `MCP_ALLOWED_HOSTS`
-- `MCP_ALLOWED_ORIGINS`
-- `PUBLIC_BASE_URL`
-- `CLERK_ISSUER`
-- `CLERK_JWKS_URL`
-- `CLERK_AUTHORIZED_PARTIES`
-
-Vector / recommendation:
-- `OPENAI_API_KEY`
-- `PINECONE_API_KEY`
-- `PINECONE_INDEX_NAME`
-- `PINECONE_CLOUD`
-- `PINECONE_REGION`
-- `EMBEDDING_MODEL`
-- `EMBEDDING_DIMENSION`
-
-Demo observability harness:
-- `DEMO_OBSERVABILITY_ENABLED`
-- `DEMO_OBSERVABILITY_MODE`
-- `DEMO_OBSERVABILITY_LATENCY_SECONDS`
-- `DEMO_OBSERVABILITY_TARGET_STORE_ID`
-- `DEMO_OBSERVABILITY_NETWORK_EVENT_COUNT`
-- `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS`
-- `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS`
-
-Twilio:
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_API_KEY_SID`
-- `TWILIO_API_KEY_SECRET`
-- `TWILIO_SENDER_NUMBER`
-- `TWILIO_TEST_TO_NUMBER`
-- `INDEX_WORKER_POLL_SECONDS`
-- `INDEX_WORKER_MAX_IDLE_SECONDS`
-- `INDEX_WORKER_STALE_RECOVERY_SECONDS`
-- `IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS`
-
-Deployment:
-- `DOCKERHUB_USER`
-- `DOCKERHUB_TOKEN`
-- `DOCKERHUB_IMAGE`
-- `API_PORT`
-
-Datadog:
-- `DD_TRACE_ENABLED`
-- `DD_AGENT_HOST`
-- `DD_TRACE_AGENT_PORT`
-- `DD_TRACE_AGENT_URL`
-- `DD_TRACE_REPORT_HOSTNAME`
-- `DD_ENV`
-- `DD_SERVICE`
-- `DD_VERSION`
-- `DD_MAIN_PACKAGE`
-- `DD_GIT_REPOSITORY_URL`
-- `DD_GIT_COMMIT_SHA`
-- `DD_SITE`
-- `DD_API_KEY`
-- `DD_APP_KEY`
-- `DD_AI_GUARD_ENABLED`
-- `DD_AI_GUARD_ENDPOINT`
-- `DD_AI_GUARD_DEMO_FALLBACK_ENABLED`
-- `DD_PROFILING_ENABLED`
-- `DD_PROFILING_TIMELINE_ENABLED`
-- `DD_RUNTIME_METRICS_ENABLED`
-- `DD_RUNTIME_METRICS_RUNTIME_ID_ENABLED`
-- `DD_LLMOBS_ENABLED`
-- `STRANDS_OTEL_ENABLED`
-- `DD_LLMOBS_AGENTLESS_ENABLED`
-- `DD_LLMOBS_ML_APP`
-- `DD_LOGS_INJECTION`
-- `DD_DATA_STREAMS_ENABLED`
-- `DD_DBM_PROPAGATION_MODE`
-- `DD_DYNAMIC_INSTRUMENTATION_ENABLED`
-- `DD_REMOTE_CONFIGURATION_ENABLED`
-- `DD_CODE_ORIGIN_FOR_SPANS_ENABLED`
-- `DD_EXCEPTION_REPLAY_ENABLED`
-- `DD_SYMBOL_DATABASE_UPLOAD_ENABLED`
-- `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED`
-- `DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED`
-- `DD_DOGSTATSD_DISABLE`
-- `DD_DOGSTATSD_PORT`
-- `OTEL_SERVICE_NAME`
-- `OTEL_SEMCONV_STABILITY_OPT_IN`
-- `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`
-- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
-- `OTEL_EXPORTER_OTLP_TRACES_HEADERS`
-
-Notes:
-- `DOCKERHUB_IMAGE` must be lowercase and include the Docker Hub namespace, for example `quickstark/sterling-hollis-be`, not just `sterling-hollis-be`.
-- Production can run with only the `PG*` values. The app and entrypoint derive `DATABASE_URL` from them automatically.
-- The committed repo does not include a default live store-source URL. Configure the store source locally through env or rely on a cached snapshot file.
-- FastMCP enforces host validation on MCP requests. For any remote MCP deployment, add the public hostname to `MCP_ALLOWED_HOSTS`. If your client sends `Origin`, add the matching origin to `MCP_ALLOWED_ORIGINS`.
-- `PUBLIC_BASE_URL` should match the externally reachable scheme and host when using remote MCP clients or Apps SDK widgets.
-- `CLERK_AUTHORIZED_PARTIES` should list the frontend origins allowed to send Clerk session tokens. Keep local origins and add every production storefront origin, including the deployed FE host.
-- Datadog instrumentation is provided by `ddtrace` and starts through `ddtrace-run` when Datadog env is present. For deployment, add the Datadog values above as GitHub Actions secrets. The workflow writes them into `deploy/runtime.env`, and the Docker build embeds `DD_GIT_REPOSITORY_URL` and `DD_GIT_COMMIT_SHA` for source-code linking.
-- The demo observability harness is off by default. To create a Datadog demo incident, enable it with `POST /admin/demo/observability`; latency mode adds a slow `demo.inventory_reconciliation` APM span inside `/api/chat`, while error modes mark the reconciliation step degraded without failing chat. Clerk-authenticated frontends can use `/api/demo/observability` when the caller is allowlisted by `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS`, `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS`, or `CLERK_DEMO_CUSTOMER_EMAIL`. `network_outage` mode returns controlled 503s from app-facing API paths while leaving `/health` and demo reset controls available; call `POST /admin/demo/observability/network-outage-log` or `POST /api/demo/observability/network-outage-log` to send the `snmp_trap_logs` payloads to Datadog Logs HTTP Intake with the backend `DD_API_KEY`. `DEMO_OBSERVABILITY_NETWORK_EVENT_COUNT` controls how many parent switch, downstream edge, and `gmtek5000` dependent-server events are emitted. Use `POST /admin/demo/observability/trigger-error` only when you intentionally need an unhandled `DemoSupplierFeedSchemaError` 500 for Error Management.
-- Datadog LLM Observability uses `DD_LLMOBS_ENABLED=true` for the canonical app-level chat traces. Keep `STRANDS_OTEL_ENABLED=false` by default to avoid duplicate Strands-native OTEL traces; set it to `true` only when debugging Strands event-loop telemetry. When Strands OTEL is enabled and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is unset, the app derives `dd-api-key=<DD_API_KEY>,dd-otlp-source=llmobs` at startup.
-- MCP client LLM Observability uses Datadog's automatic MCP Python SDK instrumentation. Run `make mcp-smoke` with `DD_LLMOBS_ENABLED=true`, `DD_LLMOBS_AGENTLESS_ENABLED=true`, and `DD_API_KEY` to emit MCP client spans.
-- `DD_AGENT_HOST` must resolve from inside the Docker containers. The production compose file maps `host.docker.internal` to the Docker host, so that is the default deployment value when a host-level Datadog Agent is listening for APM traffic.
-- Runtime metrics require `DD_RUNTIME_METRICS_ENABLED=true` in the app container and DogStatsD UDP ingestion on the Agent. For host-level Agents receiving metrics from Docker containers, ensure the Agent accepts non-local DogStatsD traffic on UDP `8125`.
-- Keep `DD_TRACE_OBFUSCATION_QUERY_EXEC_ENABLED=true` unless you intentionally want SQL query values to appear in trace metadata.
-
-### 2) Run with Docker Compose
+### 2. Run Locally With Docker Compose
 
 ```bash
 docker compose up --build
@@ -228,83 +135,38 @@ docker compose up --build
 
 API: `http://localhost:8000`
 
-Compose now starts the API in migration-first mode:
-- wait for Postgres
-- run `alembic upgrade head`
-- start FastAPI
-- start a separate `index-worker` service that polls durable indexing jobs from Postgres
+Compose starts:
 
-The local development compose file includes a bundled Postgres container and sets `UVICORN_RELOAD=true`. The production deployment path does not bundle Postgres and runs Uvicorn without reload.
+- `postgres`
+- `api`
+- `index-worker`
 
-### 2a) Understand vector modes
+The API waits for Postgres, runs `alembic upgrade head`, serves FastAPI, mounts
+`/mcp` when `ENABLE_MCP_ADAPTER=true`, and mounts `/ui-assets` when
+`ENABLE_OPENAI_APPS_UI=true`. The worker polls durable indexing and product
+image jobs from Postgres.
 
-This project has four vector operating modes:
-
-- `cloud_full`: `OPENAI_API_KEY` and `PINECONE_API_KEY` are both configured. Product vectors are generated by OpenAI and stored in Pinecone. Customer recommendations can use `hybrid_vector_rules`.
-- `openai_only`: OpenAI embeddings are available, but Pinecone is not configured. Embeddings can be generated, but retrieval stays local and recommendations do not use Pinecone.
-- `pinecone_with_fallback_embeddings`: Pinecone is configured without OpenAI. This stores deterministic fallback vectors in Pinecone. It is operationally valid, but not a useful semantic retrieval setup.
-- `local_fallback`: neither provider is configured. Deterministic local vectors are used and recommendations fall back to SQL/rules behavior when no Pinecone retrieval is available.
-
-You can inspect the current runtime mode with:
+### 3. Generate, Load, and Index Data
 
 ```bash
-curl http://localhost:8000/admin/system/vector-status | jq
-```
-
-If you want a live provider check, use:
-
-```bash
-curl 'http://localhost:8000/admin/system/vector-status?probe=true' | jq
-```
-
-`probe=true` performs real provider calls. The OpenAI probe generates one small embedding request, so it has a small usage cost.
-
-### 3) Generate -> load -> index
-
-```bash
-# Generate synthetic CSV assets
 curl -X POST http://localhost:8000/admin/synthetic/generate \
   -H 'content-type: application/json' \
   -d '{"seed":20260313}'
-
-# Load generated entities into Postgres
-curl -X POST http://localhost:8000/admin/synthetic/load \
-  -H 'content-type: application/json' \
-  -d '{"run_id":"<RUN_ID>","entities":["stores","customers","products","orders","order_items","store_daily_metrics"]}'
-
-# Index products synchronously (legacy; may take long enough to hit MCP/client timeouts)
-curl -X POST http://localhost:8000/admin/synthetic/index-products \
-  -H 'content-type: application/json' \
-  -d '{"run_id":"<RUN_ID>","batch_size":128}'
-
-# Run report
-curl http://localhost:8000/admin/synthetic/runs/<RUN_ID>/report
 ```
-
-Each generated run now also includes `analyst_store_category_v1.csv`, a 30-row
-store+category analyst-mock dataset designed for Google Sheets/ChatGPT
-comparison workflows (`current 90d` vs `prior 90d`) with a moderate aligned vs
-contrarian recommendation mix.
-
-You can also generate a standalone sample file without running the API:
 
 ```bash
-python3 scripts/generate_analyst_story_sample.py --output /tmp/analyst_store_category_v1_sample.csv
+curl -X POST http://localhost:8000/admin/synthetic/load \
+  -H 'content-type: application/json' \
+  -d '{"run_id":"<RUN_ID>","entities":["stores","customers","products","orders","order_items","store_daily_metrics","supplier_product_offers"]}'
 ```
 
-For MCP/operator flows, prefer the durable async indexing path:
+For API clients and MCP/operator flows, prefer the durable async indexing path:
 
 1. `fashion_start_index_products`
 2. `fashion_get_index_job`
 3. `fashion_get_run_report`
 
-This avoids client-side timeouts while the worker continues processing in the background.
-
-### 3a) If you add OpenAI/Pinecone keys after a run already exists
-
-You must re-index products for the existing run. Earlier runs may already have `local_only` embeddings recorded from fallback mode, and those need to be replaced with real OpenAI vectors and Pinecone upserts.
-
-Manual API path:
+The legacy synchronous endpoint is still available:
 
 ```bash
 curl -X POST http://localhost:8000/admin/synthetic/index-products \
@@ -312,65 +174,64 @@ curl -X POST http://localhost:8000/admin/synthetic/index-products \
   -d '{"run_id":"<RUN_ID>","batch_size":128}'
 ```
 
-One-shot Make target:
+Run reports are available at:
+
+```bash
+curl http://localhost:8000/admin/synthetic/runs/<RUN_ID>/report
+```
+
+Each generated run also includes `analyst_store_category_v1.csv`, a 30-row
+store/category analyst sample for spreadsheet and ChatGPT comparison workflows.
+To create a standalone sample without the API:
+
+```bash
+python3 scripts/generate_analyst_story_sample.py --output /tmp/analyst_store_category_v1_sample.csv
+```
+
+If OpenAI or Pinecone keys are added after a run already exists, re-index the
+run so fallback embeddings are replaced with provider-backed vectors:
 
 ```bash
 make reindex-latest
 ```
 
-That target:
-- waits for API health
-- finds the most recent loaded/indexed synthetic run
-- re-runs product indexing
-- prints the indexing summary and embedding coverage report
+## Vector Modes
 
-Important constraint:
-- `EMBEDDING_DIMENSION` must match the Pinecone index dimension.
-- The default pairing is `text-embedding-3-small` with dimension `1536`.
-- If you change embedding models to a different dimension, use a new `PINECONE_INDEX_NAME` or recreate the old index.
-
-### Postgres and Pinecone
-
-Postgres:
-- Postgres is the system of record.
-- The schema is managed by Alembic.
-- Startup runs `alembic upgrade head`, so an empty database is created automatically on first boot.
-- The initial schema migration lives in [alembic/versions/f790a40c397b_initial_schema.py](alembic/versions/f790a40c397b_initial_schema.py).
-
-Key tables:
-- `synthetic_runs`
-- `stores`
-- `customers`
-- `products`
-- `orders`
-- `order_items`
-- `product_embeddings`
-- `catalog_product_embeddings`
-- `store_daily_metrics`
-- `synthetic_validation_failures`
-- `customer_communications`
-- `ui_sessions`
-- `twilio_smoke_tests`
-- `index_jobs`
-
-If you want SQL instead of running Alembic directly:
+Inspect the active vector mode:
 
 ```bash
-. .venv/bin/activate
-alembic upgrade head --sql > schema.sql
+curl http://localhost:8000/admin/system/vector-status | jq
 ```
 
-Pinecone:
-- Pinecone is a hosted service, not a container in this repo.
-- The app talks to Pinecone through [app/services/pinecone_service.py](app/services/pinecone_service.py).
-- The Pinecone index is created on demand by the code when product indexing runs.
-- Product indexing writes both store-scoped `product:*` vectors and global
-  `catalog:*` vectors in `PINECONE_CATALOG_NAMESPACE` for store-independent
-  visual search.
-- Rebuilding Postgres from scratch requires reloading data and re-running product indexing so Postgres rows and Pinecone vectors are aligned.
+Run a live provider probe:
 
-## API highlights
+```bash
+curl 'http://localhost:8000/admin/system/vector-status?probe=true' | jq
+```
 
+`probe=true` performs real provider calls. The OpenAI probe makes one small
+embedding request.
+
+Modes:
+
+- `cloud_full`: OpenAI and Pinecone are both configured.
+- `openai_only`: embeddings can be generated, but retrieval remains local.
+- `pinecone_with_fallback_embeddings`: Pinecone stores deterministic fallback
+  vectors because OpenAI is absent.
+- `local_fallback`: neither provider is configured; deterministic local vectors
+  and SQL/rules behavior are used.
+
+Product indexing writes store-scoped `product:*` vectors and global `catalog:*`
+vectors under `PINECONE_CATALOG_NAMESPACE`.
+
+## API Highlights
+
+Frontend APIs:
+
+- `GET /api/catalog`
+- `GET /api/catalog/categories`
+- `GET /api/catalog/products`
+- `GET /api/stores/{store_id}/categories`
 - `GET /api/categories`
 - `GET /api/categories/{category}/products`
 - `GET /api/products`
@@ -380,53 +241,92 @@ Pinecone:
 - `POST /api/recommendations/products`
 - `POST /api/image-analysis`
 - `POST /api/recommendations/image`
+- `POST /api/chat`
+- `GET/POST /api/demo/observability`
+- `POST /api/demo/observability/reset`
+- `POST /api/demo/observability/network-outage-log`
+
+Operator/admin APIs:
+
+- `GET /health`
 - `POST /admin/synthetic/generate`
 - `POST /admin/synthetic/load`
 - `POST /admin/synthetic/index-products`
-- `GET /admin/system/vector-status`
 - `GET /admin/synthetic/runs/{run_id}/report`
+- `GET /admin/system/vector-status`
+- `POST /admin/product-images/generate`
+- `GET /admin/product-images/jobs/{job_id}`
+- `GET /admin/product-images/jobs`
+- `GET/POST /admin/demo/observability`
+- `POST /admin/demo/observability/reset`
+- `POST /admin/demo/observability/network-outage-log`
+- `POST /admin/demo/observability/trigger-error`
 - `POST /admin/seed/load/{entity}?run_id=<RUN_ID>`
 - `POST /admin/seed/run/{seed_run_id}/finalize?status=loaded`
+
+Compatibility APIs:
+
 - `POST /recommendations/customer`
 - `POST /recommendations/merchandising`
-- `GET /feeds/products/openai?store_id=<ID>&limit=2000` deprecated compatibility export
+- `GET /feeds/products/openai?store_id=<ID>&limit=2000`
 - `POST /mcp` and related Streamable HTTP MCP traffic mounted at `/mcp`
 
-The `/api/*` catalog endpoints are the primary retail frontend contract. They expose
-category metadata, product listing/search/detail, related products, and product
-recommendations without requiring OpenAI or Pinecone. Product responses split stable
-catalog fields from store-scoped inventory fields and are backed by normalized
-`catalog_products`, `product_variants`, and `store_inventory` tables. Legacy
-`products` rows remain for MCP/operator compatibility during the transition.
+The `/api/*` catalog endpoints are the primary retail frontend contract. Product
+responses separate stable catalog fields from store-scoped inventory fields and
+are backed by normalized `catalog_products`, `product_variants`, and
+`store_inventory` tables. Legacy `products` rows remain for MCP/operator
+compatibility.
 
-Set `ENABLE_MCP_ADAPTER=false` to run the backend without mounting `/mcp`. Set
-`ENABLE_OPENAI_APPS_UI=false` to disable `/ui-assets`, ChatGPT sandbox CORS, and
-widget session endpoints.
-
-### Frontend API spec
-
-Frontend-facing API documentation lives in:
-
-- `docs/frontend-api.md` for the retail frontend integration guide.
-- `docs/frontend-openapi.yaml` for the curated frontend OpenAPI contract.
-
-The running FastAPI service also exposes its canonical generated schema at
-`/openapi.json`. To export that generated schema into the repo:
-
-```bash
-.venv/bin/python scripts/export_openapi.py
-```
-
-or:
+Export the generated FastAPI schema:
 
 ```bash
 make openapi
 ```
 
-### Consumer image recommendations
+Use [docs/frontend-api.md](docs/frontend-api.md) and
+[docs/frontend-openapi.yaml](docs/frontend-openapi.yaml) for the curated retail
+frontend contract.
 
-Retail frontends can upload a consumer inspiration image without storing the raw
-file in this service:
+## Access Posture
+
+The app currently separates routes by intended deployment boundary. Treat this
+as the operational contract when exposing the service:
+
+| Surface | Intended callers | Access posture |
+| --- | --- | --- |
+| `/health` | Load balancers, operators | Public or internal health check. |
+| `/api/catalog`, `/api/categories`, `/api/products`, `/api/search/products`, `/api/recommendations/products`, `/api/image-analysis`, `/api/recommendations/image` | Retail frontend | Public shopper API. Provider-backed calls may incur OpenAI/Pinecone cost. |
+| `/api/chat` | Retail frontend | Anonymous for public catalog/service questions; Clerk bearer token required for account, order, or personal recommendation requests. |
+| `/api/demo/observability/*` | Demo/admin panels | Clerk bearer token plus allowlist via demo auth env vars. |
+| `/admin/*` | Operators/admin automation | Not a public shopper API. Keep private, or protect with a reverse proxy, VPN, Cloudflare Access, or another explicit admin identity layer. |
+| `/recommendations/*` and `/feeds/products/openai` | Legacy/operator integrations | Compatibility surface. Do not expose as the primary public frontend contract unless wrapped by the same controls as the caller. |
+| `/mcp` | Local MCP clients or trusted remote connector | Local-only by default. Remote exposure requires an explicit identity and tool-permission boundary before ChatGPT or other clients can connect. |
+| `/ui-assets/*` | Apps SDK widget host | Static widget assets. Pair with the `/mcp` access model and `PUBLIC_BASE_URL`/CSP settings. |
+
+`MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGINS` are host/origin validation
+controls, not user authorization. They do not decide who may invoke tools.
+
+## Storefront Chat
+
+`POST /api/chat` is the stable frontend chat contract. Authentication is
+optional:
+
+- Anonymous shoppers can ask product, catalog, related-product, store contact,
+  and general customer-service questions.
+- Account, order-status, personal-size, personal-style, purchase-history, and
+  personalized recommendation requests require a valid `Authorization: Bearer
+  <Clerk token>` header.
+- The frontend must not send `customer_id`; the backend derives customer
+  identity from the signed-in token and linked customer record.
+
+Deterministic routing is the default. Set `CHAT_ORCHESTRATION_MODE` to
+`strands_product` only when OpenAI-backed Strands chat orchestration should be
+used.
+
+## Product Images
+
+Retail frontends can upload inspiration images without storing the raw file in
+this service:
 
 ```bash
 curl -X POST http://localhost:8000/api/recommendations/image \
@@ -434,69 +334,19 @@ curl -X POST http://localhost:8000/api/recommendations/image \
   -F "top_k=8"
 ```
 
-The API validates JPEG, PNG, or WebP uploads in memory, sends the image to
-OpenAI for structured visual attribute extraction, discards the raw bytes, and
-returns catalog-card recommendations. `POST /api/image-analysis` exposes the
-analysis step alone for frontends that want to preview or reuse extracted cues.
+The backend validates JPEG, PNG, or WebP uploads in memory, extracts structured
+visual cues with OpenAI when configured, discards the raw bytes, and returns
+catalog-card recommendations. `POST /api/image-analysis` exposes just the
+analysis step.
 
-Visual recommendations query the global catalog vector namespace first. Re-run
-product indexing after deploying this version so existing catalog rows have
-`catalog:*` vectors:
-
-```bash
-make reindex-latest
-```
-
-### Product image generation
-
-Product variants have an `image_link` and `image_set`. Synthetic legacy products
-still contain placeholder `fashion.example` URLs, and the normalization backfill
-copies usable image metadata onto `product_variants`.
-
-To generate real product images with OpenAI and update `product_variants.image_link`
-and `product_variants.image_set`:
+Generate product image galleries from existing variant metadata:
 
 ```bash
 . .venv/bin/activate
 python scripts/generate_product_images.py --category womens_apparel --limit 10
 ```
 
-The script builds prompts from product title, description, brand, category, color,
-material, gender, and season. For each display variant it writes one thumbnail plus
-multiple full-size detail images, stores the primary URL in
-`product_variants.image_link`, and stores the full gallery in
-`product_variants.image_set`. `--store-id` is optional and means "variants stocked
-by this store"; it does not create store-specific product images.
-
-The files are written to `PRODUCT_IMAGE_OUTPUT_DIR` (`data/product-images` by
-default), public URLs use `PRODUCT_IMAGE_URL_PATH` (`/product-images` by default),
-and the FastAPI app serves that directory from the same path.
-
-Changing `PUBLIC_BASE_URL` only affects newly generated image URLs. To rewrite
-previously stored image URLs after a hostname change, run:
-
-```bash
-python scripts/rewrite_product_image_urls.py --dry-run
-python scripts/rewrite_product_image_urls.py
-```
-
-The rewrite updates stored product image URLs under `PRODUCT_IMAGE_URL_PATH` from
-the old `https://products-api.quickstark.com` base to the current
-`PUBLIC_BASE_URL`.
-
-For deployed public URLs to work, run generation inside the deployed API container
-or copy generated files into the deployed `/app/data/product-images` volume. Running
-the script on a laptop can update DB URLs while leaving the actual image files only
-on the laptop filesystem.
-
-Useful dry-run example:
-
-```bash
-python scripts/generate_product_images.py --category womens_apparel --limit 3 --dry-run
-```
-
-For frontend-triggered or large batch generation, enqueue a background job instead
-of waiting on a synchronous request:
+For frontend-triggered or large batches, enqueue a job:
 
 ```bash
 curl -X POST http://localhost:8000/admin/product-images/generate \
@@ -504,47 +354,14 @@ curl -X POST http://localhost:8000/admin/product-images/generate \
   -d '{"category":"womens_apparel","limit":25,"detail_count":3}'
 ```
 
-API jobs default to `missing_images_only=true`, so broad category/all-catalog jobs
-pick variants that still have placeholder or empty image URLs. Set
-`overwrite=true` to regenerate existing galleries.
-
-Poll the job until `status` is `succeeded` or `failed`:
+Poll jobs:
 
 ```bash
 curl http://localhost:8000/admin/product-images/jobs/imgjob_...
 curl http://localhost:8000/admin/product-images/jobs?limit=10
 ```
 
-The existing `index-worker` service now acts as the background worker for both
-indexing and image generation jobs. Keep it running with `OPENAI_API_KEY`
-configured. In production, the API and worker both mount
-`deploy_products_data:/app/data`, so worker-generated files under
-`/app/data/product-images` are served immediately from `/product-images/...`.
-When no jobs are queued, the worker uses adaptive idle backoff: it starts at
-`INDEX_WORKER_POLL_SECONDS`, doubles empty-poll sleeps up to
-`INDEX_WORKER_MAX_IDLE_SECONDS`, and resets after any job is processed. Stale
-image generation jobs are recovered on a separate periodic cadence controlled
-by `INDEX_WORKER_STALE_RECOVERY_SECONDS`; admin job reads use the bounded
-`IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS` cadence.
-The volume intentionally keeps the original Compose-created Docker volume name
-so previously generated image files remain attached after the backend container
-rename. The deploy workflow also copies any files from temporary rename-era
-volumes into `deploy_products_data` before recreating the stack.
-
-To audit whether the deployed container has all files referenced by the database:
-
-```bash
-python scripts/audit_product_image_files.py --image-dir /app/data/product-images
-```
-
-If the audit reports missing files, recover them by copying the original generated
-files into the deployed `/app/data/product-images` volume. Regeneration is not
-required when the files still exist on another Docker volume, host directory, or
-backup.
-
-To generate across the catalog by category, use the API orchestration script. It
-fetches `GET /api/categories`, enqueues one category batch at a time, polls each
-job, and repeats a category until the API returns `attempted: 0`:
+Generate across the catalog by category:
 
 ```bash
 python scripts/generate_category_images.py \
@@ -553,320 +370,131 @@ python scripts/generate_category_images.py \
   --detail-count 3
 ```
 
-Preview the category plan without enqueueing jobs:
+Audit deployed image files against database URLs:
 
 ```bash
-python scripts/generate_category_images.py \
-  --base-url https://sterling-hollis-be.quickstark.com \
-  --plan-only
+python scripts/audit_product_image_files.py --image-dir /app/data/product-images
 ```
 
-Optional image settings:
-- `PRODUCT_IMAGE_MODEL` default `gpt-image-2`
-- `PRODUCT_IMAGE_SIZE` default `1024x1024`
-- `PRODUCT_IMAGE_QUALITY` default `medium`
-- `PRODUCT_IMAGE_OUTPUT_FORMAT` default `jpeg`
-- `PRODUCT_IMAGE_DETAIL_COUNT` default `3`
-- `PRODUCT_IMAGE_THUMBNAIL_SIZE` default `320`
-
-## MCP highlights
-
-Low-level/admin MCP tools:
-- `fashion_generate_synthetic`
-- `fashion_load_synthetic`
-- `fashion_start_index_products`
-- `fashion_get_index_job`
-- `fashion_list_index_jobs`
-- `fashion_get_run_report`
-
-Operator/customer tools:
-- `fashion_lookup_customer`
-- `fashion_find_customers`
-- `fashion_open_customer_workspace`
-- `fashion_resolve_customer`
-- `fashion_resolve_store`
-- `fashion_store_associate_recommend`
-- `fashion_prepare_customer_sms`
-- `fashion_update_customer_sms_draft`
-- `fashion_send_customer_sms`
-- `fashion_prepare_customer_email_draft`
-- `fashion_update_customer_email_draft`
-- `fashion_get_customer_email_draft`
-- `fashion_send_customer_email_draft`
-- `fashion_customer_message_history`
-- `fashion_twilio_smoke_test`
-
-Render tools:
-- `fashion_render_customer_search_workspace`
-- `fashion_render_merch_workspace`
-- `fashion_render_exec_workspace`
-
-### Customer lookup behavior
-
-Use `fashion_lookup_customer` when the query may be ambiguous.
-
-- exact `email`, `customer_id`, or full `phone_e164` resolves directly
-- partial email, name fragments, and phone last-4 return ranked candidates
-
-Use `fashion_resolve_customer` only when you already have an exact identifier and want strict resolution.
-
-### Async indexing behavior
-
-`fashion_index_products` still exists as a legacy synchronous tool, but operator clients may time out before it returns on larger runs.
-
-Preferred pattern:
-1. `fashion_start_index_products(run_id=...)`
-2. poll `fashion_get_index_job(job_id=...)`
-3. confirm final state with `fashion_get_run_report(run_id=...)`
-
-The `index-worker` service executes these jobs independently of the MCP request lifecycle, so client timeouts do not cancel indexing.
-
-## MCP Endpoint
-
-The application now exposes a Streamable HTTP MCP server on the same host and port as the REST API:
+Rewrite stored image URLs after a public hostname change:
 
 ```bash
+python scripts/rewrite_product_image_urls.py --dry-run
+python scripts/rewrite_product_image_urls.py
+```
+
+The API and worker share the same product-image volume in production, so
+worker-generated files under `/app/data/product-images` are served immediately
+from `/product-images/...`.
+
+## MCP and Apps SDK Widgets
+
+MCP endpoint:
+
+```text
 http://localhost:8000/mcp
 ```
 
-This MCP endpoint is intended to be:
-- locally testable with an MCP client or MCP Inspector
-- remotely exposable later through Cloudflare for ChatGPT Developer Mode
-- transport-compatible with modern MCP clients
-
-### MCP tools
-
-Low-level/admin tools:
-- `fashion_vector_status`
-- `fashion_latest_run`
-- `fashion_generate_synthetic`
-- `fashion_load_synthetic`
-- `fashion_index_products`
-- `fashion_get_run_report`
-- `fashion_customer_recommendations`
-- `fashion_merchandising_recommendations`
-- `fashion_get_product_feed`
-
-Human-first operator tools:
-- `fashion_resolve_store`
-- `fashion_resolve_customer`
-- `fashion_find_customers`
-- `fashion_open_customer_workspace`
-- `fashion_store_associate_recommend`
-- `fashion_prepare_customer_sms`
-- `fashion_update_customer_sms_draft`
-- `fashion_send_customer_sms`
-- `fashion_prepare_customer_email_draft`
-- `fashion_update_customer_email_draft`
-- `fashion_get_customer_email_draft`
-- `fashion_send_customer_email_draft`
-- `fashion_customer_message_history`
-- `fashion_twilio_smoke_test`
-- `fashion_merch_action_recommendations`
-- `fashion_merch_diagnostics`
-- `fashion_merch_trend_summary`
-
-Apps SDK render tools:
-- `fashion_render_customer_search_workspace`
-- `fashion_render_merch_workspace`
-- `fashion_render_exec_workspace`
-
-### Local MCP smoke test
-
-Once the app is running:
+Run the local MCP smoke test after the app is running:
 
 ```bash
 make mcp-smoke
 ```
 
-That connects to `http://localhost:8000/mcp`, initializes an MCP session, lists tools, and calls:
-- `fashion_vector_status`
-- `fashion_latest_run`
+Representative MCP tool groups:
 
-When Datadog LLM Observability env is present, the smoke client runs through `ddtrace-run` so Datadog can automatically instrument MCP client calls.
+- Admin: vector status, latest run, synthetic generate/load/index/report.
+- Customer and associate: customer lookup, customer search, store resolution,
+  associate recommendations, customer value summaries, workspace rendering.
+- Communication: SMS draft/update/send, email draft/update/get/send,
+  recommendation email compatibility, message history, Twilio smoke test.
+- Merchandising: workspaces, diagnostics, trend summaries, action
+  recommendations, inventory views, mix recommendations, CSV export, strategy
+  overrides.
+- Unified workspace: overview, inventory view, action recommendations, product
+  mix recommendations, CSV export.
+- Executive: overview, event readiness, what-if simulation, campaign autopilot,
+  strategy packets, CSV export, auto-optimization.
+- Inventory: store checks, product search, store inventory, facets.
+- Feed compatibility: OpenAI-style product feed export.
 
-### Calling MCP tools from Python
+Use `make mcp-smoke` or an MCP Inspector session to see the current full tool
+surface.
 
-The MCP tool surface is flattened for agent friendliness. Most tools now take top-level arguments directly.
+ChatGPT cannot connect to `localhost`; remote ChatGPT Developer Mode usage needs
+the same `/mcp` endpoint exposed at a public HTTPS URL. Do not expose it as a
+bare public endpoint. Put an explicit identity layer in front of it, restrict
+which tools each actor can invoke, and separate read-only, operator, admin, and
+send-capable tools before using it outside a trusted local network. Set
+`PUBLIC_BASE_URL`, `MCP_ALLOWED_HOSTS`, and `MCP_ALLOWED_ORIGINS` for that
+deployment.
 
-```python
-import asyncio
+Apps SDK widget resources are thin HTML shells that load bundled JS/CSS from
+`/ui-assets`. The active widget bundles are:
 
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
-
-
-async def main():
-    async with streamable_http_client("http://localhost:8000/mcp") as (read_stream, write_stream, _):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-
-            status = await session.call_tool("fashion_vector_status", {"probe": False})
-            print(status.structuredContent)
-
-            recs = await session.call_tool(
-                "fashion_customer_recommendations",
-                {
-                    "store_id": "1001",
-                    "occasion": "wedding guest dress",
-                    "budget_max": 900,
-                    "top_k": 3
-                },
-            )
-            print(recs.structuredContent)
-
-
-asyncio.run(main())
-```
-
-Examples:
-
-- `fashion_customer_recommendations(store_id="1001", occasion="wedding guest dress", budget_max=900, top_k=3)`
-- `fashion_merchandising_recommendations(store_id="1001", objective="margin", lookback_days=90, top_k=5)`
-- `fashion_index_products(run_id="<RUN_ID>", batch_size=128)`
-- `fashion_load_synthetic(run_id="<RUN_ID>", entities=["stores","customers","products","orders","order_items","store_daily_metrics"])`
-
-Human-first examples:
-
-- `fashion_resolve_store(store_query="Dallas downtown")`
-- `fashion_find_customers(query="avery 1234", limit=10)`
-- `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel"],"exclude_categories":["athleticwear"],"target_genders":["male"],"style_keywords":["tailored","micro-check"]})`
-- `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", initial_email_draft_id="msg_123abc", initial_email_subject="Canvas draft subject", initial_email_body="Hi Jorgen, ...")`
-- `fashion_resolve_customer(email="avery.parker.1@example-fashion.test")`
-- `fashion_resolve_customer(phone_last4="1234")`
-- `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5)`
-- `fashion_store_associate_recommend(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=5, retrieval_mode="auto")`
-- `fashion_store_associate_recommend(store_id="1001", customer_id="cust_000001", top_k=6, retrieval_mode="auto", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel","shoes"],"target_genders":["male"],"style_keywords":["tailored","minimal"]})`
-- `fashion_prepare_customer_sms(store_query="Dallas", customer_email="avery.parker.1@example-fashion.test", occasion="wedding guest dress", budget_max=900, top_k=3)`
-- `fashion_prepare_customer_email_draft(store_id="1001", customer_id="cust_000001", selected_product_ids=["prod_000001","prod_000002"], to_email="buyer@example.com", subject="Curated picks from your stylist")`
-- `fashion_update_customer_email_draft(message_id="<MESSAGE_ID>", subject="Updated subject", body_text="Updated body copy", to_email="buyer@example.com")`
-- `fashion_get_customer_email_draft(message_id="<MESSAGE_ID>")`
-- `fashion_send_customer_email_draft(message_id="<MESSAGE_ID>")`
-- `fashion_update_customer_sms_draft(message_id="<MESSAGE_ID>", body_text="Updated follow-up copy", selected_product_ids=["prod_000001","prod_000002"])`
-- `fashion_send_customer_sms(message_id="<MESSAGE_ID>")`
-- `fashion_customer_message_history(customer_email="avery.parker.1@example-fashion.test", status="sent", limit=10)`
-- `fashion_twilio_smoke_test(body_text="Smoke test from sterling-hollis-be")`
-- `fashion_merch_action_recommendations(store_query="Dallas", question="What should this store feature this week if we care about margin?", top_k=8)`
-- `fashion_merch_diagnostics(store_query="Dallas", question="Why are shoes underperforming here?", category="shoes", compare_mode="peer_and_prior_period", lookback_days=90)`
-- `fashion_merch_trend_summary(store_query="Dallas", question="Summarize recent store trends for handbags and women’s apparel.", category="handbags", compare_mode="peer_and_prior_period")`
-- `fashion_exec_overview(lookback_days=90, objective="revenue", top_k_stores=12)`
-- `fashion_exec_event_readiness_radar(lookback_days=56, events=["wedding","holiday_party","workwear"])`
-- `fashion_exec_what_if_simulator(lookback_days=90, discount_pct=10, floor_space_shift_pct=5, from_category="womens_apparel", to_category="shoes")`
-- `fashion_exec_campaign_autopilot_prepare(to_email="store.manager@example.com", lookback_days=56, top_k=6)`
-- `fashion_exec_campaign_autopilot_send(draft_id="<DRAFT_ID>", approved=true)`
-
-Render-tool examples for ChatGPT Apps:
-
-- `fashion_render_customer_search_workspace(query="avery", limit=10)`
-- `fashion_open_customer_workspace(customer_query="Jorgen Nielsen", style_constraints={"constraint_source":"chat_image","target_categories":["mens_apparel"],"target_genders":["male"],"style_keywords":["tailored"]})`
-- `fashion_render_customer_search_workspace(selected_customer_id="cust_000001", initial_email_draft_id="msg_123abc")`
-
-### Manual local MCP testing with Inspector
-
-You can also use the official MCP Inspector:
-
-```bash
-npx -y @modelcontextprotocol/inspector
-```
-
-Then connect the inspector UI to:
-
-```bash
-http://localhost:8000/mcp
-```
-
-### Local editor/client config examples
-
-Codex CLI:
-
-```bash
-codex mcp add fashionDb --url http://127.0.0.1:8000/mcp
-```
-
-VS Code `.vscode/mcp.json`:
-
-```json
-{
-  "servers": {
-    "fashionDb": {
-      "type": "http",
-      "url": "http://127.0.0.1:8000/mcp"
-    }
-  }
-}
-```
-
-Cursor `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "fashionDb": {
-      "url": "http://127.0.0.1:8000/mcp"
-    }
-  }
-}
-```
-
-### Important ChatGPT constraint
-
-The MCP server is transport-compatible with ChatGPT Developer Mode, but ChatGPT itself cannot connect to `localhost`.
-
-For ChatGPT, the same MCP endpoint must be exposed on a remote public URL later, for example through Cloudflare. That is the correct next phase after local validation.
-
-### Twilio communication model
-
-The customer-communication flow is intentionally conservative:
-
-- recommendation tools never send SMS automatically
-- `fashion_prepare_customer_sms` creates a persisted draft in `customer_communications`
-- `fashion_update_customer_sms_draft` lets an associate edit message copy and selected products before send
-- `fashion_send_customer_sms` is the only send action
-- `fashion_twilio_smoke_test` validates the live Twilio path with no customer context
-- all v1 outbound messages go to `TWILIO_TEST_TO_NUMBER`
-- the outbound sender is `TWILIO_SENDER_NUMBER`
-- synthetic customer `phone_e164` values are used for search and UI realism only; they are not the live delivery target
-- one seeded demo customer is assigned `+12146932322` for reliable demo lookup
-
-### Operator performance notes
-
-- Store resolution and peer-store lookup use a short in-process TTL cache.
-- Associate recommendation tools support `retrieval_mode`:
-  - `auto`: uses fast SQL/rules for structured requests and semantic retrieval otherwise
-  - `fast`: skips embedding/Pinecone and uses SQL/rules only
-  - `semantic`: forces embedding + Pinecone when providers are enabled
-
-Current message body content is text-only:
-- associate greeting
-- recommended product titles and prices
-- product links
-
-The synthetic dataset includes `image_link`, but those URLs are placeholders and are not used for outbound messaging.
-
-Image-guided recommendation notes:
-- if a user uploads an image in chat, pass extracted cues into `style_constraints` on recommendation tools
-- supported fields: `target_categories`, `exclude_categories`, `target_genders`, `style_keywords`, and `constraint_source`
-- recommendation responses include `applied_style_constraints`, `constraint_source`, and `constraint_stage` so the workspace can explain what was applied
-
-### Apps SDK widgets
-
-The repo now includes Apps SDK-ready render tools layered on top of the human-first MCP tools:
-
-- customer search workspace
+- customer workspace
 - merchandising workspace
-- executive overview workspace
+- executive workspace
+- unified executive/merchandising workspace
 
-This widget is mounted as an MCP resource and is intended for ChatGPT app usage. It relies on `PUBLIC_BASE_URL` for widget CSP and remote access.
+Set `ENABLE_MCP_ADAPTER=false` to run without `/mcp`. Set
+`ENABLE_OPENAI_APPS_UI=false` to disable `/ui-assets`, ChatGPT sandbox CORS, and
+widget session endpoints.
 
-Implementation notes:
-- widget HTML is now a thin shell that loads a bundled JS/CSS UI from `/ui-assets`
-- widget runtime uses `window.openai.callTool` directly (no custom parent RPC fallback)
-- email delivery now supports a draft lifecycle: prepare -> update/get -> send by `message_id`
-- workspace uses a draft-first path (`Copy Draft`, `Copy Canvas Prompt`, `Refresh Draft`, `Send Draft Email`) while legacy direct-send email tool remains available for compatibility
-- chat-first handoff is supported by workspace hydration fields: `initial_email_draft_id` plus optional `initial_email_subject` and `initial_email_body`
-- send authority stays in persisted backend draft state
-- widget state persisted with optional `window.openai.setWidgetState` includes `query`, selected customer, filters, selected products, style constraints, and draft fields (`emailTo`, `emailSubject`, `emailBody`, `emailDraftId`)
-- legacy multi-workspace UI assets are archived under `app/static/chatgpt-ui/archive/legacy-workspaces`
+## Security And Data Boundaries
+
+Widget state should stay minimal. Persist only opaque IDs and non-sensitive UI
+flags through `window.openai.setWidgetState` by default. Keep draft bodies,
+recipient addresses, customer identity, message history, and authorization
+decisions backend-owned. If a future widget needs to persist sensitive content
+in host state, document the retention, deletion, and redaction rules before
+shipping it.
+
+Third-party data handling:
+
+| Service | Data sent | Boundary |
+| --- | --- | --- |
+| OpenAI | Embedding text, image-analysis inputs, optional chat orchestration prompts, generated product image prompts | Do not send real PII unless the deployment has approved that data class. Raw shopper upload bytes are discarded after analysis. |
+| Pinecone | Product/catalog vectors and metadata needed for retrieval | Keep namespaces environment-specific and avoid storing customer PII in vector metadata. |
+| Datadog | APM spans, logs, metrics, LLM Observability traces, demo network logs | Redact secrets and avoid logging raw env values, credentials, or unneeded customer content. |
+| Twilio | Draft-approved outbound SMS body and test destination | V1 delivery uses `TWILIO_TEST_TO_NUMBER`; synthetic customer phones are lookup/UI data only. |
+| SES/AWS | Draft-approved outbound email body and recipient | Keep send authority in persisted backend draft state. |
+| Clerk | JWT issuer/JWKS validation and authorized-party checks | Use Clerk identity only to link authenticated frontend requests to backend customer records. |
+| GitHub/Docker Hub | Deployment secrets and container images | Restrict secret access and rotate tokens after exposure or role changes. |
+
+## Customer Communication Model
+
+Outbound communication is draft-first:
+
+- Recommendation tools never send messages automatically.
+- `fashion_prepare_customer_sms` creates a persisted SMS draft.
+- `fashion_update_customer_sms_draft` lets an associate edit copy and selected
+  products before send.
+- `fashion_send_customer_sms` is the only SMS send action.
+- Email tools follow the same prepare/update/get/send draft lifecycle.
+- Twilio v1 sends go to `TWILIO_TEST_TO_NUMBER`.
+- Synthetic customer phone numbers are used for search and UI realism, not live
+  delivery.
+
+## Datadog Demo Observability
+
+The demo observability harness is off by default. Enable it with:
+
+```bash
+curl -X POST http://localhost:8000/admin/demo/observability \
+  -H 'content-type: application/json' \
+  -d '{"enabled":true,"mode":"latency"}'
+```
+
+Modes include latency, error, latency plus error, and network outage. The
+network outage mode returns controlled 503s from app-facing API paths while
+leaving `/health` and demo reset controls available. Use the
+`network-outage-log` endpoints to send the `snmp_trap_logs` payloads to Datadog
+Logs HTTP Intake with the backend `DD_API_KEY`.
+
+Datadog LLM Observability uses `DD_LLMOBS_ENABLED=true` for canonical app-level
+chat traces. Keep `STRANDS_OTEL_ENABLED=false` unless debugging Strands-native
+event-loop telemetry.
 
 ## Testing
 
@@ -875,65 +503,60 @@ pip install -e '.[dev]'
 pytest
 ```
 
+Make targets:
+
+```bash
+make install
+make test
+make up
+make logs
+make migrate
+make e2e
+make reindex-latest
+make mcp-smoke
+make openapi
+make down
+```
+
+`make e2e` starts the stack, waits for health, runs generate/load/index/report,
+and prints compact JSON summaries for data generation and recommendation checks.
+
 ## Self-Hosted Deployment
 
 This repo includes a deployment path for a local self-hosted GitHub runner that:
+
 - uploads `.env` values to GitHub Actions secrets
-- reads the tracked `VERSION` file and tags the image as `<version>-<short_sha>`
+- reads `VERSION` and tags the image as `<version>-<short_sha>`
 - builds and pushes one API image to Docker Hub
-- deploys the API locally on the runner host with Docker Compose
-- connects to your external Postgres instance using `PG*` values or `DATABASE_URL`
+- deploys the API and index worker locally with Docker Compose
+- connects to an external Postgres instance through `PG*` values or
+  `DATABASE_URL`
 
 Tracked deployment assets:
+
 - [scripts/deploy.sh](scripts/deploy.sh)
 - [scripts/setup-secrets.sh](scripts/setup-secrets.sh)
 - [.github/workflows/deploy-self-hosted.yaml](.github/workflows/deploy-self-hosted.yaml)
 - [deploy/docker-compose.prod.yml](deploy/docker-compose.prod.yml)
+- [VERSION](VERSION)
 
 Production defaults:
+
 - Docker Hub image: `quickstark/sterling-hollis-be`
 - API container name: `sterling-hollis-be`
 - worker container name: `sterling-hollis-be-index-worker`
 - exposed host port: `8000`
 - Postgres: external instance, not a bundled container
-- transport: REST API and MCP served from the same container on port `8000`
+- transport: REST API and MCP served from the API container on port `8000`
 
-### Deploy flow
-
-1. Put your production values in `.env`.
-2. Run:
+Deploy flow:
 
 ```bash
 ./scripts/deploy.sh
 ```
 
-That script:
-- validates required env keys
-- lets you update `VERSION`
-- uploads GitHub secrets
-- prompts for a commit message
-- pushes the current branch to trigger the workflow
+Required GitHub secrets:
 
-If there are no tracked changes to commit, the script can dispatch the workflow manually instead.
-
-### Production deployment assets
-
-- Workflow: [.github/workflows/deploy-self-hosted.yaml](.github/workflows/deploy-self-hosted.yaml)
-- Runtime compose file: [deploy/docker-compose.prod.yml](deploy/docker-compose.prod.yml)
-- Deploy script: [scripts/deploy.sh](scripts/deploy.sh)
-- Secret uploader: [scripts/setup-secrets.sh](scripts/setup-secrets.sh)
-- Version file: [VERSION](VERSION)
-
-The workflow:
-- builds and pushes `latest`
-- builds and pushes `<version>-<short_sha>`
-- writes `deploy/runtime.env` from GitHub secrets
-- runs `docker compose -f deploy/docker-compose.prod.yml up -d`
-- health-checks `http://localhost:${API_PORT:-8000}/health`
-
-### Secrets expected by the workflow
-
-Required:
 - `PGHOST`
 - `PGPORT`
 - `PGDATABASE`
@@ -943,97 +566,53 @@ Required:
 - `DOCKERHUB_TOKEN`
 - `DOCKERHUB_IMAGE`
 
-Optional:
-- `DATABASE_URL`
-- `API_PORT`
-- `OPENAI_API_KEY`
-- `PINECONE_API_KEY`
-- `PINECONE_INDEX_NAME`
-- `PINECONE_CLOUD`
-- `PINECONE_REGION`
-- `EMBEDDING_MODEL`
-- `EMBEDDING_DIMENSION`
-- `PUBLIC_BASE_URL`
-- `CLERK_ISSUER`
-- `CLERK_JWKS_URL`
-- `CLERK_AUTHORIZED_PARTIES`
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_API_KEY_SID`
-- `TWILIO_API_KEY_SECRET`
-- `TWILIO_SENDER_NUMBER`
-- `TWILIO_TEST_TO_NUMBER`
+Optional secret groups include `DATABASE_URL`, `API_PORT`, OpenAI/Pinecone,
+store source, public MCP/UI, Clerk, Datadog/OTEL, SES/Amazon email, Twilio, and
+feature-gate values.
 
-Example external Postgres settings:
-
-```env
-PGHOST=192.168.1.200
-PGPORT=9001
-PGDATABASE=products
-PGUSER=postgres
-PGPASSWORD=your-password
-```
-
-Example Docker Hub settings:
-
-```env
-DOCKERHUB_USER=quickstark
-DOCKERHUB_TOKEN=your-token
-DOCKERHUB_IMAGE=quickstark/sterling-hollis-be
-API_PORT=8000
-```
-
-Example remote MCP/Twilio settings:
-
-```env
-PUBLIC_BASE_URL=https://sterling-hollis-be.quickstark.com
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_API_KEY_SID=SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_API_KEY_SECRET=your-secret
-TWILIO_SENDER_NUMBER=+15555550123
-TWILIO_TEST_TO_NUMBER=+15555550999
-```
-
-## Make Targets
+The workflow writes `deploy/runtime.env`, runs:
 
 ```bash
-make up
-make test
-make migrate
-make e2e
-make reindex-latest
-make mcp-smoke
-make down
+docker compose -f deploy/docker-compose.prod.yml up -d
 ```
 
-`make e2e` brings the stack up, waits for health, runs generate/load/index/report, and prints compact JSON summaries for the run and recommendation checks.
+and health-checks:
 
-`make reindex-latest` is the operational shortcut after you add cloud vector credentials to `.env`.
+```text
+http://localhost:${API_PORT:-8000}/health
+```
 
-`make mcp-smoke` verifies the mounted MCP endpoint and prints the discovered tools plus sample structured tool output.
-
-## Migrations (Alembic)
+## Migrations
 
 ```bash
-# Use your target DB URL
 export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/productdb
-
-# Apply migrations
 alembic upgrade head
+```
 
-# Create a new migration after model changes
+Create a migration after model changes:
+
+```bash
 alembic revision --autogenerate -m "describe change"
 ```
 
-If your database already has tables created from earlier `create_all(...)` startup behavior, stamp it first:
+If a database already has tables created before Alembic was introduced, stamp it
+first:
 
 ```bash
 alembic stamp head
 ```
 
-The container startup script and `scripts/init_db.py` both handle this automatically by stamping `head` once when they detect an existing schema without `alembic_version`.
+The container startup script and `scripts/init_db.py` automatically stamp `head`
+when they detect an existing schema without `alembic_version`.
 
 ## Notes
 
-- For learning and resilience, embedding generation falls back to deterministic local vectors when OpenAI is not configured.
-- Pinecone indexing is namespace-scoped per store: `store_<store_id>`.
+- The committed repo does not include a default live store-source URL. Configure
+  `STORE_SOURCE_INDEX_URL` and `STORE_SOURCE_DETAIL_URL_TEMPLATE`, or point
+  `STORE_SOURCE_CACHE_PATH` at a real local cache file before running synthetic
+  generation.
+- Embedding generation falls back to deterministic local vectors when OpenAI is
+  not configured.
+- Pinecone indexing is namespace-scoped per store as `store_<store_id>` and uses
+  `PINECONE_CATALOG_NAMESPACE` for store-independent catalog vectors.
 - Synthetic customer records avoid real PII and include hashed surrogate tokens.

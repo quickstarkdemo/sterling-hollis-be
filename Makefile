@@ -34,7 +34,7 @@ e2e:
 	until curl -fsS $(API_URL)/health >/dev/null; do sleep 2; done; \
 	GEN=$$(curl -fsS -X POST $(API_URL)/admin/synthetic/generate -H 'content-type: application/json' -d '{"seed":$(E2E_SEED)}'); \
 	RUN_ID=$$(printf '%s' "$$GEN" | jq -r '.run_id'); \
-	LOAD=$$(curl -fsS -X POST $(API_URL)/admin/synthetic/load -H 'content-type: application/json' -d "{\"run_id\":\"$$RUN_ID\",\"entities\":[\"stores\",\"customers\",\"products\",\"orders\",\"order_items\",\"store_daily_metrics\"]}"); \
+	LOAD=$$(curl -fsS -X POST $(API_URL)/admin/synthetic/load -H 'content-type: application/json' -d "{\"run_id\":\"$$RUN_ID\",\"entities\":[\"stores\",\"customers\",\"products\",\"orders\",\"order_items\",\"store_daily_metrics\",\"supplier_product_offers\"]}"); \
 	INDEX=$$(curl -fsS -X POST $(API_URL)/admin/synthetic/index-products -H 'content-type: application/json' -d "{\"run_id\":\"$$RUN_ID\",\"batch_size\":128}"); \
 	REPORT=$$(curl -fsS $(API_URL)/admin/synthetic/runs/$$RUN_ID/report); \
 	STORE_ID=$$($(COMPOSE) exec -T postgres psql -U postgres -d productdb -Atc "select id from stores where seed_run_id='$$RUN_ID' order by id limit 1;"); \

@@ -60,6 +60,8 @@ services:
       args:
         DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
         DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
+    env_file:
+      - .env
     command: ./scripts/run_api.sh
     environment:
       <<: *datadog-env
@@ -103,6 +105,8 @@ services:
       args:
         DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
         DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
+    env_file:
+      - .env
     command: ./scripts/run_index_worker.sh
     environment:
       <<: *datadog-env

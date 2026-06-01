@@ -448,11 +448,15 @@ Recommended sorts:
 
 ## Image Generation Progress
 
+This is an admin/operator check, not a shopper-facing frontend call. Use it from
+local tooling or from an authenticated admin surface protected outside the
+retail app.
+
 The background image API updates counts when a batch finishes, not per individual
 variant. A running job may show `attempted: 0` until it completes.
 
 ```bash
-curl -s "https://sterling-hollis-be.quickstark.com/admin/product-images/jobs?limit=20" \
+curl -s "http://localhost:8000/admin/product-images/jobs?limit=20" \
   | jq '.jobs[] | {id, category, status, attempted, generated, skipped, failed_count}'
 ```
 
