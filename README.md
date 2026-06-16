@@ -555,6 +555,11 @@ Deploy flow:
 ./scripts/deploy.sh
 ```
 
+The GitHub Actions workflow does not deploy pull-request branches. A merge to
+`main` produces the `push` event that builds and deploys through the self-hosted
+runner. Manual dispatch is restricted to the `main` ref, and deployment runs
+are serialized so two pushes cannot mutate the local Compose stack at once.
+
 Required GitHub secrets:
 
 - `PGHOST`

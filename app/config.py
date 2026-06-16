@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     demo_observability_network_event_count: int = 3
     demo_observability_clerk_authorized_emails: str = ""
     demo_observability_clerk_authorized_subjects: str = ""
+    catalog_studio_clerk_authorized_emails: str = ""
+    catalog_studio_clerk_authorized_subjects: str = ""
+    catalog_studio_admin_claim_path: str = ""
+    catalog_studio_admin_claim_value: str = "admin"
+    catalog_studio_realtime_enabled: bool = False
+    enable_legacy_admin_routes: bool = True
     dd_site: str = "datadoghq.com"
     dd_api_key: str | None = None
 

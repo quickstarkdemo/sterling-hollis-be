@@ -5,8 +5,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: sterling-hollis-be-production
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: self-hosted
     env:
       DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_IMAGE }}
@@ -170,6 +175,12 @@ jobs:
           DEMO_OBSERVABILITY_NETWORK_EVENT_COUNT=${{ secrets.DEMO_OBSERVABILITY_NETWORK_EVENT_COUNT || '3' }}
           DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS=${{ secrets.DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS }}
           DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS=${{ secrets.DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS }}
+          CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS=${{ secrets.CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS }}
+          CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS=${{ secrets.CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS }}
+          CATALOG_STUDIO_ADMIN_CLAIM_PATH=${{ secrets.CATALOG_STUDIO_ADMIN_CLAIM_PATH }}
+          CATALOG_STUDIO_ADMIN_CLAIM_VALUE=${{ secrets.CATALOG_STUDIO_ADMIN_CLAIM_VALUE || 'admin' }}
+          CATALOG_STUDIO_REALTIME_ENABLED=${{ secrets.CATALOG_STUDIO_REALTIME_ENABLED || 'false' }}
+          ENABLE_LEGACY_ADMIN_ROUTES=${{ secrets.ENABLE_LEGACY_ADMIN_ROUTES || 'false' }}
           PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}
           PINECONE_INDEX_NAME=${{ secrets.PINECONE_INDEX_NAME || 'fashion-products-v1' }}
           PINECONE_CLOUD=${{ secrets.PINECONE_CLOUD || 'aws' }}
