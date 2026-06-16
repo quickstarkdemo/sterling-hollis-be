@@ -27,6 +27,9 @@ services:
     container_name: ${PRODUCT_INDEX_WORKER_CONTAINER_NAME:-sterling-hollis-be-index-worker}
     restart: unless-stopped
     command: ./scripts/run_index_worker.sh
+    depends_on:
+      api:
+        condition: service_healthy
     env_file:
       - ./runtime.env
     volumes:

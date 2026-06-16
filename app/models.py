@@ -10,6 +10,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    func,
     Index,
     Integer,
     Numeric,
@@ -144,6 +145,17 @@ class CatalogProduct(Base):
     brand: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(32), default="published", server_default="published", nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
 
     variants: Mapped[list["ProductVariant"]] = relationship(back_populates="product", cascade="all, delete-orphan")
 
@@ -208,6 +220,39 @@ class StoreInventory(Base):
         UniqueConstraint("store_id", "variant_id", "size", name="uq_store_inventory_store_variant_size"),
         Index("ix_store_inventory_store_availability", "store_id", "availability"),
         Index("ix_store_inventory_variant_size", "variant_id", "size"),
+    )
+
+
+class CatalogDraftRevision(Base):
+    __tablename__ = "catalog_draft_revisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_product_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    moderation_state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_catalog_draft_product_created", "catalog_product_id", "created_at"),
+    )
+
+
+class CatalogAdminMutation(Base):
+    __tablename__ = "catalog_admin_mutations"
+
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    operation: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 

@@ -84,7 +84,7 @@ def _stock_state(availability: str, inventory_qty: int) -> str:
 
 
 def _conditions(filters: ProductFilters, *, include_search: bool = True):
-    conditions = []
+    conditions = [CatalogProductModel.lifecycle_status == "published"]
     if filters.store_id:
         conditions.append(StoreInventory.store_id == filters.store_id)
     if filters.category:
@@ -348,7 +348,7 @@ def _product_id_for_legacy_id(db: Session, product_id: str) -> str:
 def list_categories(
     db: Session, *, store_id: str | None = None
 ) -> CategoryListResponse:
-    conditions = []
+    conditions = [CatalogProductModel.lifecycle_status == "published"]
     if store_id:
         conditions.append(StoreInventory.store_id == store_id)
     rows = db.execute(
@@ -457,7 +457,7 @@ def get_product_detail(
 ) -> ProductDetailResponse | None:
     normalized_id = _product_id_for_legacy_id(db, product_id)
     product = db.get(CatalogProductModel, normalized_id)
-    if not product:
+    if not product or product.lifecycle_status != "published":
         return None
     return product_to_catalog(db, product, include_variants=True, store_id=store_id)  # type: ignore[return-value]
 
@@ -467,7 +467,7 @@ def related_products(
 ) -> ProductListResponse | None:
     normalized_id = _product_id_for_legacy_id(db, product_id)
     product = db.get(CatalogProductModel, normalized_id)
-    if not product:
+    if not product or product.lifecycle_status != "published":
         return None
     filters = ProductFilters(
         category=product.category,
@@ -508,7 +508,7 @@ def recommend_products(
             if product_id in seen:
                 continue
             product = db.get(CatalogProductModel, product_id)
-            if not product:
+            if not product or product.lifecycle_status != "published":
                 continue
             seen.add(product_id)
             recommendations.append(
@@ -627,7 +627,10 @@ def _recommend_products_from_catalog_ids(
     product_map = {
         product.id: product
         for product in db.scalars(
-            select(CatalogProductModel).where(CatalogProductModel.id.in_(product_ids))
+            select(CatalogProductModel).where(
+                CatalogProductModel.id.in_(product_ids),
+                CatalogProductModel.lifecycle_status == "published",
+            )
         ).all()
     }
     recommendations: list[RecommendedProduct] = []

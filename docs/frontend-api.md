@@ -69,6 +69,11 @@ Generated image files are served from:
 | Image recommendations | `POST` | `/api/recommendations/image` |
 | Storefront chat | `POST` | `/api/chat` |
 | Catalog Studio administrator session and capabilities | `GET` | `/api/admin/session` |
+| Create private product draft | `POST` | `/api/admin/catalog/products/drafts` |
+| Revise an existing product privately | `PUT` | `/api/admin/catalog/products/{product_id}/draft` |
+| Publish an approved draft | `POST` | `/api/admin/catalog/products/{product_id}/publish` |
+| Archive a published product | `POST` | `/api/admin/catalog/products/{product_id}/archive` |
+| Inspect product lifecycle and draft history | `GET` | `/api/admin/catalog/products/{product_id}` |
 | Clerk demo fault state | `GET` | `/api/demo/observability` |
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
 | Clerk demo fault reset | `POST` | `/api/demo/observability/reset` |
@@ -249,6 +254,70 @@ authorization: Bearer <Clerk token>
 
 Missing or invalid Clerk credentials return `401`. Valid non-administrator
 credentials return `403`. Successful responses use `Cache-Control: no-store`.
+
+## Catalog Studio Product Lifecycle
+
+All Catalog Studio product routes require the same Clerk administrator policy
+as `/api/admin/session`. Drafts are private: they never appear in catalog lists,
+detail, search, related products, or recommendations. Editing an existing
+product also leaves its published snapshot visible until publication succeeds.
+
+Every mutation requires an `Idempotency-Key` header and an `expected_version`
+in its body. A retry with the same key and identical request replays the first
+result. Reusing the key for a different request returns `409`. A stale version
+also returns `409` without changing public state.
+
+The lifecycle is:
+
+1. `POST /api/admin/catalog/products/drafts` creates a new-product draft with
+   `expected_version: 0`, or `PUT /api/admin/catalog/products/{product_id}/draft`
+   stages a revision using the current published version.
+2. The draft captures product fields, variants, per-store inventory, image
+   selection, and `moderation_state`.
+3. `POST /api/admin/catalog/products/{product_id}/publish` atomically replaces
+   the published product, variant, and inventory projection. Publication is
+   rejected unless moderation is `approved` and all referenced stores exist.
+4. `POST /api/admin/catalog/products/{product_id}/archive` removes the product
+   from every public read surface while retaining its administrative record and
+   revision history.
+
+Example draft mutation:
+
+```http
+POST /api/admin/catalog/products/drafts
+authorization: Bearer <Clerk token>
+idempotency-key: catalog-demo-product-1
+content-type: application/json
+```
+
+```json
+{
+  "expected_version": 0,
+  "moderation_state": "approved",
+  "product": {
+    "seed_run_id": "run_catalog",
+    "title": "Studio Coat",
+    "description": "A structured Catalog Studio product.",
+    "brand": "Sterling Hollis",
+    "category": "womens_apparel",
+    "metadata": {"source": "catalog_studio"},
+    "variants": [{
+      "color": "Black",
+      "material": "wool",
+      "price_min": 250,
+      "price_max": 250,
+      "image_link": "https://cdn.example/studio-coat.jpg",
+      "inventory": [{
+        "store_id": "1001",
+        "size": "M",
+        "availability": "in stock",
+        "inventory_qty": 8,
+        "objective_weight": 0.9
+      }]
+    }]
+  }
+}
+```
 
 ## Demo Observability Toggle
 
