@@ -317,9 +317,6 @@
             "title": "Retryable",
             "type": "boolean"
           },
-          "run": {
-            "$ref": "#/components/schemas/DemoRunResponse"
-          },
           "status": {
             "enum": [
               "succeeded",
@@ -327,12 +324,15 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/CatalogWorkflowResponse"
           }
         },
         "required": [
           "status",
           "message",
-          "run"
+          "workflow"
         ],
         "title": "CatalogAIWorkflowResponse",
         "type": "object"
@@ -667,6 +667,161 @@
           "price_max"
         ],
         "title": "CatalogVariant",
+        "type": "object"
+      },
+      "CatalogWorkflowResponse": {
+        "properties": {
+          "business_summary": {
+            "title": "Business Summary",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_stage": {
+            "title": "Current Stage",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "image_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Job Id"
+          },
+          "is_owner": {
+            "title": "Is Owner",
+            "type": "boolean"
+          },
+          "published_product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Product Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "business_summary",
+          "status",
+          "current_stage",
+          "is_owner",
+          "created_at",
+          "updated_at",
+          "expires_at",
+          "events"
+        ],
+        "title": "CatalogWorkflowResponse",
+        "type": "object"
+      },
+      "CatalogWorkflowStartRequest": {
+        "properties": {
+          "business_summary": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Business Summary",
+            "type": "string"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "image_job_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Job Id"
+          },
+          "published_product_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Product Id"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "business_summary"
+        ],
+        "title": "CatalogWorkflowStartRequest",
         "type": "object"
       },
       "CategoryListResponse": {
@@ -1252,351 +1407,6 @@
         "title": "CustomerRecommendationResponse",
         "type": "object"
       },
-      "DemoDeveloperEvent": {
-        "properties": {
-          "duration_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Duration Ms"
-          },
-          "error_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Code"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          },
-          "moderation": {
-            "additionalProperties": true,
-            "title": "Moderation",
-            "type": "object"
-          },
-          "payload_expired": {
-            "default": false,
-            "title": "Payload Expired",
-            "type": "boolean"
-          },
-          "request_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Request Id"
-          },
-          "request_payload": {
-            "additionalProperties": true,
-            "title": "Request Payload",
-            "type": "object"
-          },
-          "response_payload": {
-            "additionalProperties": true,
-            "title": "Response Payload",
-            "type": "object"
-          },
-          "usage": {
-            "additionalProperties": true,
-            "title": "Usage",
-            "type": "object"
-          }
-        },
-        "title": "DemoDeveloperEvent",
-        "type": "object"
-      },
-      "DemoEventInput": {
-        "properties": {
-          "business_summary": {
-            "maxLength": 1000,
-            "minLength": 1,
-            "title": "Business Summary",
-            "type": "string"
-          },
-          "capability": {
-            "enum": [
-              "run",
-              "responses",
-              "moderation",
-              "image_generation",
-              "realtime",
-              "catalog",
-              "publication"
-            ],
-            "title": "Capability",
-            "type": "string"
-          },
-          "client_event_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Client Event Id",
-            "type": "string"
-          },
-          "completed_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completed At"
-          },
-          "draft_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Draft Id"
-          },
-          "duration_ms": {
-            "anyOf": [
-              {
-                "maximum": 2147483647.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Duration Ms"
-          },
-          "error_code": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error Code"
-          },
-          "image_job_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Image Job Id"
-          },
-          "model": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model"
-          },
-          "moderation": {
-            "additionalProperties": true,
-            "title": "Moderation",
-            "type": "object"
-          },
-          "published_product_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Published Product Id"
-          },
-          "request_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Request Id"
-          },
-          "request_payload": {
-            "additionalProperties": true,
-            "title": "Request Payload",
-            "type": "object"
-          },
-          "response_payload": {
-            "additionalProperties": true,
-            "title": "Response Payload",
-            "type": "object"
-          },
-          "retryable": {
-            "default": false,
-            "title": "Retryable",
-            "type": "boolean"
-          },
-          "stage": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Stage",
-            "type": "string"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "status": {
-            "enum": [
-              "queued",
-              "started",
-              "running",
-              "succeeded",
-              "blocked",
-              "failed",
-              "retrying",
-              "completed"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "usage": {
-            "additionalProperties": true,
-            "title": "Usage",
-            "type": "object"
-          }
-        },
-        "required": [
-          "client_event_id",
-          "stage",
-          "capability",
-          "status",
-          "business_summary"
-        ],
-        "title": "DemoEventInput",
-        "type": "object"
-      },
-      "DemoEventResponse": {
-        "properties": {
-          "business_summary": {
-            "title": "Business Summary",
-            "type": "string"
-          },
-          "capability": {
-            "enum": [
-              "run",
-              "responses",
-              "moderation",
-              "image_generation",
-              "realtime",
-              "catalog",
-              "publication"
-            ],
-            "title": "Capability",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "developer": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/DemoDeveloperEvent"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "retryable": {
-            "title": "Retryable",
-            "type": "boolean"
-          },
-          "sequence": {
-            "title": "Sequence",
-            "type": "integer"
-          },
-          "stage": {
-            "title": "Stage",
-            "type": "string"
-          },
-          "status": {
-            "enum": [
-              "queued",
-              "started",
-              "running",
-              "succeeded",
-              "blocked",
-              "failed",
-              "retrying",
-              "completed"
-            ],
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "sequence",
-          "stage",
-          "capability",
-          "status",
-          "business_summary",
-          "retryable",
-          "created_at"
-        ],
-        "title": "DemoEventResponse",
-        "type": "object"
-      },
       "DemoObservabilityLogSendResponse": {
         "properties": {
           "datadog_response": {
@@ -1796,161 +1606,6 @@
           }
         },
         "title": "DemoObservabilityUpdateRequest",
-        "type": "object"
-      },
-      "DemoRunResponse": {
-        "properties": {
-          "business_summary": {
-            "title": "Business Summary",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "current_stage": {
-            "title": "Current Stage",
-            "type": "string"
-          },
-          "draft_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Draft Id"
-          },
-          "events": {
-            "items": {
-              "$ref": "#/components/schemas/DemoEventResponse"
-            },
-            "title": "Events",
-            "type": "array"
-          },
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "image_job_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Image Job Id"
-          },
-          "is_owner": {
-            "title": "Is Owner",
-            "type": "boolean"
-          },
-          "published_product_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Published Product Id"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "title": {
-            "title": "Title",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "title",
-          "business_summary",
-          "status",
-          "current_stage",
-          "is_owner",
-          "created_at",
-          "updated_at",
-          "expires_at",
-          "events"
-        ],
-        "title": "DemoRunResponse",
-        "type": "object"
-      },
-      "DemoRunStartRequest": {
-        "properties": {
-          "business_summary": {
-            "maxLength": 1000,
-            "minLength": 1,
-            "title": "Business Summary",
-            "type": "string"
-          },
-          "draft_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Draft Id"
-          },
-          "image_job_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Image Job Id"
-          },
-          "published_product_id": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Published Product Id"
-          },
-          "title": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Title",
-            "type": "string"
-          }
-        },
-        "required": [
-          "title",
-          "business_summary"
-        ],
-        "title": "DemoRunStartRequest",
         "type": "object"
       },
       "DraftMutationRequest": {
@@ -4236,6 +3891,351 @@
         ],
         "title": "VectorStatusResponse",
         "type": "object"
+      },
+      "WorkflowDeveloperEvent": {
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "moderation": {
+            "additionalProperties": true,
+            "title": "Moderation",
+            "type": "object"
+          },
+          "payload_expired": {
+            "default": false,
+            "title": "Payload Expired",
+            "type": "boolean"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "request_payload": {
+            "additionalProperties": true,
+            "title": "Request Payload",
+            "type": "object"
+          },
+          "response_payload": {
+            "additionalProperties": true,
+            "title": "Response Payload",
+            "type": "object"
+          },
+          "usage": {
+            "additionalProperties": true,
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "title": "WorkflowDeveloperEvent",
+        "type": "object"
+      },
+      "WorkflowEventInput": {
+        "properties": {
+          "business_summary": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Business Summary",
+            "type": "string"
+          },
+          "capability": {
+            "enum": [
+              "workflow",
+              "responses",
+              "moderation",
+              "image_generation",
+              "realtime",
+              "catalog",
+              "publication"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "client_event_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Event Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "image_job_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Job Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "moderation": {
+            "additionalProperties": true,
+            "title": "Moderation",
+            "type": "object"
+          },
+          "published_product_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Product Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "request_payload": {
+            "additionalProperties": true,
+            "title": "Request Payload",
+            "type": "object"
+          },
+          "response_payload": {
+            "additionalProperties": true,
+            "title": "Response Payload",
+            "type": "object"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "stage": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Stage",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "started",
+              "running",
+              "succeeded",
+              "blocked",
+              "failed",
+              "retrying",
+              "completed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": true,
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "required": [
+          "client_event_id",
+          "stage",
+          "capability",
+          "status",
+          "business_summary"
+        ],
+        "title": "WorkflowEventInput",
+        "type": "object"
+      },
+      "WorkflowEventResponse": {
+        "properties": {
+          "business_summary": {
+            "title": "Business Summary",
+            "type": "string"
+          },
+          "capability": {
+            "enum": [
+              "workflow",
+              "responses",
+              "moderation",
+              "image_generation",
+              "realtime",
+              "catalog",
+              "publication"
+            ],
+            "title": "Capability",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "developer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowDeveloperEvent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "started",
+              "running",
+              "succeeded",
+              "blocked",
+              "failed",
+              "retrying",
+              "completed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "stage",
+          "capability",
+          "status",
+          "business_summary",
+          "retryable",
+          "created_at"
+        ],
+        "title": "WorkflowEventResponse",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -4825,249 +4825,6 @@
         ]
       }
     },
-    "/api/admin/catalog/demo-runs": {
-      "post": {
-        "operationId": "create_demo_run_api_admin_catalog_demo_runs_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DemoRunStartRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DemoRunResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ClerkBearer": []
-          }
-        ],
-        "summary": "Start a sanitized OpenAI demo run",
-        "tags": [
-          "catalog-studio-admin"
-        ]
-      }
-    },
-    "/api/admin/catalog/demo-runs/{run_id}": {
-      "get": {
-        "operationId": "demo_run_detail_api_admin_catalog_demo_runs__run_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Include sanitized developer metadata. Available only to the run owner.",
-            "in": "query",
-            "name": "developer",
-            "required": false,
-            "schema": {
-              "default": false,
-              "description": "Include sanitized developer metadata. Available only to the run owner.",
-              "title": "Developer",
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DemoRunResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ClerkBearer": []
-          }
-        ],
-        "summary": "Read a Catalog Studio demo timeline",
-        "tags": [
-          "catalog-studio-admin"
-        ]
-      }
-    },
-    "/api/admin/catalog/demo-runs/{run_id}/draft-commands": {
-      "post": {
-        "operationId": "create_catalog_ai_draft_api_admin_catalog_demo_runs__run_id__draft_commands_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "title": "Idempotency-Key",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CatalogAICommandRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CatalogAIWorkflowResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ClerkBearer": []
-          }
-        ],
-        "summary": "Generate or refine a moderated product draft",
-        "tags": [
-          "catalog-studio-admin"
-        ]
-      }
-    },
-    "/api/admin/catalog/demo-runs/{run_id}/events": {
-      "post": {
-        "operationId": "create_demo_event_api_admin_catalog_demo_runs__run_id__events_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DemoEventInput"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DemoEventResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ClerkBearer": []
-          }
-        ],
-        "summary": "Append a sanitized OpenAI demo event",
-        "tags": [
-          "catalog-studio-admin"
-        ]
-      }
-    },
     "/api/admin/catalog/products/drafts": {
       "post": {
         "operationId": "create_product_draft_api_admin_catalog_products_drafts_post",
@@ -5373,6 +5130,249 @@
           }
         ],
         "summary": "Atomically publish an approved catalog draft",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows": {
+      "post": {
+        "operationId": "create_catalog_workflow_api_admin_catalog_workflows_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogWorkflowStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWorkflowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Start a sanitized OpenAI catalog workflow",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}": {
+      "get": {
+        "operationId": "catalog_workflow_detail_api_admin_catalog_workflows__workflow_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include sanitized developer metadata. Available only to the workflow owner.",
+            "in": "query",
+            "name": "developer",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include sanitized developer metadata. Available only to the workflow owner.",
+              "title": "Developer",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogWorkflowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Read a Catalog Studio workflow timeline",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/draft-commands": {
+      "post": {
+        "operationId": "create_catalog_ai_draft_api_admin_catalog_workflows__workflow_id__draft_commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogAICommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogAIWorkflowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Generate or refine a moderated product draft",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/events": {
+      "post": {
+        "operationId": "create_workflow_event_api_admin_catalog_workflows__workflow_id__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowEventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Append a sanitized OpenAI workflow event",
         "tags": [
           "catalog-studio-admin"
         ]

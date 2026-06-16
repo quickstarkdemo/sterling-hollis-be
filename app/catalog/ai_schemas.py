@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.catalog.admin_schemas import ProductDraft
-from app.catalog.demo_schemas import DemoRunResponse
+from app.catalog.workflow_schemas import CatalogWorkflowResponse
 
 
 CatalogCategory = Literal[
@@ -94,4 +94,4 @@ class CatalogAICommandResult(BaseModel):
 
 
 class CatalogAIWorkflowResponse(CatalogAICommandResult):
-    run: DemoRunResponse
+    workflow: CatalogWorkflowResponse

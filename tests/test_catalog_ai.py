@@ -18,10 +18,10 @@ from app.catalog.ai_schemas import (
 )
 from app.config import Settings
 from app.database import Base
-from app.models import CatalogDraftRevision, OpenAIDemoEvent, OpenAIDemoRun, Store, SyntheticRun
+from app.models import CatalogDraftRevision, CatalogWorkflowEvent, CatalogWorkflow, Store, SyntheticRun
 from app.services.auth.clerk import AuthenticatedPrincipal
 from app.services.catalog_ai import CatalogAICommandError, execute_catalog_ai_command
-from app.services.demo_trace import get_demo_run_projection, start_demo_run
+from app.services.catalog_workflow import get_catalog_workflow_projection, start_catalog_workflow
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def _settings(**overrides) -> Settings:
         "catalog_studio_trace_max_object_keys": 50,
         "catalog_studio_trace_max_bytes": 16384,
         "catalog_studio_trace_redacted_keys": "",
-        "catalog_studio_shared_demo_runs": False,
+        "catalog_studio_shared_workflows": False,
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)
@@ -94,11 +94,11 @@ def _principal() -> AuthenticatedPrincipal:
     )
 
 
-def _run(db, settings: Settings, *, idempotency_key: str = "catalog-ai-run"):
-    return start_demo_run(
+def _run(db, settings: Settings, *, idempotency_key: str = "catalog-ai-workflow"):
+    return start_catalog_workflow(
         db,
         principal=_principal(),
-        title="Create a customer-demo product",
+        title="Create a customer-facing product",
         business_summary="Preparing a private product draft.",
         settings=settings,
         idempotency_key=idempotency_key,
@@ -192,13 +192,13 @@ class _FakeClient:
 
 def test_valid_instruction_saves_one_moderated_draft_and_safe_events(db):
     settings = _settings()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     client = _FakeClient(_response(_proposal()))
     private_instruction = "Create a black wool coat. Private presenter note: launch code ORCHID."
 
     result = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=CatalogAICommandRequest(
             instruction=private_instruction,
             expected_draft_version=0,
@@ -219,12 +219,12 @@ def test_valid_instruction_saves_one_moderated_draft_and_safe_events(db):
     assert len(db.scalars(select(CatalogDraftRevision)).all()) == 1
 
     events = db.scalars(
-        select(OpenAIDemoEvent)
-        .where(OpenAIDemoEvent.run_id == run.id)
-        .order_by(OpenAIDemoEvent.sequence)
+        select(CatalogWorkflowEvent)
+        .where(CatalogWorkflowEvent.workflow_id == workflow.id)
+        .order_by(CatalogWorkflowEvent.sequence)
     ).all()
     assert [(event.capability, event.status) for event in events] == [
-        ("run", "started"),
+        ("workflow", "started"),
         ("moderation", "succeeded"),
         ("responses", "succeeded"),
     ]
@@ -253,14 +253,14 @@ def test_valid_instruction_saves_one_moderated_draft_and_safe_events(db):
 
 def test_follow_up_refines_same_product_and_increments_draft_version(db):
     settings = _settings()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     client = _FakeClient(
         _response(_proposal()),
         _response(_proposal(title="Ivory Atelier Coat", color="Ivory")),
     )
     first = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=CatalogAICommandRequest(
             instruction="Create a black wool coat.", expected_draft_version=0
         ),
@@ -273,7 +273,7 @@ def test_follow_up_refines_same_product_and_increments_draft_version(db):
 
     refined = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=CatalogAICommandRequest(
             instruction="Change the color to ivory.",
             current_draft_id=first.draft.id,
@@ -291,7 +291,7 @@ def test_follow_up_refines_same_product_and_increments_draft_version(db):
     assert refined.draft.draft_version == 2
     assert refined.draft.product.title == "Ivory Atelier Coat"
     assert len(db.scalars(select(CatalogDraftRevision)).all()) == 2
-    assert db.get(OpenAIDemoRun, run.id).draft_revision_id == refined.draft.id
+    assert db.get(CatalogWorkflow, workflow.id).draft_revision_id == refined.draft.id
     second_input = json.dumps(client.responses.calls[1]["input"])
     assert "Midnight Atelier Coat" in second_input
     assert "Change the color to ivory" in second_input
@@ -299,11 +299,11 @@ def test_follow_up_refines_same_product_and_increments_draft_version(db):
 
 def test_new_run_cannot_create_a_conflicting_private_product_identity(db):
     settings = _settings()
-    first_run = _run(db, settings, idempotency_key="catalog-ai-run-1")
+    first_run = _run(db, settings, idempotency_key="catalog-ai-workflow-1")
     first_client = _FakeClient(_response(_proposal()))
     first = execute_catalog_ai_command(
         db,
-        run_id=first_run.id,
+        workflow_id=first_run.id,
         command=CatalogAICommandRequest(
             instruction="Create a black wool coat.", expected_draft_version=0
         ),
@@ -314,12 +314,12 @@ def test_new_run_cannot_create_a_conflicting_private_product_identity(db):
     )
     assert first.draft is not None
 
-    second_run = _run(db, settings, idempotency_key="catalog-ai-run-2")
+    second_run = _run(db, settings, idempotency_key="catalog-ai-workflow-2")
     second_client = _FakeClient(_response(_proposal()))
     with pytest.raises(CatalogAICommandError) as conflict:
         execute_catalog_ai_command(
             db,
-            run_id=second_run.id,
+            workflow_id=second_run.id,
             command=CatalogAICommandRequest(
                 instruction="Create the same black wool coat.", expected_draft_version=0
             ),
@@ -332,13 +332,13 @@ def test_new_run_cannot_create_a_conflicting_private_product_identity(db):
     assert conflict.value.code == "draft_state_conflict"
     assert conflict.value.status_code == 409
     assert len(db.scalars(select(CatalogDraftRevision)).all()) == 1
-    assert db.get(OpenAIDemoRun, second_run.id).draft_revision_id is None
+    assert db.get(CatalogWorkflow, second_run.id).draft_revision_id is None
 
 
 @pytest.mark.parametrize("blocked_side", ["input", "output"])
 def test_moderation_block_persists_no_draft_or_unsafe_copy(db, blocked_side):
     settings = _settings()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     unsafe_copy = "Unsafe generated copy that must never be persisted."
     proposal = _proposal(title=unsafe_copy)
     client = _FakeClient(
@@ -352,7 +352,7 @@ def test_moderation_block_persists_no_draft_or_unsafe_copy(db, blocked_side):
 
     result = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=CatalogAICommandRequest(
             instruction=unsafe_instruction, expected_draft_version=0
         ),
@@ -366,7 +366,7 @@ def test_moderation_block_persists_no_draft_or_unsafe_copy(db, blocked_side):
     assert result.draft is None
     assert db.scalars(select(CatalogDraftRevision)).all() == []
     events = db.scalars(
-        select(OpenAIDemoEvent).where(OpenAIDemoEvent.run_id == run.id)
+        select(CatalogWorkflowEvent).where(CatalogWorkflowEvent.workflow_id == workflow.id)
     ).all()
     persisted = json.dumps(
         [
@@ -397,11 +397,11 @@ def test_provider_failures_preserve_prior_draft_and_emit_retryable_event(
     db, provider_result, error_code
 ):
     settings = _settings()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     client = _FakeClient(_response(_proposal()), provider_result)
     first = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=CatalogAICommandRequest(
             instruction="Create a black wool coat.", expected_draft_version=0
         ),
@@ -415,7 +415,7 @@ def test_provider_failures_preserve_prior_draft_and_emit_retryable_event(
     with pytest.raises(CatalogAICommandError) as failure:
         execute_catalog_ai_command(
             db,
-            run_id=run.id,
+            workflow_id=workflow.id,
             command=CatalogAICommandRequest(
                 instruction="Refine the coat.",
                 current_draft_id=first.draft.id,
@@ -430,12 +430,12 @@ def test_provider_failures_preserve_prior_draft_and_emit_retryable_event(
     assert failure.value.code == error_code
     assert failure.value.retryable is True
     assert len(db.scalars(select(CatalogDraftRevision)).all()) == 1
-    assert db.get(OpenAIDemoRun, run.id).draft_revision_id == first.draft.id
+    assert db.get(CatalogWorkflow, workflow.id).draft_revision_id == first.draft.id
     failed_event = db.scalar(
-        select(OpenAIDemoEvent).where(
-            OpenAIDemoEvent.run_id == run.id,
-            OpenAIDemoEvent.status == "failed",
-            OpenAIDemoEvent.error_code == error_code,
+        select(CatalogWorkflowEvent).where(
+            CatalogWorkflowEvent.workflow_id == workflow.id,
+            CatalogWorkflowEvent.status == "failed",
+            CatalogWorkflowEvent.error_code == error_code,
         )
     )
     assert failed_event is not None
@@ -444,7 +444,7 @@ def test_provider_failures_preserve_prior_draft_and_emit_retryable_event(
 
 def test_missing_configuration_preserves_prior_state_and_is_replay_safe(db):
     settings = _settings(openai_api_key=None)
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     command = CatalogAICommandRequest(
         instruction="Create a black wool coat.", expected_draft_version=0
     )
@@ -453,7 +453,7 @@ def test_missing_configuration_preserves_prior_state_and_is_replay_safe(db):
         with pytest.raises(CatalogAICommandError) as failure:
             execute_catalog_ai_command(
                 db,
-                run_id=run.id,
+                workflow_id=workflow.id,
                 command=command,
                 idempotency_key="command-unconfigured",
                 principal=_principal(),
@@ -463,9 +463,9 @@ def test_missing_configuration_preserves_prior_state_and_is_replay_safe(db):
 
     assert db.scalars(select(CatalogDraftRevision)).all() == []
     failures = db.scalars(
-        select(OpenAIDemoEvent).where(
-            OpenAIDemoEvent.run_id == run.id,
-            OpenAIDemoEvent.error_code == "responses_unavailable",
+        select(CatalogWorkflowEvent).where(
+            CatalogWorkflowEvent.workflow_id == workflow.id,
+            CatalogWorkflowEvent.error_code == "responses_unavailable",
         )
     ).all()
     assert len(failures) == 1
@@ -473,7 +473,7 @@ def test_missing_configuration_preserves_prior_state_and_is_replay_safe(db):
 
 def test_missing_catalog_context_fails_before_provider_call_and_records_event(db):
     settings = _settings()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     db.execute(delete(Store))
     db.commit()
     client = _FakeClient(_response(_proposal()))
@@ -481,7 +481,7 @@ def test_missing_catalog_context_fails_before_provider_call_and_records_event(db
     with pytest.raises(CatalogAICommandError) as failure:
         execute_catalog_ai_command(
             db,
-            run_id=run.id,
+            workflow_id=workflow.id,
             command=CatalogAICommandRequest(
                 instruction="Create a black wool coat.", expected_draft_version=0
             ),
@@ -496,9 +496,9 @@ def test_missing_catalog_context_fails_before_provider_call_and_records_event(db
     assert client.responses.calls == []
     assert db.scalars(select(CatalogDraftRevision)).all() == []
     failure_event = db.scalar(
-        select(OpenAIDemoEvent).where(
-            OpenAIDemoEvent.run_id == run.id,
-            OpenAIDemoEvent.error_code == "catalog_context_unavailable",
+        select(CatalogWorkflowEvent).where(
+            CatalogWorkflowEvent.workflow_id == workflow.id,
+            CatalogWorkflowEvent.error_code == "catalog_context_unavailable",
         )
     )
     assert failure_event is not None
@@ -506,7 +506,7 @@ def test_missing_catalog_context_fails_before_provider_call_and_records_event(db
 
 def test_replayed_command_returns_saved_result_without_second_responses_call(db):
     settings = _settings()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     client = _FakeClient(_response(_proposal()))
     command = CatalogAICommandRequest(
         instruction="Create a black wool coat.", expected_draft_version=0
@@ -514,7 +514,7 @@ def test_replayed_command_returns_saved_result_without_second_responses_call(db)
 
     first = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=command,
         idempotency_key="command-replay",
         principal=_principal(),
@@ -523,7 +523,7 @@ def test_replayed_command_returns_saved_result_without_second_responses_call(db)
     )
     replay = execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=command,
         idempotency_key="command-replay",
         principal=_principal(),
@@ -533,7 +533,7 @@ def test_replayed_command_returns_saved_result_without_second_responses_call(db)
     with pytest.raises(HTTPException) as mismatch:
         execute_catalog_ai_command(
             db,
-            run_id=run.id,
+            workflow_id=workflow.id,
             command=CatalogAICommandRequest(
                 instruction="Create a different coat.", expected_draft_version=0
             ),
@@ -554,13 +554,13 @@ def test_replayed_command_returns_saved_result_without_second_responses_call(db)
 def test_developer_projection_contains_metadata_but_not_private_instruction(db):
     settings = _settings()
     principal = _principal()
-    run = _run(db, settings)
+    workflow = _run(db, settings)
     client = _FakeClient(_response(_proposal()))
     private_instruction = "Create the coat. private_prompt=internal-launch-plan"
 
     execute_catalog_ai_command(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         command=CatalogAICommandRequest(
             instruction=private_instruction, expected_draft_version=0
         ),
@@ -569,8 +569,8 @@ def test_developer_projection_contains_metadata_but_not_private_instruction(db):
         settings=settings,
         client=client,
     )
-    projection = get_demo_run_projection(
-        db, run_id=run.id, principal=principal, developer=True, settings=settings
+    projection = get_catalog_workflow_projection(
+        db, workflow_id=workflow.id, principal=principal, developer=True, settings=settings
     )
     encoded = projection.model_dump_json()
 

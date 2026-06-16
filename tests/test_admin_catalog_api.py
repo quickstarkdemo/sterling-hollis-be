@@ -22,7 +22,7 @@ from app.routers.admin_catalog import get_catalog_ai_service
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
-    OpenAIDemoEvent,
+    CatalogWorkflowEvent,
     Product,
     Store,
     SyntheticRun,
@@ -181,9 +181,9 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
     for path in (
         "/api/admin/session",
         "/api/admin/catalog/products/drafts",
-        "/api/admin/catalog/demo-runs",
-        "/api/admin/catalog/demo-runs/{run_id}",
-        "/api/admin/catalog/demo-runs/{run_id}/draft-commands",
+        "/api/admin/catalog/workflows",
+        "/api/admin/catalog/workflows/{workflow_id}",
+        "/api/admin/catalog/workflows/{workflow_id}/draft-commands",
     ):
         operations = schema["paths"][path]
         assert all(
@@ -191,6 +191,7 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
             for operation in operations.values()
             if isinstance(operation, dict)
         )
+    assert not any(path.startswith("/api/admin/catalog/demo-runs") for path in schema["paths"])
 
 
 def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch):
@@ -259,17 +260,17 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
             ai_settings, fake_client
         )
         started = client.post(
-            "/api/admin/catalog/demo-runs",
-            headers=_headers("api-ai-run"),
+            "/api/admin/catalog/workflows",
+            headers=_headers("api-ai-workflow"),
             json={
-                "title": "Create a customer-demo coat",
+                "title": "Create a customer-facing coat",
                 "business_summary": "Preparing the product draft.",
             },
         )
-        run_id = started.json()["id"]
+        workflow_id = started.json()["id"]
 
         created = client.post(
-            f"/api/admin/catalog/demo-runs/{run_id}/draft-commands",
+            f"/api/admin/catalog/workflows/{workflow_id}/draft-commands",
             headers=_headers("api-ai-command"),
             json={
                 "instruction": "Create a black wool evening coat.",
@@ -282,13 +283,13 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
         assert body["status"] == "succeeded"
         assert body["draft"]["draft_version"] == 1
         assert body["draft"]["product"]["title"] == "Midnight Atelier Coat"
-        assert body["run"]["draft_id"] == body["draft"]["id"]
-        assert [event["capability"] for event in body["run"]["events"]] == [
-            "run",
+        assert body["workflow"]["draft_id"] == body["draft"]["id"]
+        assert [event["capability"] for event in body["workflow"]["events"]] == [
+            "workflow",
             "moderation",
             "responses",
         ]
-        assert all("developer" not in event for event in body["run"]["events"])
+        assert all("developer" not in event for event in body["workflow"]["events"])
         with sessions() as db:
             revision = db.get(CatalogDraftRevision, body["draft"]["id"])
             assert revision is not None
@@ -303,17 +304,17 @@ def test_catalog_ai_command_api_reports_unavailable_responses_without_a_draft(mo
             unavailable_settings
         )
         started = client.post(
-            "/api/admin/catalog/demo-runs",
-            headers=_headers("api-ai-unavailable-run"),
+            "/api/admin/catalog/workflows",
+            headers=_headers("api-ai-unavailable-workflow"),
             json={
-                "title": "Create a customer-demo coat",
+                "title": "Create a customer-facing coat",
                 "business_summary": "Preparing the product draft.",
             },
         )
-        run_id = started.json()["id"]
+        workflow_id = started.json()["id"]
 
         response = client.post(
-            f"/api/admin/catalog/demo-runs/{run_id}/draft-commands",
+            f"/api/admin/catalog/workflows/{workflow_id}/draft-commands",
             headers=_headers("api-ai-unavailable-command"),
             json={
                 "instruction": "Create a black wool evening coat.",
@@ -332,30 +333,30 @@ def test_catalog_ai_command_api_reports_unavailable_responses_without_a_draft(mo
         with sessions() as db:
             assert db.scalars(select(CatalogDraftRevision)).all() == []
             failure = db.scalar(
-                select(OpenAIDemoEvent).where(
-                    OpenAIDemoEvent.run_id == run_id,
-                    OpenAIDemoEvent.error_code == "responses_unavailable",
+                select(CatalogWorkflowEvent).where(
+                    CatalogWorkflowEvent.workflow_id == workflow_id,
+                    CatalogWorkflowEvent.error_code == "responses_unavailable",
                 )
             )
             assert failure is not None
 
 
-def test_demo_run_api_defaults_to_business_view_and_sanitizes_developer_view(monkeypatch):
+def test_catalog_workflow_api_defaults_to_business_view_and_sanitizes_developer_view(monkeypatch):
     with _admin_catalog_client(monkeypatch) as (client, sessions):
         started = client.post(
-            "/api/admin/catalog/demo-runs",
-            headers=_headers("start-demo-run-1"),
+            "/api/admin/catalog/workflows",
+            headers=_headers("start-demo-workflow-1"),
             json={
                 "title": "Create a demo coat",
                 "business_summary": "Preparing a product draft.",
             },
         )
         assert started.status_code == 201
-        run_id = started.json()["id"]
+        workflow_id = started.json()["id"]
         assert "developer" not in started.json()["events"][0]
 
         event = client.post(
-            f"/api/admin/catalog/demo-runs/{run_id}/events",
+            f"/api/admin/catalog/workflows/{workflow_id}/events",
             json={
                 "client_event_id": "responses-api-1",
                 "stage": "draft",
@@ -372,9 +373,9 @@ def test_demo_run_api_defaults_to_business_view_and_sanitizes_developer_view(mon
                 "response_payload": {"draft_id": "draft_demo", "status": "ready"},
             },
         )
-        business = client.get(f"/api/admin/catalog/demo-runs/{run_id}")
+        business = client.get(f"/api/admin/catalog/workflows/{workflow_id}")
         developer = client.get(
-            f"/api/admin/catalog/demo-runs/{run_id}", params={"developer": "true"}
+            f"/api/admin/catalog/workflows/{workflow_id}", params={"developer": "true"}
         )
 
         assert event.status_code == 201
@@ -387,9 +388,9 @@ def test_demo_run_api_defaults_to_business_view_and_sanitizes_developer_view(mon
         assert "browser-secret" not in developer.text
         with sessions() as db:
             persisted = db.scalar(
-                select(OpenAIDemoEvent).where(
-                    OpenAIDemoEvent.run_id == run_id,
-                    OpenAIDemoEvent.sequence == 2,
+                select(CatalogWorkflowEvent).where(
+                    CatalogWorkflowEvent.workflow_id == workflow_id,
+                    CatalogWorkflowEvent.sequence == 2,
                 )
             )
             assert persisted is not None

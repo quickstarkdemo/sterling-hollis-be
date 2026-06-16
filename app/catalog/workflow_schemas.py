@@ -6,8 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-DemoCapability = Literal[
-    "run",
+WorkflowCapability = Literal[
+    "workflow",
     "responses",
     "moderation",
     "image_generation",
@@ -15,7 +15,7 @@ DemoCapability = Literal[
     "catalog",
     "publication",
 ]
-DemoEventStatus = Literal[
+WorkflowEventStatus = Literal[
     "queued",
     "started",
     "running",
@@ -27,7 +27,7 @@ DemoEventStatus = Literal[
 ]
 
 
-class DemoRunStartRequest(BaseModel):
+class CatalogWorkflowStartRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     business_summary: str = Field(min_length=1, max_length=1000)
     draft_id: str | None = Field(default=None, max_length=64)
@@ -35,11 +35,11 @@ class DemoRunStartRequest(BaseModel):
     published_product_id: str | None = Field(default=None, max_length=64)
 
 
-class DemoEventInput(BaseModel):
+class WorkflowEventInput(BaseModel):
     client_event_id: str = Field(min_length=1, max_length=128)
     stage: str = Field(min_length=1, max_length=64)
-    capability: DemoCapability
-    status: DemoEventStatus
+    capability: WorkflowCapability
+    status: WorkflowEventStatus
     business_summary: str = Field(min_length=1, max_length=1000)
     model: str | None = Field(default=None, max_length=128)
     request_id: str | None = Field(default=None, max_length=128)
@@ -57,7 +57,7 @@ class DemoEventInput(BaseModel):
     completed_at: datetime | None = None
 
 
-class DemoDeveloperEvent(BaseModel):
+class WorkflowDeveloperEvent(BaseModel):
     model: str | None = None
     request_id: str | None = None
     duration_ms: int | None = None
@@ -69,19 +69,19 @@ class DemoDeveloperEvent(BaseModel):
     payload_expired: bool = False
 
 
-class DemoEventResponse(BaseModel):
+class WorkflowEventResponse(BaseModel):
     id: str
     sequence: int
     stage: str
-    capability: DemoCapability
-    status: DemoEventStatus
+    capability: WorkflowCapability
+    status: WorkflowEventStatus
     business_summary: str
     retryable: bool
     created_at: datetime
-    developer: DemoDeveloperEvent | None = None
+    developer: WorkflowDeveloperEvent | None = None
 
 
-class DemoRunResponse(BaseModel):
+class CatalogWorkflowResponse(BaseModel):
     id: str
     title: str
     business_summary: str
@@ -94,4 +94,4 @@ class DemoRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     expires_at: datetime
-    events: list[DemoEventResponse]
+    events: list[WorkflowEventResponse]

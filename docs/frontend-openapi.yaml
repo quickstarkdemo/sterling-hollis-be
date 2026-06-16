@@ -169,10 +169,10 @@ paths:
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Valid Clerk user is not an administrator.}
         "404": {description: Product or draft history not found.}
-  /api/admin/catalog/demo-runs:
+  /api/admin/catalog/workflows:
     post:
       tags: [catalog-studio-admin]
-      summary: Start a sanitized OpenAI demo run
+      summary: Start a sanitized OpenAI demo workflow
       security:
         - bearerAuth: []
       parameters:
@@ -182,25 +182,25 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/DemoRunStartRequest"
+              $ref: "#/components/schemas/CatalogWorkflowStartRequest"
       responses:
         "201":
-          description: Administrator-owned run with its initial business event.
+          description: Administrator-owned workflow with its initial business event.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DemoRunResponse"
+                $ref: "#/components/schemas/CatalogWorkflowResponse"
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Valid Clerk user is not an administrator.}
         "409": {description: A linked draft, image job, or product does not exist.}
-  /api/admin/catalog/demo-runs/{run_id}/events:
+  /api/admin/catalog/workflows/{workflow_id}/events:
     post:
       tags: [catalog-studio-admin]
-      summary: Append a sanitized, ordered OpenAI demo event
+      summary: Append a sanitized, ordered OpenAI workflow event
       security:
         - bearerAuth: []
       parameters:
-        - name: run_id
+        - name: workflow_id
           in: path
           required: true
           schema: {type: string}
@@ -209,26 +209,26 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/DemoEventInput"
+              $ref: "#/components/schemas/WorkflowEventInput"
       responses:
         "201":
           description: Sanitized event projection; exact client-event retries replay this response.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DemoEventResponse"
+                $ref: "#/components/schemas/WorkflowEventResponse"
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Valid Clerk user is not an administrator.}
         "404": {description: Run is missing or owned by another administrator.}
         "409": {description: Conflicting client event ID or invalid linked record.}
-  /api/admin/catalog/demo-runs/{run_id}/draft-commands:
+  /api/admin/catalog/workflows/{workflow_id}/draft-commands:
     post:
       tags: [catalog-studio-admin]
       summary: Generate or refine a moderated product draft
       security:
         - bearerAuth: []
       parameters:
-        - name: run_id
+        - name: workflow_id
           in: path
           required: true
           schema: {type: string}
@@ -253,20 +253,20 @@ paths:
         "502": {description: Moderation or structured Responses output failed.}
         "503": {description: Responses or catalog context is not configured.}
         "504": {description: Responses timed out.}
-  /api/admin/catalog/demo-runs/{run_id}:
+  /api/admin/catalog/workflows/{workflow_id}:
     get:
       tags: [catalog-studio-admin]
       summary: Read a business or developer demo timeline
       security:
         - bearerAuth: []
       parameters:
-        - name: run_id
+        - name: workflow_id
           in: path
           required: true
           schema: {type: string}
         - name: developer
           in: query
-          description: Include sanitized developer fields; available only to the run owner.
+          description: Include sanitized developer fields; available only to the workflow owner.
           schema: {type: boolean, default: false}
       responses:
         "200":
@@ -274,7 +274,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DemoRunResponse"
+                $ref: "#/components/schemas/CatalogWorkflowResponse"
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Developer view requested by a non-owner.}
         "404": {description: Run is missing or not shared with the caller.}
@@ -1175,7 +1175,7 @@ components:
     CatalogAIWorkflowResponse:
       type: object
       additionalProperties: false
-      required: [status, message, retryable, replayed, run]
+      required: [status, message, retryable, replayed, workflow]
       properties:
         status: {type: string, enum: [succeeded, blocked]}
         message: {type: string}
@@ -1185,9 +1185,9 @@ components:
           allOf:
             - $ref: "#/components/schemas/CatalogAIDraftResult"
           nullable: true
-        run:
-          $ref: "#/components/schemas/DemoRunResponse"
-    DemoRunStartRequest:
+        workflow:
+          $ref: "#/components/schemas/CatalogWorkflowResponse"
+    CatalogWorkflowStartRequest:
       type: object
       additionalProperties: false
       required: [title, business_summary]
@@ -1197,7 +1197,7 @@ components:
         draft_id: {type: string, nullable: true}
         image_job_id: {type: string, nullable: true}
         published_product_id: {type: string, nullable: true}
-    DemoEventInput:
+    WorkflowEventInput:
       type: object
       additionalProperties: false
       required: [client_event_id, stage, capability, status, business_summary]
@@ -1206,7 +1206,7 @@ components:
         stage: {type: string, minLength: 1, maxLength: 64}
         capability:
           type: string
-          enum: [run, responses, moderation, image_generation, realtime, catalog, publication]
+          enum: [workflow, responses, moderation, image_generation, realtime, catalog, publication]
         status:
           type: string
           enum: [queued, started, running, succeeded, blocked, failed, retrying, completed]
@@ -1225,7 +1225,7 @@ components:
         published_product_id: {type: string, nullable: true}
         started_at: {type: string, format: date-time, nullable: true}
         completed_at: {type: string, format: date-time, nullable: true}
-    DemoDeveloperEvent:
+    WorkflowDeveloperEvent:
       type: object
       additionalProperties: false
       properties:
@@ -1238,7 +1238,7 @@ components:
         response_payload: {type: object, additionalProperties: true}
         error_code: {type: string, nullable: true}
         payload_expired: {type: boolean}
-    DemoEventResponse:
+    WorkflowEventResponse:
       type: object
       additionalProperties: false
       required: [id, sequence, stage, capability, status, business_summary, retryable, created_at]
@@ -1248,7 +1248,7 @@ components:
         stage: {type: string}
         capability:
           type: string
-          enum: [run, responses, moderation, image_generation, realtime, catalog, publication]
+          enum: [workflow, responses, moderation, image_generation, realtime, catalog, publication]
         status:
           type: string
           enum: [queued, started, running, succeeded, blocked, failed, retrying, completed]
@@ -1257,9 +1257,9 @@ components:
         created_at: {type: string, format: date-time}
         developer:
           allOf:
-            - $ref: "#/components/schemas/DemoDeveloperEvent"
+            - $ref: "#/components/schemas/WorkflowDeveloperEvent"
           nullable: true
-    DemoRunResponse:
+    CatalogWorkflowResponse:
       type: object
       additionalProperties: false
       required: [id, title, business_summary, status, current_stage, is_owner, created_at, updated_at, expires_at, events]
@@ -1279,7 +1279,7 @@ components:
         events:
           type: array
           items:
-            $ref: "#/components/schemas/DemoEventResponse"
+            $ref: "#/components/schemas/WorkflowEventResponse"
     ChatCurrentProduct:
       type: object
       additionalProperties: false
@@ -1910,7 +1910,7 @@ components:
     ImageGenerationJobRequest:
       type: object
       properties:
-        run_id:
+        workflow_id:
           type: string
           nullable: true
         store_id:
@@ -1984,7 +1984,7 @@ components:
       properties:
         id:
           type: string
-        run_id:
+        workflow_id:
           type: string
           nullable: true
         store_id:

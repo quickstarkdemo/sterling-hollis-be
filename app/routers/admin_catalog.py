@@ -18,11 +18,11 @@ from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
     CatalogAIWorkflowResponse,
 )
-from app.catalog.demo_schemas import (
-    DemoEventInput,
-    DemoEventResponse,
-    DemoRunResponse,
-    DemoRunStartRequest,
+from app.catalog.workflow_schemas import (
+    CatalogWorkflowResponse,
+    CatalogWorkflowStartRequest,
+    WorkflowEventInput,
+    WorkflowEventResponse,
 )
 from app.config import Settings, get_settings
 from app.database import get_db
@@ -33,11 +33,11 @@ from app.services.catalog_admin import (
     publish_draft,
 )
 from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
-from app.services.demo_trace import (
-    append_demo_event,
-    get_demo_run_projection,
-    project_demo_event,
-    start_demo_run,
+from app.services.catalog_workflow import (
+    append_workflow_event,
+    get_catalog_workflow_projection,
+    project_workflow_event,
+    start_catalog_workflow,
 )
 from app.services.auth.admin import catalog_studio_capabilities, require_catalog_admin
 from app.services.auth.clerk import AuthenticatedPrincipal
@@ -188,20 +188,20 @@ def admin_catalog_product(
 
 
 @router.post(
-    "/catalog/demo-runs",
-    response_model=DemoRunResponse,
+    "/catalog/workflows",
+    response_model=CatalogWorkflowResponse,
     response_model_exclude_none=True,
     status_code=status.HTTP_201_CREATED,
-    summary="Start a sanitized OpenAI demo run",
+    summary="Start a sanitized OpenAI catalog workflow",
 )
-def create_demo_run(
-    request: DemoRunStartRequest,
+def create_catalog_workflow(
+    request: CatalogWorkflowStartRequest,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
     settings: Settings = Depends(get_settings),
-) -> DemoRunResponse:
-    run = start_demo_run(
+) -> CatalogWorkflowResponse:
+    workflow = start_catalog_workflow(
         db,
         principal=principal,
         title=request.title,
@@ -212,9 +212,9 @@ def create_demo_run(
         image_job_id=request.image_job_id,
         published_product_id=request.published_product_id,
     )
-    return get_demo_run_projection(
+    return get_catalog_workflow_projection(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         principal=principal,
         developer=False,
         settings=settings,
@@ -222,48 +222,48 @@ def create_demo_run(
 
 
 @router.post(
-    "/catalog/demo-runs/{run_id}/events",
-    response_model=DemoEventResponse,
+    "/catalog/workflows/{workflow_id}/events",
+    response_model=WorkflowEventResponse,
     response_model_exclude_none=True,
     status_code=status.HTTP_201_CREATED,
-    summary="Append a sanitized OpenAI demo event",
+    summary="Append a sanitized OpenAI workflow event",
 )
-def create_demo_event(
-    run_id: str,
-    request: DemoEventInput,
+def create_workflow_event(
+    workflow_id: str,
+    request: WorkflowEventInput,
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
     settings: Settings = Depends(get_settings),
-) -> DemoEventResponse:
-    event = append_demo_event(
+) -> WorkflowEventResponse:
+    event = append_workflow_event(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         event=request,
         settings=settings,
     )
-    return project_demo_event(event, developer=True)
+    return project_workflow_event(event, developer=True)
 
 
 @router.get(
-    "/catalog/demo-runs/{run_id}",
-    response_model=DemoRunResponse,
+    "/catalog/workflows/{workflow_id}",
+    response_model=CatalogWorkflowResponse,
     response_model_exclude_none=True,
-    summary="Read a Catalog Studio demo timeline",
+    summary="Read a Catalog Studio workflow timeline",
 )
-def demo_run_detail(
-    run_id: str,
+def catalog_workflow_detail(
+    workflow_id: str,
     developer: bool = Query(
         default=False,
-        description="Include sanitized developer metadata. Available only to the run owner.",
+        description="Include sanitized developer metadata. Available only to the workflow owner.",
     ),
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
     settings: Settings = Depends(get_settings),
-) -> DemoRunResponse:
-    return get_demo_run_projection(
+) -> CatalogWorkflowResponse:
+    return get_catalog_workflow_projection(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         developer=developer,
         settings=settings,
@@ -271,13 +271,13 @@ def demo_run_detail(
 
 
 @router.post(
-    "/catalog/demo-runs/{run_id}/draft-commands",
+    "/catalog/workflows/{workflow_id}/draft-commands",
     response_model=CatalogAIWorkflowResponse,
     response_model_exclude_none=True,
     summary="Generate or refine a moderated product draft",
 )
 def create_catalog_ai_draft(
-    run_id: str,
+    workflow_id: str,
     request: CatalogAICommandRequest,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
     db: Session = Depends(get_db),
@@ -288,7 +288,7 @@ def create_catalog_ai_draft(
     try:
         result = service.execute(
             db,
-            run_id=run_id,
+            workflow_id=workflow_id,
             command=request,
             idempotency_key=idempotency_key,
             principal=principal,
@@ -302,11 +302,11 @@ def create_catalog_ai_draft(
                 "retryable": exc.retryable,
             },
         ) from exc
-    run = get_demo_run_projection(
+    workflow = get_catalog_workflow_projection(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         developer=False,
         settings=settings,
     )
-    return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), run=run)
+    return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), workflow=workflow)
