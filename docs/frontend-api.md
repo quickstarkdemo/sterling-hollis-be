@@ -68,14 +68,17 @@ Generated image files are served from:
 | Image analysis | `POST` | `/api/image-analysis` |
 | Image recommendations | `POST` | `/api/recommendations/image` |
 | Storefront chat | `POST` | `/api/chat` |
+| Catalog Studio administrator session and capabilities | `GET` | `/api/admin/session` |
 | Clerk demo fault state | `GET` | `/api/demo/observability` |
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
 | Clerk demo fault reset | `POST` | `/api/demo/observability/reset` |
 
 ## Admin/Operations Endpoints Useful During Buildout
 
-These should be treated as operator/admin controls, not unauthenticated public
-frontend actions.
+These are legacy operator controls for local scripts and maintenance. Public
+deployments set `ENABLE_LEGACY_ADMIN_ROUTES=false`; if a production-like
+environment explicitly enables them, the backend applies the same Catalog
+Studio administrator policy used by `/api/admin/*`.
 
 | Purpose | Method | Path |
 | --- | --- | --- |
@@ -204,6 +207,49 @@ Supported selected tools:
 - `order_status`
 - `chat_response`
 
+## Catalog Studio Administrator Session
+
+`GET /api/admin/session` is the server-authoritative browser entry point for
+Catalog Studio authorization and capability availability. Send the Clerk
+session token as `Authorization: Bearer <Clerk token>`. The token is verified
+for signature, issuer, expiry, subject, and authorized party before the
+administrator policy runs.
+
+Administrators can be configured by normalized email, Clerk subject, or one
+custom claim:
+
+- `CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS`
+- `CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS`
+- `CATALOG_STUDIO_ADMIN_CLAIM_PATH` and `CATALOG_STUDIO_ADMIN_CLAIM_VALUE`
+
+Existing demo-observability allowlists and `CLERK_DEMO_CUSTOMER_EMAIL` remain
+valid administrator sources for backward compatibility. The response contains
+only booleans describing whether Responses, Moderation, Image Generation,
+Realtime, worker storage, and catalog dependencies are configured. It does not
+probe providers or return configuration values.
+
+```http
+GET /api/admin/session
+authorization: Bearer <Clerk token>
+```
+
+```json
+{
+  "authorized": true,
+  "capabilities": {
+    "responses": {"configured": true},
+    "moderation": {"configured": true},
+    "image_generation": {"configured": true},
+    "realtime": {"configured": false},
+    "worker_storage": {"configured": true},
+    "catalog": {"configured": true}
+  }
+}
+```
+
+Missing or invalid Clerk credentials return `401`. Valid non-administrator
+credentials return `403`. Successful responses use `Cache-Control: no-store`.
+
 ## Demo Observability Toggle
 
 The Datadog demo fault harness is an operator/demo control. Do not expose it as
@@ -211,7 +257,8 @@ a normal shopper-facing setting. Clerk-authenticated demo panels should call
 the `/api/demo/observability` endpoints with `Authorization: Bearer <Clerk token>`.
 The caller must match `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_EMAILS`,
 `DEMO_OBSERVABILITY_CLERK_AUTHORIZED_SUBJECTS`, or `CLERK_DEMO_CUSTOMER_EMAIL`.
-Local/admin tooling can use the `/admin/demo/observability` endpoints.
+Local/admin tooling can use `/admin/demo/observability` only when legacy admin
+routes are enabled. Public deployments use the protected `/api` endpoints.
 
 ```http
 GET /api/demo/observability

@@ -4,13 +4,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import re
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.observability.llm_otel import initialize_llm_otel
+from app.routers.admin_catalog import router as admin_catalog_router
 from app.routers.admin_synthetic import router as admin_router
 from app.routers.catalog import router as catalog_router
 from app.routers.chat import router as chat_router
@@ -22,6 +23,7 @@ from app.services.demo_observability import (
     demo_network_outage_response_payload,
     log_network_outage_block,
 )
+from app.services.auth.admin import require_catalog_admin
 
 
 OAI_SANDBOX_ORIGIN_RE = re.compile(r"^https://.*\.oaiusercontent\.com$")
@@ -89,8 +91,8 @@ def _demo_network_outage_should_block(path: str, *, product_image_path: str) -> 
     return path.startswith(DEMO_NETWORK_OUTAGE_BLOCKED_PREFIXES)
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
     initialize_llm_otel()
     fashion_mcp = None
     if settings.enable_mcp_adapter:
@@ -150,7 +152,14 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    app.include_router(admin_router)
+    app.include_router(admin_catalog_router)
+    if settings.enable_legacy_admin_routes:
+        legacy_dependencies = (
+            [Depends(require_catalog_admin)]
+            if settings.environment.strip().lower() in {"prod", "production"}
+            else []
+        )
+        app.include_router(admin_router, dependencies=legacy_dependencies)
     app.include_router(demo_observability_router)
     app.include_router(catalog_router)
     app.include_router(chat_router)

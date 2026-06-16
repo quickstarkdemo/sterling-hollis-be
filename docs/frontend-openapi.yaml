@@ -17,9 +17,37 @@ tags:
   - name: recommendations
   - name: images
   - name: admin
-    description: Operator/admin routes. Protect with a private network, reverse proxy, Cloudflare Access, VPN, or equivalent identity boundary before remote exposure.
+    description: Legacy operator routes; disabled by default in public deployments and policy-protected when enabled in production.
+  - name: catalog-studio-admin
+    description: Clerk-authenticated Catalog Studio administration contract.
   - name: demo
 paths:
+  /api/admin/session:
+    get:
+      tags: [catalog-studio-admin]
+      summary: Resolve Catalog Studio administrator session
+      description: >
+        Verifies the Clerk session and server-side administrator policy, then
+        returns configuration-only capability flags without probing providers
+        or exposing configuration values.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Authorized Catalog Studio session. Response is not cacheable.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogStudioSessionResponse"
+        "401":
+          description: Missing or invalid Clerk token.
+        "403":
+          description: Valid Clerk user is not a Catalog Studio administrator.
   /api/chat:
     post:
       tags: [chat]
@@ -739,6 +767,40 @@ components:
         minimum: 0
         default: 0
   schemas:
+    CapabilityStatus:
+      type: object
+      additionalProperties: false
+      required: [configured]
+      properties:
+        configured:
+          type: boolean
+    CatalogStudioCapabilities:
+      type: object
+      additionalProperties: false
+      required: [responses, moderation, image_generation, realtime, worker_storage, catalog]
+      properties:
+        responses:
+          $ref: "#/components/schemas/CapabilityStatus"
+        moderation:
+          $ref: "#/components/schemas/CapabilityStatus"
+        image_generation:
+          $ref: "#/components/schemas/CapabilityStatus"
+        realtime:
+          $ref: "#/components/schemas/CapabilityStatus"
+        worker_storage:
+          $ref: "#/components/schemas/CapabilityStatus"
+        catalog:
+          $ref: "#/components/schemas/CapabilityStatus"
+    CatalogStudioSessionResponse:
+      type: object
+      additionalProperties: false
+      required: [authorized, capabilities]
+      properties:
+        authorized:
+          type: boolean
+          enum: [true]
+        capabilities:
+          $ref: "#/components/schemas/CatalogStudioCapabilities"
     ChatCurrentProduct:
       type: object
       additionalProperties: false
