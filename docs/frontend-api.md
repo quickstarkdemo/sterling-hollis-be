@@ -76,6 +76,7 @@ Generated image files are served from:
 | Inspect product lifecycle and draft history | `GET` | `/api/admin/catalog/products/{product_id}` |
 | Start sanitized OpenAI demo run | `POST` | `/api/admin/catalog/demo-runs` |
 | Append ordered demo event | `POST` | `/api/admin/catalog/demo-runs/{run_id}/events` |
+| Generate or refine moderated product draft | `POST` | `/api/admin/catalog/demo-runs/{run_id}/draft-commands` |
 | Read business or developer timeline | `GET` | `/api/admin/catalog/demo-runs/{run_id}` |
 | Clerk demo fault state | `GET` | `/api/demo/observability` |
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
@@ -229,6 +230,9 @@ custom claim:
 - `CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS`
 - `CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS`
 - `CATALOG_STUDIO_ADMIN_CLAIM_PATH` and `CATALOG_STUDIO_ADMIN_CLAIM_VALUE`
+- `CATALOG_STUDIO_RESPONSES_MODEL` and `CATALOG_STUDIO_MODERATION_MODEL`
+- `CATALOG_STUDIO_RESPONSES_TIMEOUT_SECONDS` and
+  `CATALOG_STUDIO_RESPONSES_MAX_OUTPUT_TOKENS`
 
 Existing demo-observability allowlists and `CLERK_DEMO_CUSTOMER_EMAIL` remain
 valid administrator sources for backward compatibility. The response contains
@@ -361,6 +365,54 @@ identity, configured private keys, oversized strings/arrays/objects, and unknown
 fields are redacted, omitted, or replaced with deterministic truncation markers.
 After the configured retention period, event payloads are replaced with an
 expiry marker while run metadata and catalog records remain intact.
+
+## Responses and Moderation Draft Commands
+
+`POST /api/admin/catalog/demo-runs/{run_id}/draft-commands` turns one bounded
+presenter instruction into a private, schema-validated product draft. The
+backend uses the Responses API with strict structured output and requests input
+and output moderation signals in the same provider call. The application blocks
+the command when either moderation result is flagged, and no generated copy or
+draft is persisted in that case.
+
+Every command requires an `Idempotency-Key`. An exact replay returns the saved
+result without another Responses call. To refine a draft, send its current ID
+and the `draft_version` returned by the previous command. Refinements create a
+new private revision for the same product, so the published catalog remains
+unchanged until an administrator explicitly publishes an approved revision.
+
+```http
+POST /api/admin/catalog/demo-runs/{run_id}/draft-commands
+authorization: Bearer <Clerk token>
+idempotency-key: catalog-demo-draft-1
+content-type: application/json
+```
+
+```json
+{
+  "instruction": "Create a black wool evening coat with architectural lines.",
+  "expected_draft_version": 0
+}
+```
+
+For a follow-up refinement:
+
+```json
+{
+  "instruction": "Change the color to ivory and keep the price unchanged.",
+  "current_draft_id": "draft_...",
+  "expected_draft_version": 1
+}
+```
+
+The success response contains the validated private draft and the current
+business timeline. The timeline records distinct Moderation and Responses
+events. The owner-only `developer=true` run projection adds bounded model,
+request ID, latency, usage, policy, and structured-output metadata without the
+presenter instruction, system instructions, private reasoning, or raw provider
+objects. Provider timeouts and invalid structured output leave the prior draft
+unchanged and return a safe error whose `detail` object contains `code`,
+`message`, and `retryable` fields.
 
 ## Demo Observability Toggle
 

@@ -14,6 +14,10 @@ from app.catalog.admin_schemas import (
     LifecycleMutationResponse,
     PublishRequest,
 )
+from app.catalog.ai_schemas import (
+    CatalogAICommandRequest,
+    CatalogAIWorkflowResponse,
+)
 from app.catalog.demo_schemas import (
     DemoEventInput,
     DemoEventResponse,
@@ -28,6 +32,7 @@ from app.services.catalog_admin import (
     get_admin_product,
     publish_draft,
 )
+from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
 from app.services.demo_trace import (
     append_demo_event,
     get_demo_run_projection,
@@ -39,6 +44,12 @@ from app.services.auth.clerk import AuthenticatedPrincipal
 
 
 router = APIRouter(prefix="/api/admin", tags=["catalog-studio-admin"])
+
+
+def get_catalog_ai_service(
+    settings: Settings = Depends(get_settings),
+) -> CatalogAIService:
+    return CatalogAIService(settings)
 
 
 class CapabilityStatus(BaseModel):
@@ -257,3 +268,45 @@ def demo_run_detail(
         developer=developer,
         settings=settings,
     )
+
+
+@router.post(
+    "/catalog/demo-runs/{run_id}/draft-commands",
+    response_model=CatalogAIWorkflowResponse,
+    response_model_exclude_none=True,
+    summary="Generate or refine a moderated product draft",
+)
+def create_catalog_ai_draft(
+    run_id: str,
+    request: CatalogAICommandRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+    service: CatalogAIService = Depends(get_catalog_ai_service),
+) -> CatalogAIWorkflowResponse:
+    try:
+        result = service.execute(
+            db,
+            run_id=run_id,
+            command=request,
+            idempotency_key=idempotency_key,
+            principal=principal,
+        )
+    except CatalogAICommandError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail,
+                "retryable": exc.retryable,
+            },
+        ) from exc
+    run = get_demo_run_projection(
+        db,
+        run_id=run_id,
+        principal=principal,
+        developer=False,
+        settings=settings,
+    )
+    return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), run=run)

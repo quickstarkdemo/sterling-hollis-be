@@ -61,6 +61,10 @@ def test_demo_observability_defaults_from_env(monkeypatch):
 
 
 def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
+    monkeypatch.setenv("CATALOG_STUDIO_RESPONSES_MODEL", "gpt-5.5-test")
+    monkeypatch.setenv("CATALOG_STUDIO_MODERATION_MODEL", "omni-moderation-test")
+    monkeypatch.setenv("CATALOG_STUDIO_RESPONSES_TIMEOUT_SECONDS", "45")
+    monkeypatch.setenv("CATALOG_STUDIO_RESPONSES_MAX_OUTPUT_TOKENS", "1800")
     monkeypatch.setenv("CATALOG_STUDIO_SHARED_DEMO_RUNS", "true")
     monkeypatch.setenv("CATALOG_STUDIO_TRACE_RETENTION_DAYS", "3")
     monkeypatch.setenv("CATALOG_STUDIO_TRACE_MAX_BYTES", "8192")
@@ -69,6 +73,10 @@ def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
 
     settings = get_settings()
 
+    assert settings.catalog_studio_responses_model == "gpt-5.5-test"
+    assert settings.catalog_studio_moderation_model == "omni-moderation-test"
+    assert settings.catalog_studio_responses_timeout_seconds == 45
+    assert settings.catalog_studio_responses_max_output_tokens == 1800
     assert settings.catalog_studio_shared_demo_runs is True
     assert settings.catalog_studio_trace_retention_days == 3
     assert settings.catalog_studio_trace_max_bytes == 8192
