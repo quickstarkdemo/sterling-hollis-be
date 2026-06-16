@@ -221,6 +221,38 @@ paths:
         "403": {description: Valid Clerk user is not an administrator.}
         "404": {description: Run is missing or owned by another administrator.}
         "409": {description: Conflicting client event ID or invalid linked record.}
+  /api/admin/catalog/demo-runs/{run_id}/draft-commands:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Generate or refine a moderated product draft
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogAICommandRequest"
+      responses:
+        "200":
+          description: Moderation-approved private draft, or a safe blocked result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogAIWorkflowResponse"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Run or current draft not found.}
+        "409": {description: Stale draft, idempotency conflict, or command already processing.}
+        "502": {description: Moderation or structured Responses output failed.}
+        "503": {description: Responses or catalog context is not configured.}
+        "504": {description: Responses timed out.}
   /api/admin/catalog/demo-runs/{run_id}:
     get:
       tags: [catalog-studio-admin]
@@ -1119,6 +1151,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DraftRevisionResponse"
+    CatalogAICommandRequest:
+      type: object
+      additionalProperties: false
+      required: [instruction, expected_draft_version]
+      properties:
+        instruction: {type: string, minLength: 1, maxLength: 4000}
+        current_draft_id: {type: string, nullable: true, maxLength: 64}
+        expected_draft_version: {type: integer, minimum: 0}
+    CatalogAIDraftResult:
+      type: object
+      additionalProperties: false
+      required: [id, product_id, draft_version, base_version, moderation_state, image_direction, product]
+      properties:
+        id: {type: string}
+        product_id: {type: string}
+        draft_version: {type: integer, minimum: 1}
+        base_version: {type: integer, minimum: 0}
+        moderation_state: {type: string, enum: [approved]}
+        image_direction: {type: string}
+        product:
+          $ref: "#/components/schemas/CatalogProductDraft"
+    CatalogAIWorkflowResponse:
+      type: object
+      additionalProperties: false
+      required: [status, message, retryable, replayed, run]
+      properties:
+        status: {type: string, enum: [succeeded, blocked]}
+        message: {type: string}
+        retryable: {type: boolean}
+        replayed: {type: boolean}
+        draft:
+          allOf:
+            - $ref: "#/components/schemas/CatalogAIDraftResult"
+          nullable: true
+        run:
+          $ref: "#/components/schemas/DemoRunResponse"
     DemoRunStartRequest:
       type: object
       additionalProperties: false

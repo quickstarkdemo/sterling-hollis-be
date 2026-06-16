@@ -67,6 +67,7 @@ _ALLOWED_KEYS = {
     "action",
     "attributes",
     "availability",
+    "base_version",
     "blocked",
     "brand",
     "capability",
@@ -79,6 +80,7 @@ _ALLOWED_KEYS = {
     "detail_urls",
     "draft",
     "draft_id",
+    "draft_version",
     "error",
     "error_code",
     "flagged",
@@ -545,6 +547,7 @@ def append_demo_event(
     event: DemoEventInput,
     settings: Settings,
     now: datetime | None = None,
+    commit: bool = True,
 ) -> OpenAIDemoEvent:
     now = now or datetime.now(timezone.utc)
     scrubbed = cleanup_expired_demo_payloads(
@@ -565,7 +568,7 @@ def append_demo_event(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="client_event_id was already used for a different demo event.",
             )
-        if scrubbed:
+        if scrubbed and commit:
             db.commit()
         return existing
 
@@ -625,7 +628,10 @@ def append_demo_event(
     if event.published_product_id:
         run.published_product_id = event.published_product_id
     db.add(row)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return row
 
 

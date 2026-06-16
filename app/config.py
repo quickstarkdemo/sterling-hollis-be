@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     catalog_studio_clerk_authorized_subjects: str = ""
     catalog_studio_admin_claim_path: str = ""
     catalog_studio_admin_claim_value: str = "admin"
+    catalog_studio_responses_model: str = "gpt-5.5"
+    catalog_studio_moderation_model: str = "omni-moderation-latest"
+    catalog_studio_responses_timeout_seconds: float = 60.0
+    catalog_studio_responses_max_output_tokens: int = 2500
     catalog_studio_realtime_enabled: bool = False
     catalog_studio_shared_demo_runs: bool = False
     catalog_studio_trace_retention_days: int = 7

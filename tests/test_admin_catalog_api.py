@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -10,8 +11,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.config import Settings, get_settings
+from app.catalog.ai_schemas import (
+    CatalogAIInventoryProposal,
+    CatalogAIProductProposal,
+    CatalogAIVariantProposal,
+)
 from app.database import Base, get_db
 from app.main import create_app
+from app.routers.admin_catalog import get_catalog_ai_service
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
@@ -21,6 +28,7 @@ from app.models import (
     SyntheticRun,
 )
 from app.services.auth.clerk import AuthenticatedPrincipal, require_clerk_principal
+from app.services.catalog_ai import CatalogAIService
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 
 
@@ -175,6 +183,7 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
         "/api/admin/catalog/products/drafts",
         "/api/admin/catalog/demo-runs",
         "/api/admin/catalog/demo-runs/{run_id}",
+        "/api/admin/catalog/demo-runs/{run_id}/draft-commands",
     ):
         operations = schema["paths"][path]
         assert all(
@@ -182,6 +191,153 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
             for operation in operations.values()
             if isinstance(operation, dict)
         )
+
+
+def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch):
+    proposal = CatalogAIProductProposal(
+        title="Midnight Atelier Coat",
+        description="A sculpted wool evening coat.",
+        brand="Sterling Hollis",
+        category="womens_apparel",
+        image_direction="Editorial studio photograph on a neutral backdrop.",
+        variants=[
+            CatalogAIVariantProposal(
+                color="Black",
+                material="wool",
+                gender="women",
+                season="fall",
+                price_min=895,
+                price_max=895,
+                inventory=[
+                    CatalogAIInventoryProposal(
+                        size="M",
+                        availability="in stock",
+                        inventory_qty=8,
+                        objective_weight=0.9,
+                    )
+                ],
+            )
+        ],
+    )
+    moderation = SimpleNamespace(
+        type="moderation_result",
+        flagged=False,
+        model="omni-moderation-latest",
+        categories={"violence": False},
+        category_scores={"violence": 0.001},
+        category_applied_input_types={"violence": ["text"]},
+    )
+    response = SimpleNamespace(
+        id="resp_api_catalog_1",
+        model="gpt-5.5-2026-05-01",
+        status="completed",
+        output_parsed=proposal,
+        moderation=SimpleNamespace(input=moderation, output=moderation),
+        usage=SimpleNamespace(
+            model_dump=lambda mode="json": {
+                "input_tokens": 20,
+                "output_tokens": 15,
+                "total_tokens": 35,
+            }
+        ),
+    )
+
+    class FakeResponses:
+        def parse(self, **_kwargs):
+            return response
+
+    fake_client = SimpleNamespace(responses=FakeResponses())
+    ai_settings = Settings(
+        _env_file=None,
+        openai_api_key="test-key",
+        catalog_studio_responses_model="gpt-5.5",
+        catalog_studio_moderation_model="omni-moderation-latest",
+    )
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        client.app.dependency_overrides[get_catalog_ai_service] = lambda: CatalogAIService(
+            ai_settings, fake_client
+        )
+        started = client.post(
+            "/api/admin/catalog/demo-runs",
+            headers=_headers("api-ai-run"),
+            json={
+                "title": "Create a customer-demo coat",
+                "business_summary": "Preparing the product draft.",
+            },
+        )
+        run_id = started.json()["id"]
+
+        created = client.post(
+            f"/api/admin/catalog/demo-runs/{run_id}/draft-commands",
+            headers=_headers("api-ai-command"),
+            json={
+                "instruction": "Create a black wool evening coat.",
+                "expected_draft_version": 0,
+            },
+        )
+
+        assert created.status_code == 200
+        body = created.json()
+        assert body["status"] == "succeeded"
+        assert body["draft"]["draft_version"] == 1
+        assert body["draft"]["product"]["title"] == "Midnight Atelier Coat"
+        assert body["run"]["draft_id"] == body["draft"]["id"]
+        assert [event["capability"] for event in body["run"]["events"]] == [
+            "run",
+            "moderation",
+            "responses",
+        ]
+        assert all("developer" not in event for event in body["run"]["events"])
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, body["draft"]["id"])
+            assert revision is not None
+            assert revision.moderation_state == "approved"
+
+
+def test_catalog_ai_command_api_reports_unavailable_responses_without_a_draft(monkeypatch):
+    unavailable_settings = Settings(_env_file=None, openai_api_key=None)
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        client.app.dependency_overrides[get_catalog_ai_service] = lambda: CatalogAIService(
+            unavailable_settings
+        )
+        started = client.post(
+            "/api/admin/catalog/demo-runs",
+            headers=_headers("api-ai-unavailable-run"),
+            json={
+                "title": "Create a customer-demo coat",
+                "business_summary": "Preparing the product draft.",
+            },
+        )
+        run_id = started.json()["id"]
+
+        response = client.post(
+            f"/api/admin/catalog/demo-runs/{run_id}/draft-commands",
+            headers=_headers("api-ai-unavailable-command"),
+            json={
+                "instruction": "Create a black wool evening coat.",
+                "expected_draft_version": 0,
+            },
+        )
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": {
+                "code": "responses_unavailable",
+                "message": "The Responses capability is not configured.",
+                "retryable": False,
+            }
+        }
+        with sessions() as db:
+            assert db.scalars(select(CatalogDraftRevision)).all() == []
+            failure = db.scalar(
+                select(OpenAIDemoEvent).where(
+                    OpenAIDemoEvent.run_id == run_id,
+                    OpenAIDemoEvent.error_code == "responses_unavailable",
+                )
+            )
+            assert failure is not None
 
 
 def test_demo_run_api_defaults_to_business_view_and_sanitizes_developer_view(monkeypatch):
