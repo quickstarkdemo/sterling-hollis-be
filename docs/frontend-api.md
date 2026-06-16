@@ -74,6 +74,9 @@ Generated image files are served from:
 | Publish an approved draft | `POST` | `/api/admin/catalog/products/{product_id}/publish` |
 | Archive a published product | `POST` | `/api/admin/catalog/products/{product_id}/archive` |
 | Inspect product lifecycle and draft history | `GET` | `/api/admin/catalog/products/{product_id}` |
+| Start sanitized OpenAI demo run | `POST` | `/api/admin/catalog/demo-runs` |
+| Append ordered demo event | `POST` | `/api/admin/catalog/demo-runs/{run_id}/events` |
+| Read business or developer timeline | `GET` | `/api/admin/catalog/demo-runs/{run_id}` |
 | Clerk demo fault state | `GET` | `/api/demo/observability` |
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
 | Clerk demo fault reset | `POST` | `/api/demo/observability/reset` |
@@ -255,6 +258,24 @@ authorization: Bearer <Clerk token>
 Missing or invalid Clerk credentials return `401`. Valid non-administrator
 credentials return `403`. Successful responses use `Cache-Control: no-store`.
 
+### Testing protected APIs in Swagger
+
+The generated FastAPI docs are available at `/docs`. Public endpoints can use
+**Try it out** directly. Protected Catalog Studio endpoints declare the
+`ClerkBearer` security scheme:
+
+1. Sign in to the Sterling Hollis frontend as an authorized Catalog Studio
+   administrator and obtain the active Clerk session JWT.
+2. Open `/docs`, select **Authorize**, and paste the raw JWT into the
+   `ClerkBearer` value field. Swagger adds the `Bearer` prefix.
+3. Call `GET /api/admin/session` first. Continue only after it returns `200` and
+   `authorized: true`.
+4. Use a fresh `Idempotency-Key` for each catalog mutation. Reuse the same key
+   only when intentionally replaying the exact same request.
+
+Never paste the standard OpenAI API key, Clerk secret key, or an authorization
+header copied from another user into Swagger.
+
 ## Catalog Studio Product Lifecycle
 
 All Catalog Studio product routes require the same Clerk administrator policy
@@ -318,6 +339,28 @@ content-type: application/json
   }
 }
 ```
+
+## Sanitized OpenAI Demo Timeline
+
+`POST /api/admin/catalog/demo-runs` starts an administrator-owned workflow and
+records its first ordered business event. It requires an `Idempotency-Key` so
+an exact start retry returns the original run. Subsequent stages append through
+`POST /api/admin/catalog/demo-runs/{run_id}/events` with a stable
+`client_event_id`; an exact retry replays the existing event and conflicting
+reuse returns `409`.
+
+`GET /api/admin/catalog/demo-runs/{run_id}` returns the business timeline by
+default. Add `?developer=true` to include model, request ID, duration, normalized
+usage, moderation summary, error code, and bounded request/response projections.
+Developer fields are available only to the run owner. If shared demo runs are
+enabled, other administrators receive only the business projection.
+
+Sanitization happens before persistence. Authorization data, credentials,
+system instructions, private reasoning, raw audio, binary image data, customer
+identity, configured private keys, oversized strings/arrays/objects, and unknown
+fields are redacted, omitted, or replaced with deterministic truncation markers.
+After the configured retention period, event payloads are replaced with an
+expiry marker while run metadata and catalog records remain intact.
 
 ## Demo Observability Toggle
 

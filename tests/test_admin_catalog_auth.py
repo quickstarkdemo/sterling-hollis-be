@@ -107,6 +107,19 @@ def test_catalog_admin_session_requires_clerk_token():
     assert response.json() == {"detail": "Clerk session token is required."}
 
 
+def test_catalog_admin_session_rejects_non_bearer_authorization():
+    settings = _settings(catalog_studio_clerk_authorized_subjects="user_admin")
+
+    client = _client(settings)
+    response = client.get(
+        "/api/admin/session",
+        headers={"Authorization": "Basic not-a-clerk-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authorization header must be a Bearer token."}
+
+
 def test_catalog_admin_session_rejects_invalid_clerk_token_before_policy(monkeypatch):
     settings = _settings(catalog_studio_clerk_authorized_subjects="user_admin")
 

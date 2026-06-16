@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError, PyJWKClientError
 from sqlalchemy import func, select
@@ -22,6 +23,13 @@ from app.services.lookup import _resolved_customer
 
 
 logger = logging.getLogger(__name__)
+
+clerk_bearer = HTTPBearer(
+    auto_error=False,
+    bearerFormat="JWT",
+    scheme_name="ClerkBearer",
+    description="Clerk session JWT for authenticated Catalog Studio operations.",
+)
 
 
 class ClerkAuthError(ValueError):
@@ -237,12 +245,17 @@ def optional_chat_identity(
 
 def require_clerk_principal(
     request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(clerk_bearer),
     settings: Settings = Depends(get_settings),
 ) -> AuthenticatedPrincipal:
-    token = bearer_token_from_request(request)
-    if not token:
+    if credentials is None:
+        if request.headers.get("authorization"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization header must be a Bearer token.",
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Clerk session token is required.")
     try:
-        return verify_clerk_token(token, settings)
+        return verify_clerk_token(credentials.credentials, settings)
     except ClerkAuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
