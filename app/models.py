@@ -256,6 +256,99 @@ class CatalogAdminMutation(Base):
     )
 
 
+class OpenAIDemoRun(Base):
+    __tablename__ = "openai_demo_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="clerk")
+    owner_provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    business_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="started", index=True)
+    current_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="run")
+    next_event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    draft_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"), index=True
+    )
+    image_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("image_generation_jobs.id", ondelete="SET NULL"), index=True
+    )
+    published_product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+    __table_args__ = (
+        CheckConstraint("next_event_sequence > 0", name="ck_openai_demo_runs_next_sequence_positive"),
+        UniqueConstraint(
+            "owner_provider",
+            "owner_provider_user_id",
+            "idempotency_key_hash",
+            name="uq_openai_demo_runs_owner_idempotency",
+        ),
+        Index("ix_openai_demo_runs_owner_created", "owner_provider_user_id", "created_at"),
+    )
+
+
+class OpenAIDemoEvent(Base):
+    __tablename__ = "openai_demo_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("openai_demo_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    capability: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    business_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128))
+    request_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    usage_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    moderation_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    request_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    response_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    payload_expired: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        CheckConstraint("sequence > 0", name="ck_openai_demo_events_sequence_positive"),
+        UniqueConstraint("run_id", "sequence", name="uq_openai_demo_events_run_sequence"),
+        UniqueConstraint("run_id", "client_event_id", name="uq_openai_demo_events_run_client_event"),
+        Index("ix_openai_demo_events_run_created", "run_id", "created_at"),
+    )
+
+
 class SupplierProductOffer(Base):
     __tablename__ = "supplier_product_offers"
 

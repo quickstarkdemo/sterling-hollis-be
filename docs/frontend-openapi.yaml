@@ -169,6 +169,83 @@ paths:
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Valid Clerk user is not an administrator.}
         "404": {description: Product or draft history not found.}
+  /api/admin/catalog/demo-runs:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Start a sanitized OpenAI demo run
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoRunStartRequest"
+      responses:
+        "201":
+          description: Administrator-owned run with its initial business event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoRunResponse"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "409": {description: A linked draft, image job, or product does not exist.}
+  /api/admin/catalog/demo-runs/{run_id}/events:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Append a sanitized, ordered OpenAI demo event
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoEventInput"
+      responses:
+        "201":
+          description: Sanitized event projection; exact client-event retries replay this response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoEventResponse"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Run is missing or owned by another administrator.}
+        "409": {description: Conflicting client event ID or invalid linked record.}
+  /api/admin/catalog/demo-runs/{run_id}:
+    get:
+      tags: [catalog-studio-admin]
+      summary: Read a business or developer demo timeline
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: developer
+          in: query
+          description: Include sanitized developer fields; available only to the run owner.
+          schema: {type: boolean, default: false}
+      responses:
+        "200":
+          description: Ordered business timeline with optional owner-only developer projections.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoRunResponse"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Developer view requested by a non-owner.}
+        "404": {description: Run is missing or not shared with the caller.}
   /api/chat:
     post:
       tags: [chat]
@@ -1042,6 +1119,99 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DraftRevisionResponse"
+    DemoRunStartRequest:
+      type: object
+      additionalProperties: false
+      required: [title, business_summary]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 255}
+        business_summary: {type: string, minLength: 1, maxLength: 1000}
+        draft_id: {type: string, nullable: true}
+        image_job_id: {type: string, nullable: true}
+        published_product_id: {type: string, nullable: true}
+    DemoEventInput:
+      type: object
+      additionalProperties: false
+      required: [client_event_id, stage, capability, status, business_summary]
+      properties:
+        client_event_id: {type: string, minLength: 1, maxLength: 128}
+        stage: {type: string, minLength: 1, maxLength: 64}
+        capability:
+          type: string
+          enum: [run, responses, moderation, image_generation, realtime, catalog, publication]
+        status:
+          type: string
+          enum: [queued, started, running, succeeded, blocked, failed, retrying, completed]
+        business_summary: {type: string, minLength: 1, maxLength: 1000}
+        model: {type: string, nullable: true}
+        request_id: {type: string, nullable: true}
+        duration_ms: {type: integer, minimum: 0, nullable: true}
+        usage: {type: object, additionalProperties: true, default: {}}
+        moderation: {type: object, additionalProperties: true, default: {}}
+        request_payload: {type: object, additionalProperties: true, default: {}}
+        response_payload: {type: object, additionalProperties: true, default: {}}
+        error_code: {type: string, nullable: true}
+        retryable: {type: boolean, default: false}
+        draft_id: {type: string, nullable: true}
+        image_job_id: {type: string, nullable: true}
+        published_product_id: {type: string, nullable: true}
+        started_at: {type: string, format: date-time, nullable: true}
+        completed_at: {type: string, format: date-time, nullable: true}
+    DemoDeveloperEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        model: {type: string, nullable: true}
+        request_id: {type: string, nullable: true}
+        duration_ms: {type: integer, nullable: true}
+        usage: {type: object, additionalProperties: true}
+        moderation: {type: object, additionalProperties: true}
+        request_payload: {type: object, additionalProperties: true}
+        response_payload: {type: object, additionalProperties: true}
+        error_code: {type: string, nullable: true}
+        payload_expired: {type: boolean}
+    DemoEventResponse:
+      type: object
+      additionalProperties: false
+      required: [id, sequence, stage, capability, status, business_summary, retryable, created_at]
+      properties:
+        id: {type: string}
+        sequence: {type: integer, minimum: 1}
+        stage: {type: string}
+        capability:
+          type: string
+          enum: [run, responses, moderation, image_generation, realtime, catalog, publication]
+        status:
+          type: string
+          enum: [queued, started, running, succeeded, blocked, failed, retrying, completed]
+        business_summary: {type: string}
+        retryable: {type: boolean}
+        created_at: {type: string, format: date-time}
+        developer:
+          allOf:
+            - $ref: "#/components/schemas/DemoDeveloperEvent"
+          nullable: true
+    DemoRunResponse:
+      type: object
+      additionalProperties: false
+      required: [id, title, business_summary, status, current_stage, is_owner, created_at, updated_at, expires_at, events]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        business_summary: {type: string}
+        status: {type: string}
+        current_stage: {type: string}
+        draft_id: {type: string, nullable: true}
+        image_job_id: {type: string, nullable: true}
+        published_product_id: {type: string, nullable: true}
+        is_owner: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/DemoEventResponse"
     ChatCurrentProduct:
       type: object
       additionalProperties: false

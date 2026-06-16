@@ -58,3 +58,19 @@ def test_demo_observability_defaults_from_env(monkeypatch):
     assert state.latency_seconds == 3.5
     assert state.target_store_id == "2002"
     get_settings.cache_clear()
+
+
+def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
+    monkeypatch.setenv("CATALOG_STUDIO_SHARED_DEMO_RUNS", "true")
+    monkeypatch.setenv("CATALOG_STUDIO_TRACE_RETENTION_DAYS", "3")
+    monkeypatch.setenv("CATALOG_STUDIO_TRACE_MAX_BYTES", "8192")
+    monkeypatch.setenv("CATALOG_STUDIO_TRACE_REDACTED_KEYS", "internal_note,vendor_secret")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.catalog_studio_shared_demo_runs is True
+    assert settings.catalog_studio_trace_retention_days == 3
+    assert settings.catalog_studio_trace_max_bytes == 8192
+    assert settings.catalog_studio_trace_redacted_keys == "internal_note,vendor_secret"
+    get_settings.cache_clear()

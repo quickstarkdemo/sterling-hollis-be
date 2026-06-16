@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,12 @@ from app.catalog.admin_schemas import (
     LifecycleMutationResponse,
     PublishRequest,
 )
+from app.catalog.demo_schemas import (
+    DemoEventInput,
+    DemoEventResponse,
+    DemoRunResponse,
+    DemoRunStartRequest,
+)
 from app.config import Settings, get_settings
 from app.database import get_db
 from app.services.catalog_admin import (
@@ -21,6 +27,12 @@ from app.services.catalog_admin import (
     create_draft,
     get_admin_product,
     publish_draft,
+)
+from app.services.demo_trace import (
+    append_demo_event,
+    get_demo_run_projection,
+    project_demo_event,
+    start_demo_run,
 )
 from app.services.auth.admin import catalog_studio_capabilities, require_catalog_admin
 from app.services.auth.clerk import AuthenticatedPrincipal
@@ -162,3 +174,86 @@ def admin_catalog_product(
     if product is None:
         raise HTTPException(status_code=404, detail="Catalog product not found.")
     return product
+
+
+@router.post(
+    "/catalog/demo-runs",
+    response_model=DemoRunResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a sanitized OpenAI demo run",
+)
+def create_demo_run(
+    request: DemoRunStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> DemoRunResponse:
+    run = start_demo_run(
+        db,
+        principal=principal,
+        title=request.title,
+        business_summary=request.business_summary,
+        settings=settings,
+        idempotency_key=idempotency_key,
+        draft_id=request.draft_id,
+        image_job_id=request.image_job_id,
+        published_product_id=request.published_product_id,
+    )
+    return get_demo_run_projection(
+        db,
+        run_id=run.id,
+        principal=principal,
+        developer=False,
+        settings=settings,
+    )
+
+
+@router.post(
+    "/catalog/demo-runs/{run_id}/events",
+    response_model=DemoEventResponse,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+    summary="Append a sanitized OpenAI demo event",
+)
+def create_demo_event(
+    run_id: str,
+    request: DemoEventInput,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> DemoEventResponse:
+    event = append_demo_event(
+        db,
+        run_id=run_id,
+        principal=principal,
+        event=request,
+        settings=settings,
+    )
+    return project_demo_event(event, developer=True)
+
+
+@router.get(
+    "/catalog/demo-runs/{run_id}",
+    response_model=DemoRunResponse,
+    response_model_exclude_none=True,
+    summary="Read a Catalog Studio demo timeline",
+)
+def demo_run_detail(
+    run_id: str,
+    developer: bool = Query(
+        default=False,
+        description="Include sanitized developer metadata. Available only to the run owner.",
+    ),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> DemoRunResponse:
+    return get_demo_run_projection(
+        db,
+        run_id=run_id,
+        principal=principal,
+        developer=developer,
+        settings=settings,
+    )

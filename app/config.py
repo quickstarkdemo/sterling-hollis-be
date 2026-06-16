@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     catalog_studio_admin_claim_path: str = ""
     catalog_studio_admin_claim_value: str = "admin"
     catalog_studio_realtime_enabled: bool = False
+    catalog_studio_shared_demo_runs: bool = False
+    catalog_studio_trace_retention_days: int = 7
+    catalog_studio_trace_max_depth: int = 6
+    catalog_studio_trace_max_string_length: int = 1000
+    catalog_studio_trace_max_array_length: int = 25
+    catalog_studio_trace_max_object_keys: int = 50
+    catalog_studio_trace_max_bytes: int = 16384
+    catalog_studio_trace_redacted_keys: str = ""
     enable_legacy_admin_routes: bool = True
     dd_site: str = "datadoghq.com"
     dd_api_key: str | None = None

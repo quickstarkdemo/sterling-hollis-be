@@ -12,7 +12,14 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings, get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import CatalogDraftRevision, CatalogProduct, Product, Store, SyntheticRun
+from app.models import (
+    CatalogDraftRevision,
+    CatalogProduct,
+    OpenAIDemoEvent,
+    Product,
+    Store,
+    SyntheticRun,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal, require_clerk_principal
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 
@@ -154,6 +161,83 @@ def test_catalog_mutations_require_catalog_admin(monkeypatch):
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Clerk session token is required."}
+
+
+def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        schema = client.get("/openapi.json").json()
+
+    security_scheme = schema["components"]["securitySchemes"]["ClerkBearer"]
+    assert security_scheme["type"] == "http"
+    assert security_scheme["scheme"] == "bearer"
+    for path in (
+        "/api/admin/session",
+        "/api/admin/catalog/products/drafts",
+        "/api/admin/catalog/demo-runs",
+        "/api/admin/catalog/demo-runs/{run_id}",
+    ):
+        operations = schema["paths"][path]
+        assert all(
+            {"ClerkBearer": []} in operation.get("security", [])
+            for operation in operations.values()
+            if isinstance(operation, dict)
+        )
+
+
+def test_demo_run_api_defaults_to_business_view_and_sanitizes_developer_view(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        started = client.post(
+            "/api/admin/catalog/demo-runs",
+            headers=_headers("start-demo-run-1"),
+            json={
+                "title": "Create a demo coat",
+                "business_summary": "Preparing a product draft.",
+            },
+        )
+        assert started.status_code == 201
+        run_id = started.json()["id"]
+        assert "developer" not in started.json()["events"][0]
+
+        event = client.post(
+            f"/api/admin/catalog/demo-runs/{run_id}/events",
+            json={
+                "client_event_id": "responses-api-1",
+                "stage": "draft",
+                "capability": "responses",
+                "status": "succeeded",
+                "business_summary": "The product draft is ready.",
+                "model": "gpt-5.4",
+                "request_id": "req_api_123",
+                "usage": {"input_tokens": 12, "output_tokens": 8, "ignored": 99},
+                "request_payload": {
+                    "headers": {"authorization": "Bearer browser-secret"},
+                    "product": {"title": "Demo Coat", "category": "outerwear"},
+                },
+                "response_payload": {"draft_id": "draft_demo", "status": "ready"},
+            },
+        )
+        business = client.get(f"/api/admin/catalog/demo-runs/{run_id}")
+        developer = client.get(
+            f"/api/admin/catalog/demo-runs/{run_id}", params={"developer": "true"}
+        )
+
+        assert event.status_code == 201
+        assert business.status_code == developer.status_code == 200
+        assert "developer" not in business.json()["events"][-1]
+        detail = developer.json()["events"][-1]["developer"]
+        assert detail["model"] == "gpt-5.4"
+        assert detail["usage"] == {"input_tokens": 12, "output_tokens": 8}
+        assert detail["request_payload"]["product"]["title"] == "Demo Coat"
+        assert "browser-secret" not in developer.text
+        with sessions() as db:
+            persisted = db.scalar(
+                select(OpenAIDemoEvent).where(
+                    OpenAIDemoEvent.run_id == run_id,
+                    OpenAIDemoEvent.sequence == 2,
+                )
+            )
+            assert persisted is not None
+            assert "browser-secret" not in str(persisted.request_json)
 
 
 def test_new_draft_is_private_until_atomic_publish(monkeypatch):
