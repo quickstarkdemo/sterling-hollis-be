@@ -416,7 +416,10 @@ Representative MCP tool groups:
 - Executive: overview, event readiness, what-if simulation, campaign autopilot,
   strategy packets, CSV export, auto-optimization.
 - Inventory: store checks, product search, store inventory, facets.
-- Feed compatibility: OpenAI-style product feed export.
+- Public catalog discovery: normalized product search and stable-ID detail for
+  ChatGPT, with the unified widget rendering product cards.
+- Feed compatibility: OpenAI-style export from the normalized published
+  catalog.
 
 Use `make mcp-smoke` or an MCP Inspector session to see the current full tool
 surface.
@@ -436,6 +439,17 @@ Apps SDK widget resources are thin HTML shells that load bundled JS/CSS from
 - merchandising workspace
 - executive workspace
 - unified executive/merchandising workspace
+
+The unified widget also renders results from `fashion_catalog_search` and
+`fashion_catalog_product_detail`. Both tools read the same normalized catalog as
+the storefront and `/api/chat`; only `published` products are returned. Drafts,
+archives, Catalog Studio authoring metadata, workflow events, and administrative
+state are excluded. `fashion_catalog_product_detail` accepts either a stable
+catalog ID or a legacy product ID that resolves to the same normalized record.
+
+`fashion_get_product_feed` uses this published normalized source as well, so a
+newly published Catalog Studio product appears once under its stable catalog ID
+without a duplicate legacy row.
 
 Set `ENABLE_MCP_ADAPTER=false` to run without `/mcp`. Set
 `ENABLE_OPENAI_APPS_UI=false` to disable `/ui-assets`, ChatGPT sandbox CORS, and

@@ -8,6 +8,7 @@ from enum import Enum
 from io import StringIO
 from pathlib import Path
 import re
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -15,6 +16,12 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, case, desc, func, or_, select
 
+from app.catalog.schemas import ProductSort
+from app.catalog.service import (
+    ProductFilters,
+    get_product_detail as get_catalog_product_detail,
+    list_products as list_catalog_products,
+)
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import Order, OrderItem, Product, ProductEmbedding, Store, SupplierProductOffer, SyntheticRun
@@ -6307,30 +6314,166 @@ def fashion_get_product_feed(
     store_id: str | None = None,
     limit: int = 200,
 ) -> dict:
-    """Return OpenAI-commerce-style product feed rows for all products or one store."""
+    """Return public normalized OpenAI-commerce-style product feed rows."""
     params = ProductFeedInput(store_id=store_id, limit=limit)
     with SessionLocal() as db:
-        query = select(Product)
-        if params.store_id:
-            query = query.where(Product.store_id == params.store_id)
-
-        products = db.scalars(query.limit(params.limit)).all()
+        products = list_catalog_products(
+            db,
+            ProductFilters(
+                store_id=params.store_id,
+                include_preorder=True,
+                sort=ProductSort.relevance,
+                limit=params.limit,
+            ),
+            include_facets=False,
+        ).items
         items = [
             {
                 "id": product.id,
                 "title": product.title,
                 "description": product.description,
                 "link": product.link,
-                "image_link": product.image_link,
+                "image_link": (
+                    product.images.primary_url
+                    if product.images and product.images.primary_url
+                    else product.image_url
+                ),
                 "price": f"{product.price:.2f} USD",
-                "availability": product.availability,
+                "availability": product.inventory_summary.availability,
                 "brand": product.brand,
                 "category": product.category,
-                "color": product.color,
-                "size": product.size,
-                "material": product.material,
-                "gender": product.gender,
+                "color": product.attributes.get("color"),
+                "size": None,
+                "material": product.attributes.get("material"),
+                "gender": product.attributes.get("gender"),
             }
             for product in products
         ]
         return {"count": len(items), "items": items}
+
+
+def _catalog_discovery_result(
+    *,
+    mode: Literal["search", "detail"],
+    products: list[dict],
+    found: bool,
+    query: str | None = None,
+    product_id: str | None = None,
+    total: int | None = None,
+) -> CallToolResult:
+    invoking = (
+        "Loading published product detail..."
+        if mode == "detail"
+        else "Searching the published catalog..."
+    )
+    invoked = (
+        "Published product detail ready."
+        if mode == "detail"
+        else "Published catalog results ready."
+    )
+    payload = {
+        "kind": "catalog_discovery",
+        "payload": {
+            "mode": mode,
+            "found": found,
+            "query": query,
+            "product_id": product_id,
+            "count": len(products),
+            "total": total if total is not None else len(products),
+            "products": products,
+        },
+    }
+    return _calltool_result(
+        text=_catalog_discovery_text(mode=mode, count=len(products), found=found),
+        payload=payload,
+        meta=_render_tool_meta(
+            _UNIFIED_WORKSPACE_RESOURCE_URI,
+            invoking=invoking,
+            invoked=invoked,
+        ),
+    )
+
+
+def _catalog_discovery_text(
+    *, mode: Literal["search", "detail"], count: int, found: bool
+) -> str:
+    if mode == "detail":
+        return (
+            "Found the published catalog product."
+            if found
+            else "No published catalog product matched that ID."
+        )
+    suffix = "" if count == 1 else "s"
+    return f"Found {count} published catalog product{suffix}."
+
+
+@mcp.tool(
+    name="fashion_catalog_search",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _UNIFIED_WORKSPACE_RESOURCE_URI,
+        invoking="Searching the published catalog...",
+        invoked="Published catalog results ready.",
+    ),
+    structured_output=False,
+)
+def fashion_catalog_search(
+    query: str | None = None,
+    store_id: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    limit: int = 12,
+) -> CallToolResult:
+    """Search public normalized products; private drafts and archives are excluded."""
+    bounded_limit = max(1, min(int(limit or 12), 50))
+    with SessionLocal() as db:
+        result = list_catalog_products(
+            db,
+            ProductFilters(
+                q=(query or "").strip() or None,
+                store_id=(store_id or "").strip() or None,
+                category=(category or "").strip() or None,
+                brand=(brand or "").strip() or None,
+                include_preorder=True,
+                sort=ProductSort.relevance,
+                limit=bounded_limit,
+            ),
+            include_facets=False,
+        )
+    return _catalog_discovery_result(
+        mode="search",
+        products=[item.model_dump(mode="json") for item in result.items],
+        found=bool(result.items),
+        query=(query or "").strip() or None,
+        total=result.total,
+    )
+
+
+@mcp.tool(
+    name="fashion_catalog_product_detail",
+    annotations=_tool_annotations(read_only=True, idempotent=True, open_world=True),
+    meta=_render_tool_meta(
+        _UNIFIED_WORKSPACE_RESOURCE_URI,
+        invoking="Loading published product detail...",
+        invoked="Published product detail ready.",
+    ),
+    structured_output=False,
+)
+def fashion_catalog_product_detail(
+    product_id: str,
+    store_id: str | None = None,
+) -> CallToolResult:
+    """Return one published normalized product by stable catalog ID."""
+    normalized_product_id = str(product_id or "").strip()
+    with SessionLocal() as db:
+        product = get_catalog_product_detail(
+            db,
+            normalized_product_id,
+            store_id=(store_id or "").strip() or None,
+        )
+    return _catalog_discovery_result(
+        mode="detail",
+        products=[product.model_dump(mode="json")] if product else [],
+        found=product is not None,
+        product_id=normalized_product_id,
+    )

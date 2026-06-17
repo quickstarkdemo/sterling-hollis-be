@@ -54,6 +54,7 @@ const DEFAULT_PAYLOAD = {
 
 const state = {
   payload: clone(DEFAULT_PAYLOAD),
+  catalog: null,
   ui: {
     activeView: "executive_overview",
     selectedStoreIds: [],
@@ -219,6 +220,40 @@ function parseToolPayload(raw) {
   return null;
 }
 
+function normalizeCatalogPayload(rawInput) {
+  if (!rawInput) {
+    return null;
+  }
+  let raw = rawInput;
+  if (isObject(raw.structuredContent)) {
+    raw = raw.structuredContent;
+  }
+  if (isObject(raw) && raw.kind === "catalog_discovery" && isObject(raw.payload)) {
+    raw = raw.payload;
+  } else if (isObject(raw.payload)) {
+    raw = raw.payload;
+  }
+  if (!isObject(raw) || !["search", "detail"].includes(raw.mode) || !Array.isArray(raw.products)) {
+    return null;
+  }
+  return {
+    mode: raw.mode,
+    query: typeof raw.query === "string" ? raw.query : null,
+    productId: typeof raw.product_id === "string" ? raw.product_id : null,
+    total: parsePositiveInt(raw.total, raw.products.length, 0, 1000000),
+    products: raw.products.filter((product) => isObject(product) && product.id),
+  };
+}
+
+function applyCatalogPayload(rawInput) {
+  const payload = normalizeCatalogPayload(rawInput);
+  if (!payload) {
+    return false;
+  }
+  state.catalog = payload;
+  return true;
+}
+
 function normalizeWorkspacePayload(rawInput) {
   if (!rawInput) {
     return null;
@@ -286,6 +321,7 @@ function applyWorkspacePayload(rawInput) {
   if (!payload) {
     return false;
   }
+  state.catalog = null;
   state.payload = payload;
   state.ui.activeView = payload.active_view || TOOL_TO_VIEW[payload.last_tool] || "executive_overview";
   state.ui.selectedStoreIds = normalizeStoreIds(payload.filters.store_ids);
@@ -1813,6 +1849,85 @@ function renderCsvPanel() {
   );
 }
 
+function safeCatalogUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function catalogProductImage(product) {
+  const imageUrl = safeCatalogUrl(product?.images?.primary_url || product?.image_url);
+  if (!imageUrl) {
+    return el("div", { className: "fw-empty", text: "No image" });
+  }
+  return el("img", {
+    className: "fw-catalog-image",
+    src: imageUrl,
+    alt: product.title || product.id || "Catalog product",
+    loading: "lazy",
+  });
+}
+
+function renderCatalogProductCard(product) {
+  const attributes = isObject(product.attributes) ? product.attributes : {};
+  const inventory = isObject(product.inventory_summary) ? product.inventory_summary : {};
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const productLink = safeCatalogUrl(product.link);
+  const attributeText = [attributes.color, attributes.material, attributes.gender]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" · ");
+  return el(
+    "article",
+    { className: "fw-rec-card fw-catalog-card" },
+    catalogProductImage(product),
+    el("h3", { className: "fw-rec-title", text: product.title || product.id }),
+    el("p", { className: "fw-rec-brand", text: `${product.brand || "Unknown brand"} · ${humanizeToken(product.category)}` }),
+    el("p", { className: "fw-empty", text: product.description || "" }),
+    el(
+      "div",
+      { className: "fw-kpi-strip" },
+      kpi("Price", formatCurrency(product.price_min ?? product.price)),
+      kpi("Availability", humanizeToken(inventory.availability || "out_of_stock")),
+      kpi("Units", formatNumber(inventory.total_units || 0, 0)),
+      variants.length ? kpi("Variants", formatNumber(variants.length, 0)) : null,
+    ),
+    attributeText ? el("p", { className: "fw-empty", text: attributeText }) : null,
+    el("p", { className: "fw-empty", text: `Catalog ID: ${product.catalog_id || product.id}` }),
+    productLink
+      ? el("a", { className: "fw-link", href: productLink, target: "_blank", rel: "noreferrer" }, "Open product")
+      : null,
+  );
+}
+
+function renderCatalogDiscovery() {
+  const catalog = state.catalog;
+  const products = Array.isArray(catalog?.products) ? catalog.products : [];
+  const context = catalog?.mode === "detail"
+    ? catalog.productId
+      ? `Published product ${catalog.productId}`
+      : "Published product detail"
+    : catalog?.query
+      ? `${catalog.total} published matches for “${catalog.query}”`
+      : `${catalog?.total || products.length} published catalog products`;
+  return el(
+    "section",
+    { className: "fw-panel" },
+    el("h2", { className: "fw-panel-title", text: "Catalog Discovery" }),
+    el("p", { className: "fw-empty", text: context }),
+    products.length
+      ? el("div", { className: "fw-grid fw-catalog-grid" }, ...products.map(renderCatalogProductCard))
+      : el("p", { className: "fw-empty", text: "No published catalog product matched this request." }),
+  );
+}
+
 function render() {
   if (!root) {
     return;
@@ -1823,13 +1938,14 @@ function render() {
       ? `build ${meta.buildVersion.trim()}`
       : null;
 
+  const catalogMode = Boolean(state.catalog);
   const header = el(
     "header",
     { className: "fw-hero fw-workspace-header" },
     el(
       "div",
       { className: "fw-title-row" },
-      el("h1", { className: "fw-title", text: meta.title || "Unified Workspace" }),
+      el("h1", { className: "fw-title", text: catalogMode ? "Published Catalog" : meta.title || "Unified Workspace" }),
       buildLabel ? el("span", { className: "fw-version", text: buildLabel }) : null,
     ),
     el(
@@ -1837,7 +1953,9 @@ function render() {
       {
         className: "fw-subtitle",
         text:
-          meta.summary ||
+          (catalogMode
+            ? "Public product discovery from the same normalized catalog used by Sterling Hollis storefront and chat."
+            : meta.summary) ||
           "Unified executive + merchandising workspace with shared filters, multi-store row modes, and deterministic CSV export parity.",
       },
     ),
@@ -1848,22 +1966,29 @@ function render() {
       "div",
       { className: "fw-root" },
       header,
-      renderControlsPanel(),
-      renderTabs(),
-      renderActiveResult(),
-      renderCsvPanel(),
+      catalogMode ? renderCatalogDiscovery() : renderControlsPanel(),
+      catalogMode ? null : renderTabs(),
+      catalogMode ? null : renderActiveResult(),
+      catalogMode ? null : renderCsvPanel(),
     ),
   );
   restoreStoreSearchFocus();
 }
 
 async function boot() {
-  const seeded = applyWorkspacePayload(meta.initialPayload);
-  if (!seeded && !applyWorkspacePayload(window.openai && window.openai.toolOutput)) {
+  const initialToolOutput = window.openai && window.openai.toolOutput;
+  const seededCatalog = applyCatalogPayload(meta.initialPayload) || applyCatalogPayload(initialToolOutput);
+  const seededWorkspace = seededCatalog
+    ? false
+    : applyWorkspacePayload(meta.initialPayload) || applyWorkspacePayload(initialToolOutput);
+  if (!seededCatalog && !seededWorkspace) {
     state.payload = clone(DEFAULT_PAYLOAD);
     setNotice("Open unified workspace to load context.", "info");
   }
   render();
+  if (seededCatalog) {
+    return;
+  }
   const view = state.ui.activeView || "executive_overview";
   if (!currentViewResult()) {
     await loadView(view, { silentNotice: true });
@@ -1881,7 +2006,7 @@ window.addEventListener(
     if (state.ui.isLoading || state.ui.isExporting) {
       return;
     }
-    const applied = applyWorkspacePayload(toolOutput);
+    const applied = applyCatalogPayload(toolOutput) || applyWorkspacePayload(toolOutput);
     if (applied) {
       render();
     }
@@ -1902,8 +2027,7 @@ window.addEventListener(
     if (state.ui.isLoading || state.ui.isExporting) {
       return;
     }
-    const parsed = parseToolPayload(payload.params);
-    const applied = applyWorkspacePayload(parsed);
+    const applied = applyCatalogPayload(payload.params) || applyWorkspacePayload(parseToolPayload(payload.params));
     if (applied) {
       render();
     }
