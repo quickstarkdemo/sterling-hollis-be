@@ -1,6 +1,149 @@
 {
   "components": {
     "schemas": {
+      "AdminDraftSnapshot": {
+        "properties": {
+          "draft_version": {
+            "minimum": 1.0,
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductDraft-Output"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/DraftRevisionResponse"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "revision",
+          "draft_version",
+          "product"
+        ],
+        "title": "AdminDraftSnapshot",
+        "type": "object"
+      },
+      "AdminProductListItem": {
+        "properties": {
+          "brand": {
+            "title": "Brand",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "current_draft_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Draft Id"
+          },
+          "current_draft_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Draft Version"
+          },
+          "has_draft": {
+            "title": "Has Draft",
+            "type": "boolean"
+          },
+          "lifecycle_status": {
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "Lifecycle Status",
+            "type": "string"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "product_id",
+          "lifecycle_status",
+          "version",
+          "title",
+          "brand",
+          "category",
+          "has_draft",
+          "updated_at"
+        ],
+        "title": "AdminProductListItem",
+        "type": "object"
+      },
+      "AdminProductListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminProductListItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "minimum": 1.0,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "minimum": 1.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "AdminProductListResponse",
+        "type": "object"
+      },
       "AdminProductResponse": {
         "properties": {
           "brand": {
@@ -10,6 +153,16 @@
           "category": {
             "title": "Category",
             "type": "string"
+          },
+          "current_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminDraftSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "description": {
             "title": "Description",
@@ -39,6 +192,16 @@
           "product_id": {
             "title": "Product Id",
             "type": "string"
+          },
+          "published_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductDraft-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "title": "Title",
@@ -538,6 +701,17 @@
             "title": "Id",
             "type": "string"
           },
+          "image_variant_set_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Variant Set Id"
+          },
           "model": {
             "title": "Model",
             "type": "string"
@@ -594,6 +768,82 @@
           "created_at"
         ],
         "title": "CatalogImageJobResponse",
+        "type": "object"
+      },
+      "CatalogImageVariantSetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_draft_version"
+        ],
+        "title": "CatalogImageVariantSetRequest",
+        "type": "object"
+      },
+      "CatalogImageVariantSetResponse": {
+        "properties": {
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogImageJobResponse"
+            },
+            "title": "Jobs",
+            "type": "array"
+          },
+          "primary_variant_index": {
+            "title": "Primary Variant Index",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "review",
+              "partially_failed",
+              "failed",
+              "complete"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "workflow_id",
+          "draft_id",
+          "expected_draft_version",
+          "primary_variant_index",
+          "status",
+          "jobs"
+        ],
+        "title": "CatalogImageVariantSetResponse",
         "type": "object"
       },
       "CatalogIndexResponse": {
@@ -745,6 +995,113 @@
           "inventory_summary"
         ],
         "title": "CatalogProduct",
+        "type": "object"
+      },
+      "CatalogRealtimeSessionResponse": {
+        "properties": {
+          "client_secret": {
+            "title": "Client Secret",
+            "type": "string"
+          },
+          "expires_at": {
+            "minimum": 1.0,
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "tool_names": {
+            "items": {
+              "enum": [
+                "create_catalog_draft",
+                "refine_catalog_draft"
+              ],
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          },
+          "webrtc_url": {
+            "default": "https://api.openai.com/v1/realtime/calls",
+            "title": "Webrtc Url",
+            "type": "string"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_secret",
+          "expires_at",
+          "workflow_id",
+          "model",
+          "tool_names"
+        ],
+        "title": "CatalogRealtimeSessionResponse",
+        "type": "object"
+      },
+      "CatalogRealtimeToolArguments": {
+        "properties": {
+          "current_draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Draft Id"
+          },
+          "expected_draft_version": {
+            "minimum": 0.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "instruction": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction",
+          "expected_draft_version"
+        ],
+        "title": "CatalogRealtimeToolArguments",
+        "type": "object"
+      },
+      "CatalogRealtimeToolCallRequest": {
+        "properties": {
+          "arguments": {
+            "$ref": "#/components/schemas/CatalogRealtimeToolArguments"
+          },
+          "call_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Call Id",
+            "type": "string"
+          },
+          "name": {
+            "enum": [
+              "create_catalog_draft",
+              "refine_catalog_draft"
+            ],
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "name",
+          "arguments"
+        ],
+        "title": "CatalogRealtimeToolCallRequest",
         "type": "object"
       },
       "CatalogStudioCapabilities": {
@@ -1817,8 +2174,74 @@
         "title": "DemoObservabilityUpdateRequest",
         "type": "object"
       },
+      "DesignSpecificationDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "construction": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Construction",
+            "type": "string"
+          },
+          "distinguishing_features": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Distinguishing Features",
+            "type": "array"
+          },
+          "product_type": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Product Type",
+            "type": "string"
+          },
+          "silhouette": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Silhouette",
+            "type": "string"
+          }
+        },
+        "required": [
+          "product_type",
+          "silhouette",
+          "construction",
+          "distinguishing_features"
+        ],
+        "title": "DesignSpecificationDraft",
+        "type": "object"
+      },
       "DraftMutationRequest": {
         "properties": {
+          "current_draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Draft Id"
+          },
+          "expected_draft_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Draft Version"
+          },
           "expected_version": {
             "minimum": 0.0,
             "title": "Expected Version",
@@ -2863,10 +3286,26 @@
             "title": "Description",
             "type": "string"
           },
+          "design_specification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesignSpecificationDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
             "type": "object"
+          },
+          "primary_variant_index": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Primary Variant Index",
+            "type": "integer"
           },
           "product_id": {
             "anyOf": [
@@ -2891,6 +3330,18 @@
             "minLength": 1,
             "title": "Title",
             "type": "string"
+          },
+          "variant_axes": {
+            "items": {
+              "enum": [
+                "color",
+                "material"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Variant Axes",
+            "type": "array"
           },
           "variants": {
             "items": {
@@ -2931,10 +3382,26 @@
             "title": "Description",
             "type": "string"
           },
+          "design_specification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesignSpecificationDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
             "type": "object"
+          },
+          "primary_variant_index": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Primary Variant Index",
+            "type": "integer"
           },
           "product_id": {
             "anyOf": [
@@ -2959,6 +3426,18 @@
             "minLength": 1,
             "title": "Title",
             "type": "string"
+          },
+          "variant_axes": {
+            "items": {
+              "enum": [
+                "color",
+                "material"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Variant Axes",
+            "type": "array"
           },
           "variants": {
             "items": {
@@ -3481,6 +3960,32 @@
           "generated_at"
         ],
         "title": "RunReportResponse",
+        "type": "object"
+      },
+      "StartRevisionRequest": {
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "StartRevisionRequest",
         "type": "object"
       },
       "StrategyTagIntensity": {
@@ -5034,6 +5539,139 @@
         ]
       }
     },
+    "/api/admin/catalog/products": {
+      "get": {
+        "operationId": "admin_catalog_products_api_admin_catalog_products_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lifecycle_status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "draft",
+                    "published",
+                    "archived"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lifecycle Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "brand",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Brand"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 24,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProductListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Search products across administrative lifecycle states",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
     "/api/admin/catalog/products/drafts": {
       "post": {
         "operationId": "create_product_draft_api_admin_catalog_products_drafts_post",
@@ -5339,6 +5977,74 @@
           }
         ],
         "summary": "Atomically publish an approved catalog draft",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/products/{product_id}/revisions": {
+      "post": {
+        "operationId": "start_catalog_product_revision_api_admin_catalog_products__product_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDraftSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Start a private revision from the current published snapshot",
         "tags": [
           "catalog-studio-admin"
         ]
@@ -5772,6 +6478,245 @@
           }
         ],
         "summary": "Approve a generated image for catalog publication",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/image-variant-sets": {
+      "post": {
+        "operationId": "create_catalog_image_variant_set_api_admin_catalog_workflows__workflow_id__image_variant_sets_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogImageVariantSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImageVariantSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Generate coherent images for the remaining catalog variants",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}": {
+      "get": {
+        "operationId": "catalog_image_variant_set_detail_api_admin_catalog_workflows__workflow_id__image_variant_sets__image_variant_set_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "image_variant_set_id",
+            "required": true,
+            "schema": {
+              "title": "Image Variant Set Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImageVariantSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Read aggregate and child status for a catalog image variant set",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/realtime/sessions": {
+      "post": {
+        "operationId": "create_catalog_realtime_session_api_admin_catalog_workflows__workflow_id__realtime_sessions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogRealtimeSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Create a workflow-bound Realtime voice session",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls": {
+      "post": {
+        "operationId": "execute_catalog_realtime_tool_call_api_admin_catalog_workflows__workflow_id__realtime_tool_calls_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogRealtimeToolCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogAIWorkflowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Execute an approved Realtime catalog draft tool call",
         "tags": [
           "catalog-studio-admin"
         ]

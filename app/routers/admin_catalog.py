@@ -53,6 +53,13 @@ from app.services.catalog_images import (
     get_catalog_image_job,
     get_catalog_image_variant_set,
 )
+from app.services.catalog_realtime import (
+    CatalogRealtimeError,
+    CatalogRealtimeService,
+    CatalogRealtimeSessionResponse,
+    CatalogRealtimeToolCallRequest,
+    record_realtime_tool_call,
+)
 from app.services.catalog_workflow import (
     append_workflow_event,
     get_catalog_workflow_projection,
@@ -70,6 +77,12 @@ def get_catalog_ai_service(
     settings: Settings = Depends(get_settings),
 ) -> CatalogAIService:
     return CatalogAIService(settings)
+
+
+def get_catalog_realtime_service(
+    settings: Settings = Depends(get_settings),
+) -> CatalogRealtimeService:
+    return CatalogRealtimeService(settings)
 
 
 class CapabilityStatus(BaseModel):
@@ -362,6 +375,96 @@ def create_catalog_ai_draft(
             db,
             workflow_id=workflow_id,
             command=request,
+            idempotency_key=idempotency_key,
+            principal=principal,
+        )
+    except CatalogAICommandError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail,
+                "retryable": exc.retryable,
+            },
+        ) from exc
+    workflow = get_catalog_workflow_projection(
+        db,
+        workflow_id=workflow_id,
+        principal=principal,
+        developer=False,
+        settings=settings,
+    )
+    return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), workflow=workflow)
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/realtime/sessions",
+    response_model=CatalogRealtimeSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a workflow-bound Realtime voice session",
+)
+def create_catalog_realtime_session(
+    workflow_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    service: CatalogRealtimeService = Depends(get_catalog_realtime_service),
+) -> CatalogRealtimeSessionResponse:
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return service.create_session(
+            db,
+            workflow_id=workflow_id,
+            principal=principal,
+        )
+    except CatalogRealtimeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail,
+                "retryable": exc.retryable,
+            },
+        ) from exc
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/realtime/tool-calls",
+    response_model=CatalogAIWorkflowResponse,
+    response_model_exclude_none=True,
+    summary="Execute an approved Realtime catalog draft tool call",
+)
+def execute_catalog_realtime_tool_call(
+    workflow_id: str,
+    request: CatalogRealtimeToolCallRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+    service: CatalogAIService = Depends(get_catalog_ai_service),
+) -> CatalogAIWorkflowResponse:
+    if not settings.catalog_studio_realtime_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "realtime_disabled",
+                "message": "The Realtime capability is disabled.",
+                "retryable": False,
+            },
+        )
+    record_realtime_tool_call(
+        db,
+        workflow_id=workflow_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        settings=settings,
+    )
+    try:
+        result = service.execute(
+            db,
+            workflow_id=workflow_id,
+            command=request.to_catalog_command(),
             idempotency_key=idempotency_key,
             principal=principal,
         )

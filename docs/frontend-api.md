@@ -79,6 +79,8 @@ Generated image files are served from:
 | Start sanitized OpenAI catalog workflow | `POST` | `/api/admin/catalog/workflows` |
 | Append ordered workflow event | `POST` | `/api/admin/catalog/workflows/{workflow_id}/events` |
 | Generate or refine moderated product draft | `POST` | `/api/admin/catalog/workflows/{workflow_id}/draft-commands` |
+| Create a short-lived Realtime voice session | `POST` | `/api/admin/catalog/workflows/{workflow_id}/realtime/sessions` |
+| Execute an approved Realtime draft tool call | `POST` | `/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls` |
 | Generate or refine draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-commands` |
 | Generate coherent remaining variants | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets` |
 | Poll a coordinated variant set | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}` |
@@ -436,6 +438,60 @@ presenter instruction, system instructions, private reasoning, or raw provider
 objects. Provider timeouts and invalid structured output leave the prior draft
 unchanged and return a safe error whose `detail` object contains `code`,
 `message`, and `retryable` fields.
+
+## Realtime Voice Draft Commands
+
+Realtime voice is an alternate input for the same private draft workflow; it is
+not a separate catalog persistence path. First create or open a catalog workflow,
+then request a short-lived browser credential:
+
+```http
+POST /api/admin/catalog/workflows/{workflow_id}/realtime/sessions
+Authorization: Bearer <Clerk token>
+```
+
+The response is never cacheable and contains an ephemeral `client_secret`, its
+Unix `expires_at`, the configured model, the OpenAI WebRTC URL, and exactly one
+tool appropriate for the current workflow state: `create_catalog_draft` for an
+empty workflow or `refine_catalog_draft` for a workflow with a current draft.
+The frontend uses that secret to send its SDP offer directly to OpenAI at the
+returned `webrtc_url`; raw microphone audio does not pass through or persist in
+the Sterling Hollis backend. The standard `OPENAI_API_KEY` is never returned.
+
+When Realtime emits a function call, relay the allowlisted call through the
+authenticated backend:
+
+```http
+POST /api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls
+Authorization: Bearer <Clerk token>
+Idempotency-Key: voice-draft-call-1
+Content-Type: application/json
+```
+
+```json
+{
+  "call_id": "call_voice_1",
+  "name": "refine_catalog_draft",
+  "arguments": {
+    "instruction": "Change the coat to ivory and keep the silhouette.",
+    "current_draft_id": "draft_...",
+    "expected_draft_version": 1
+  }
+}
+```
+
+This endpoint accepts only create/refine draft tools and delegates to the same
+moderated, version-checked, idempotent Responses command used by the text UI.
+Publication, archive, direct catalog writes, and arbitrary tool names are
+rejected. Timeline events store the tool name, draft identifiers, version, and
+status but omit the transcript and raw audio. Session creation failures return
+the standard safe `{code, message, retryable}` detail object.
+
+Production enables this capability with `CATALOG_STUDIO_REALTIME_ENABLED=true`
+and a dedicated random `CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET`.
+The backend HMACs the Clerk subject with that secret before sending the stable,
+privacy-preserving `OpenAI-Safety-Identifier`; neither value is returned to the
+frontend or written to the workflow timeline.
 
 ## Catalog Studio Image Commands
 

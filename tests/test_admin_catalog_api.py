@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import Settings, get_settings
 from app.catalog.ai_schemas import (
+    CatalogAICommandResult,
     CatalogAIInventoryProposal,
     CatalogAIProductProposal,
     CatalogAIVariantProposal,
@@ -21,6 +22,7 @@ from app.catalog.admin_schemas import DesignSpecificationDraft
 from app.database import Base, get_db
 from app.main import create_app
 from app.routers.admin_catalog import get_catalog_ai_service
+from app.routers.admin_catalog import get_catalog_realtime_service
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
@@ -32,6 +34,7 @@ from app.models import (
 )
 from app.services.auth.clerk import AuthenticatedPrincipal, require_clerk_principal
 from app.services.catalog_ai import CatalogAIService
+from app.services.catalog_realtime import CatalogRealtimeService
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 
 
@@ -189,6 +192,8 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
         "/api/admin/catalog/workflows",
         "/api/admin/catalog/workflows/{workflow_id}",
         "/api/admin/catalog/workflows/{workflow_id}/draft-commands",
+        "/api/admin/catalog/workflows/{workflow_id}/realtime/sessions",
+        "/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls",
         "/api/admin/catalog/workflows/{workflow_id}/image-commands",
         "/api/admin/catalog/workflows/{workflow_id}/image-variant-sets",
         "/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}",
@@ -202,6 +207,178 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
             if isinstance(operation, dict)
         )
     assert not any(path.startswith("/api/admin/catalog/demo-runs") for path in schema["paths"])
+
+
+def test_catalog_realtime_session_api_never_returns_server_key(monkeypatch):
+    class FakeClientSecrets:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(value="ek_browser_only", expires_at=1_782_000_600)
+
+    secrets = FakeClientSecrets()
+    fake_client = SimpleNamespace(
+        realtime=SimpleNamespace(client_secrets=secrets)
+    )
+
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        settings = client.app.dependency_overrides[get_settings]()
+        settings.openai_api_key = "server-key-never-returned"
+        settings.catalog_studio_realtime_enabled = True
+        settings.catalog_studio_realtime_safety_identifier_secret = "safety-secret"
+        client.app.dependency_overrides[get_catalog_realtime_service] = lambda: (
+            CatalogRealtimeService(settings, fake_client)
+        )
+        started = client.post(
+            "/api/admin/catalog/workflows",
+            headers=_headers("api-realtime-workflow"),
+            json={
+                "title": "Voice-created coat",
+                "business_summary": "Preparing voice authoring.",
+            },
+        )
+        response = client.post(
+            f"/api/admin/catalog/workflows/{started.json()['id']}/realtime/sessions"
+        )
+
+    assert response.status_code == 201
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["client_secret"] == "ek_browser_only"
+    assert response.json()["tool_names"] == ["create_catalog_draft"]
+    assert "server-key-never-returned" not in response.text
+
+
+def test_catalog_realtime_session_api_rejects_non_admin_before_provider_call(monkeypatch):
+    class RejectProviderUse:
+        def create(self, **_kwargs):
+            raise AssertionError("Realtime provider must not be called for a non-admin")
+
+    fake_client = SimpleNamespace(
+        realtime=SimpleNamespace(client_secrets=RejectProviderUse())
+    )
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        settings = client.app.dependency_overrides[get_settings]()
+        settings.openai_api_key = "server-key"
+        settings.catalog_studio_realtime_enabled = True
+        settings.catalog_studio_realtime_safety_identifier_secret = "safety-secret"
+        client.app.dependency_overrides[require_clerk_principal] = lambda: (
+            AuthenticatedPrincipal(
+                provider="clerk",
+                provider_user_id="user_viewer",
+                email="viewer@example.com",
+                claims={},
+            )
+        )
+        client.app.dependency_overrides[get_catalog_realtime_service] = lambda: (
+            CatalogRealtimeService(settings, fake_client)
+        )
+        response = client.post(
+            "/api/admin/catalog/workflows/workflow_private/realtime/sessions"
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Clerk user is not a Catalog Studio administrator."
+    }
+
+
+def test_catalog_realtime_tool_call_delegates_to_existing_draft_command_service(monkeypatch):
+    calls = []
+
+    class CapturingCatalogAIService:
+        def execute(self, db, **kwargs):
+            calls.append(kwargs)
+            return CatalogAICommandResult(
+                status="blocked",
+                message="Moderation stopped this draft before it was saved.",
+                retryable=False,
+                replayed=False,
+            )
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        settings = client.app.dependency_overrides[get_settings]()
+        settings.catalog_studio_realtime_enabled = True
+        client.app.dependency_overrides[get_catalog_ai_service] = CapturingCatalogAIService
+        started = client.post(
+            "/api/admin/catalog/workflows",
+            headers=_headers("api-realtime-tool-workflow"),
+            json={
+                "title": "Voice-created coat",
+                "business_summary": "Preparing voice authoring.",
+            },
+        )
+        workflow_id = started.json()["id"]
+        response = client.post(
+            f"/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls",
+            headers=_headers("voice-command-1"),
+            json={
+                "call_id": "call_voice_1",
+                "name": "create_catalog_draft",
+                "arguments": {
+                    "instruction": "Create a black wool evening coat.",
+                    "expected_draft_version": 0,
+                },
+            },
+        )
+        with sessions() as db:
+            events = db.scalars(
+                select(CatalogWorkflowEvent).where(
+                    CatalogWorkflowEvent.workflow_id == workflow_id
+                )
+            ).all()
+
+    assert response.status_code == 200
+    assert calls[0]["workflow_id"] == workflow_id
+    assert calls[0]["idempotency_key"] == "voice-command-1"
+    assert calls[0]["command"].instruction == "Create a black wool evening coat."
+    assert calls[0]["command"].expected_draft_version == 0
+    assert [event.capability for event in events] == ["workflow", "realtime"]
+    assert "black wool" not in repr(events[-1].request_json).lower()
+
+
+def test_catalog_realtime_invalid_tool_arguments_do_not_mutate_or_call_responses(monkeypatch):
+    class RejectCatalogAIService:
+        def execute(self, db, **kwargs):
+            raise AssertionError("Invalid tool arguments must not reach Responses")
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        settings = client.app.dependency_overrides[get_settings]()
+        settings.catalog_studio_realtime_enabled = True
+        client.app.dependency_overrides[get_catalog_ai_service] = RejectCatalogAIService
+        started = client.post(
+            "/api/admin/catalog/workflows",
+            headers=_headers("api-invalid-realtime-tool-workflow"),
+            json={
+                "title": "Voice-created coat",
+                "business_summary": "Preparing voice authoring.",
+            },
+        )
+        workflow_id = started.json()["id"]
+        response = client.post(
+            f"/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls",
+            headers=_headers("voice-invalid-command"),
+            json={
+                "call_id": "call_invalid",
+                "name": "refine_catalog_draft",
+                "arguments": {
+                    "instruction": "Publish this product.",
+                    "expected_draft_version": 0,
+                },
+            },
+        )
+        with sessions() as db:
+            revisions = db.scalars(select(CatalogDraftRevision)).all()
+            events = db.scalars(
+                select(CatalogWorkflowEvent).where(
+                    CatalogWorkflowEvent.workflow_id == workflow_id
+                )
+            ).all()
+
+    assert response.status_code == 422
+    assert revisions == []
+    assert [event.capability for event in events] == ["workflow"]
 
 
 def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch):
