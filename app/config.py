@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     catalog_studio_responses_timeout_seconds: float = 60.0
     catalog_studio_responses_max_output_tokens: int = 2500
     catalog_studio_realtime_enabled: bool = False
-    catalog_studio_shared_demo_runs: bool = False
+    catalog_studio_shared_workflows: bool = False
     catalog_studio_trace_retention_days: int = 7
     catalog_studio_trace_max_depth: int = 6
     catalog_studio_trace_max_string_length: int = 1000

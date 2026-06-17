@@ -65,7 +65,7 @@ def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
     monkeypatch.setenv("CATALOG_STUDIO_MODERATION_MODEL", "omni-moderation-test")
     monkeypatch.setenv("CATALOG_STUDIO_RESPONSES_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("CATALOG_STUDIO_RESPONSES_MAX_OUTPUT_TOKENS", "1800")
-    monkeypatch.setenv("CATALOG_STUDIO_SHARED_DEMO_RUNS", "true")
+    monkeypatch.setenv("CATALOG_STUDIO_SHARED_WORKFLOWS", "true")
     monkeypatch.setenv("CATALOG_STUDIO_TRACE_RETENTION_DAYS", "3")
     monkeypatch.setenv("CATALOG_STUDIO_TRACE_MAX_BYTES", "8192")
     monkeypatch.setenv("CATALOG_STUDIO_TRACE_REDACTED_KEYS", "internal_note,vendor_secret")
@@ -77,7 +77,7 @@ def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
     assert settings.catalog_studio_moderation_model == "omni-moderation-test"
     assert settings.catalog_studio_responses_timeout_seconds == 45
     assert settings.catalog_studio_responses_max_output_tokens == 1800
-    assert settings.catalog_studio_shared_demo_runs is True
+    assert settings.catalog_studio_shared_workflows is True
     assert settings.catalog_studio_trace_retention_days == 3
     assert settings.catalog_studio_trace_max_bytes == 8192
     assert settings.catalog_studio_trace_redacted_keys == "internal_note,vendor_secret"

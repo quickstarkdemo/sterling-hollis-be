@@ -74,10 +74,10 @@ Generated image files are served from:
 | Publish an approved draft | `POST` | `/api/admin/catalog/products/{product_id}/publish` |
 | Archive a published product | `POST` | `/api/admin/catalog/products/{product_id}/archive` |
 | Inspect product lifecycle and draft history | `GET` | `/api/admin/catalog/products/{product_id}` |
-| Start sanitized OpenAI demo run | `POST` | `/api/admin/catalog/demo-runs` |
-| Append ordered demo event | `POST` | `/api/admin/catalog/demo-runs/{run_id}/events` |
-| Generate or refine moderated product draft | `POST` | `/api/admin/catalog/demo-runs/{run_id}/draft-commands` |
-| Read business or developer timeline | `GET` | `/api/admin/catalog/demo-runs/{run_id}` |
+| Start sanitized OpenAI demo workflow | `POST` | `/api/admin/catalog/workflows` |
+| Append ordered workflow event | `POST` | `/api/admin/catalog/workflows/{workflow_id}/events` |
+| Generate or refine moderated product draft | `POST` | `/api/admin/catalog/workflows/{workflow_id}/draft-commands` |
+| Read business or developer timeline | `GET` | `/api/admin/catalog/workflows/{workflow_id}` |
 | Clerk demo fault state | `GET` | `/api/demo/observability` |
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
 | Clerk demo fault reset | `POST` | `/api/demo/observability/reset` |
@@ -344,19 +344,19 @@ content-type: application/json
 }
 ```
 
-## Sanitized OpenAI Demo Timeline
+## Sanitized OpenAI Workflow Timeline
 
-`POST /api/admin/catalog/demo-runs` starts an administrator-owned workflow and
+`POST /api/admin/catalog/workflows` starts an administrator-owned workflow and
 records its first ordered business event. It requires an `Idempotency-Key` so
-an exact start retry returns the original run. Subsequent stages append through
-`POST /api/admin/catalog/demo-runs/{run_id}/events` with a stable
+an exact start retry returns the original workflow. Subsequent stages append through
+`POST /api/admin/catalog/workflows/{workflow_id}/events` with a stable
 `client_event_id`; an exact retry replays the existing event and conflicting
 reuse returns `409`.
 
-`GET /api/admin/catalog/demo-runs/{run_id}` returns the business timeline by
+`GET /api/admin/catalog/workflows/{workflow_id}` returns the business timeline by
 default. Add `?developer=true` to include model, request ID, duration, normalized
 usage, moderation summary, error code, and bounded request/response projections.
-Developer fields are available only to the run owner. If shared demo runs are
+Developer fields are available only to the workflow owner. If shared catalog workflows are
 enabled, other administrators receive only the business projection.
 
 Sanitization happens before persistence. Authorization data, credentials,
@@ -364,11 +364,11 @@ system instructions, private reasoning, raw audio, binary image data, customer
 identity, configured private keys, oversized strings/arrays/objects, and unknown
 fields are redacted, omitted, or replaced with deterministic truncation markers.
 After the configured retention period, event payloads are replaced with an
-expiry marker while run metadata and catalog records remain intact.
+expiry marker while workflow metadata and catalog records remain intact.
 
 ## Responses and Moderation Draft Commands
 
-`POST /api/admin/catalog/demo-runs/{run_id}/draft-commands` turns one bounded
+`POST /api/admin/catalog/workflows/{workflow_id}/draft-commands` turns one bounded
 presenter instruction into a private, schema-validated product draft. The
 backend uses the Responses API with strict structured output and requests input
 and output moderation signals in the same provider call. The application blocks
@@ -382,7 +382,7 @@ new private revision for the same product, so the published catalog remains
 unchanged until an administrator explicitly publishes an approved revision.
 
 ```http
-POST /api/admin/catalog/demo-runs/{run_id}/draft-commands
+POST /api/admin/catalog/workflows/{workflow_id}/draft-commands
 authorization: Bearer <Clerk token>
 idempotency-key: catalog-demo-draft-1
 content-type: application/json
@@ -407,7 +407,7 @@ For a follow-up refinement:
 
 The success response contains the validated private draft and the current
 business timeline. The timeline records distinct Moderation and Responses
-events. The owner-only `developer=true` run projection adds bounded model,
+events. The owner-only `developer=true` workflow projection adds bounded model,
 request ID, latency, usage, policy, and structured-output metadata without the
 presenter instruction, system instructions, private reasoning, or raw provider
 objects. Provider timeouts and invalid structured output leave the prior draft

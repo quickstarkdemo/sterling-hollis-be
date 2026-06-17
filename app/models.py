@@ -256,8 +256,8 @@ class CatalogAdminMutation(Base):
     )
 
 
-class OpenAIDemoRun(Base):
-    __tablename__ = "openai_demo_runs"
+class CatalogWorkflow(Base):
+    __tablename__ = "catalog_workflows"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     owner_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="clerk")
@@ -267,7 +267,7 @@ class OpenAIDemoRun(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     business_summary: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="started", index=True)
-    current_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="run")
+    current_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="workflow")
     next_event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     draft_revision_id: Mapped[str | None] = mapped_column(
         ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"), index=True
@@ -296,23 +296,23 @@ class OpenAIDemoRun(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
     __table_args__ = (
-        CheckConstraint("next_event_sequence > 0", name="ck_openai_demo_runs_next_sequence_positive"),
+        CheckConstraint("next_event_sequence > 0", name="ck_catalog_workflows_next_sequence_positive"),
         UniqueConstraint(
             "owner_provider",
             "owner_provider_user_id",
             "idempotency_key_hash",
-            name="uq_openai_demo_runs_owner_idempotency",
+            name="uq_catalog_workflows_owner_idempotency",
         ),
-        Index("ix_openai_demo_runs_owner_created", "owner_provider_user_id", "created_at"),
+        Index("ix_catalog_workflows_owner_created", "owner_provider_user_id", "created_at"),
     )
 
 
-class OpenAIDemoEvent(Base):
-    __tablename__ = "openai_demo_events"
+class CatalogWorkflowEvent(Base):
+    __tablename__ = "catalog_workflow_events"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    run_id: Mapped[str] = mapped_column(
-        ForeignKey("openai_demo_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    workflow_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_workflows.id", ondelete="CASCADE"), nullable=False, index=True
     )
     client_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -342,10 +342,14 @@ class OpenAIDemoEvent(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("sequence > 0", name="ck_openai_demo_events_sequence_positive"),
-        UniqueConstraint("run_id", "sequence", name="uq_openai_demo_events_run_sequence"),
-        UniqueConstraint("run_id", "client_event_id", name="uq_openai_demo_events_run_client_event"),
-        Index("ix_openai_demo_events_run_created", "run_id", "created_at"),
+        CheckConstraint("sequence > 0", name="ck_catalog_workflow_events_sequence_positive"),
+        UniqueConstraint("workflow_id", "sequence", name="uq_catalog_workflow_events_workflow_sequence"),
+        UniqueConstraint(
+            "workflow_id",
+            "client_event_id",
+            name="uq_catalog_workflow_events_workflow_client_event",
+        ),
+        Index("ix_catalog_workflow_events_workflow_created", "workflow_id", "created_at"),
     )
 
 

@@ -13,19 +13,19 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.catalog.demo_schemas import (
-    DemoDeveloperEvent,
-    DemoEventInput,
-    DemoEventResponse,
-    DemoRunResponse,
+from app.catalog.workflow_schemas import (
+    CatalogWorkflowResponse,
+    WorkflowDeveloperEvent,
+    WorkflowEventInput,
+    WorkflowEventResponse,
 )
 from app.config import Settings
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
+    CatalogWorkflow,
+    CatalogWorkflowEvent,
     ImageGenerationJob,
-    OpenAIDemoEvent,
-    OpenAIDemoRun,
 )
 from app.services.auth.clerk import AuthenticatedPrincipal
 
@@ -238,7 +238,7 @@ def _sanitize_value(
     return REDACTED
 
 
-def sanitize_demo_payload(value: Any, *, settings: Settings) -> dict:
+def sanitize_workflow_payload(value: Any, *, settings: Settings) -> dict:
     projected = _sanitize_value(
         value,
         settings=settings,
@@ -331,7 +331,7 @@ def normalize_moderation(value: Mapping[str, Any] | None, *, settings: Settings)
     return _enforce_total_bytes(normalized, settings=settings)
 
 
-def _event_hash(event: DemoEventInput) -> str:
+def _event_hash(event: WorkflowEventInput) -> str:
     payload = json.dumps(
         event.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), default=str
     ).encode()
@@ -342,7 +342,7 @@ def _event_key(client_event_id: str) -> str:
     return hashlib.sha256(client_event_id.encode()).hexdigest()
 
 
-def _run_request_hash(
+def _workflow_request_hash(
     *,
     title: str,
     business_summary: str,
@@ -364,17 +364,17 @@ def _run_request_hash(
     return hashlib.sha256(payload).hexdigest()
 
 
-def _run_for_idempotency_key(
+def _workflow_for_idempotency_key(
     db: Session,
     *,
     principal: AuthenticatedPrincipal,
     key_hash: str,
-) -> OpenAIDemoRun | None:
+) -> CatalogWorkflow | None:
     return db.scalar(
-        select(OpenAIDemoRun).where(
-            OpenAIDemoRun.owner_provider == principal.provider,
-            OpenAIDemoRun.owner_provider_user_id == principal.provider_user_id,
-            OpenAIDemoRun.idempotency_key_hash == key_hash,
+        select(CatalogWorkflow).where(
+            CatalogWorkflow.owner_provider == principal.provider,
+            CatalogWorkflow.owner_provider_user_id == principal.provider_user_id,
+            CatalogWorkflow.idempotency_key_hash == key_hash,
         )
     )
 
@@ -399,14 +399,14 @@ def _validate_links(
             )
 
 
-def _owner_run(db: Session, run_id: str, principal: AuthenticatedPrincipal) -> OpenAIDemoRun:
-    run = db.scalar(select(OpenAIDemoRun).where(OpenAIDemoRun.id == run_id).with_for_update())
-    if not run or run.owner_provider_user_id != principal.provider_user_id:
-        raise HTTPException(status_code=404, detail="Catalog Studio demo run not found.")
-    return run
+def _owner_workflow(db: Session, workflow_id: str, principal: AuthenticatedPrincipal) -> CatalogWorkflow:
+    workflow = db.scalar(select(CatalogWorkflow).where(CatalogWorkflow.id == workflow_id).with_for_update())
+    if not workflow or workflow.owner_provider_user_id != principal.provider_user_id:
+        raise HTTPException(status_code=404, detail="Catalog Studio catalog workflow not found.")
+    return workflow
 
 
-def cleanup_expired_demo_payloads(
+def cleanup_expired_workflow_payloads(
     db: Session,
     *,
     settings: Settings,
@@ -416,10 +416,10 @@ def cleanup_expired_demo_payloads(
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=max(1, settings.catalog_studio_trace_retention_days))
     result = db.execute(
-        update(OpenAIDemoEvent)
+        update(CatalogWorkflowEvent)
         .where(
-            OpenAIDemoEvent.created_at < cutoff,
-            OpenAIDemoEvent.payload_expired.is_(False),
+            CatalogWorkflowEvent.created_at < cutoff,
+            CatalogWorkflowEvent.payload_expired.is_(False),
         )
         .values(
             usage_json=dict(RETENTION_MARKER),
@@ -436,7 +436,7 @@ def cleanup_expired_demo_payloads(
     return scrubbed
 
 
-def start_demo_run(
+def start_catalog_workflow(
     db: Session,
     *,
     principal: AuthenticatedPrincipal,
@@ -448,30 +448,30 @@ def start_demo_run(
     image_job_id: str | None = None,
     published_product_id: str | None = None,
     now: datetime | None = None,
-) -> OpenAIDemoRun:
+) -> CatalogWorkflow:
     now = now or datetime.now(timezone.utc)
     idempotency_key = idempotency_key.strip()
     if not idempotency_key:
         raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
-    scrubbed = cleanup_expired_demo_payloads(
+    scrubbed = cleanup_expired_workflow_payloads(
         db, settings=settings, now=now, commit=False
     )
     key_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()
-    request_hash = _run_request_hash(
+    request_hash = _workflow_request_hash(
         title=title,
         business_summary=business_summary,
         draft_id=draft_id,
         image_job_id=image_job_id,
         published_product_id=published_product_id,
     )
-    existing = _run_for_idempotency_key(
+    existing = _workflow_for_idempotency_key(
         db, principal=principal, key_hash=key_hash
     )
     if existing:
         if existing.request_hash != request_hash:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Idempotency-Key was already used for a different demo run.",
+                detail="Idempotency-Key was already used for a different catalog workflow.",
             )
         if scrubbed:
             db.commit()
@@ -485,8 +485,8 @@ def start_demo_run(
     safe_summary = _safe_text(
         business_summary, max_length=settings.catalog_studio_trace_max_string_length
     )
-    run = OpenAIDemoRun(
-        id=f"demo_{uuid4().hex[:24]}",
+    workflow = CatalogWorkflow(
+        id=f"workflow_{uuid4().hex[:24]}",
         owner_provider=principal.provider,
         owner_provider_user_id=principal.provider_user_id,
         idempotency_key_hash=key_hash,
@@ -494,7 +494,7 @@ def start_demo_run(
         title=_safe_text(title, max_length=255),
         business_summary=safe_summary,
         status="started",
-        current_stage="run",
+        current_stage="workflow",
         next_event_sequence=2,
         draft_revision_id=draft_id,
         image_job_id=image_job_id,
@@ -503,14 +503,14 @@ def start_demo_run(
         updated_at=now,
         expires_at=now + timedelta(days=max(1, settings.catalog_studio_trace_retention_days)),
     )
-    initial = OpenAIDemoEvent(
+    initial = CatalogWorkflowEvent(
         id=f"event_{uuid4().hex[:24]}",
-        run_id=run.id,
-        client_event_id="run-started",
-        input_hash=hashlib.sha256(f"{run.id}:started".encode()).hexdigest(),
+        workflow_id=workflow.id,
+        client_event_id="workflow-started",
+        input_hash=hashlib.sha256(f"{workflow.id}:started".encode()).hexdigest(),
         sequence=1,
-        stage="run",
-        capability="run",
+        stage="workflow",
+        capability="workflow",
         status="started",
         business_summary=safe_summary,
         usage_json={},
@@ -522,51 +522,51 @@ def start_demo_run(
         started_at=now,
         created_at=now,
     )
-    db.add_all([run, initial])
+    db.add_all([workflow, initial])
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        concurrent = _run_for_idempotency_key(
+        concurrent = _workflow_for_idempotency_key(
             db, principal=principal, key_hash=key_hash
         )
         if concurrent and concurrent.request_hash == request_hash:
             return concurrent
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Catalog Studio demo run state changed; retry with fresh state.",
+            detail="Catalog Studio catalog workflow state changed; retry with fresh state.",
         ) from exc
-    return run
+    return workflow
 
 
-def append_demo_event(
+def append_workflow_event(
     db: Session,
     *,
-    run_id: str,
+    workflow_id: str,
     principal: AuthenticatedPrincipal,
-    event: DemoEventInput,
+    event: WorkflowEventInput,
     settings: Settings,
     now: datetime | None = None,
     commit: bool = True,
-) -> OpenAIDemoEvent:
+) -> CatalogWorkflowEvent:
     now = now or datetime.now(timezone.utc)
-    scrubbed = cleanup_expired_demo_payloads(
+    scrubbed = cleanup_expired_workflow_payloads(
         db, settings=settings, now=now, commit=False
     )
-    run = _owner_run(db, run_id, principal)
+    workflow = _owner_workflow(db, workflow_id, principal)
     fingerprint = _event_hash(event)
     client_event_key = _event_key(event.client_event_id)
     existing = db.scalar(
-        select(OpenAIDemoEvent).where(
-            OpenAIDemoEvent.run_id == run_id,
-            OpenAIDemoEvent.client_event_id == client_event_key,
+        select(CatalogWorkflowEvent).where(
+            CatalogWorkflowEvent.workflow_id == workflow_id,
+            CatalogWorkflowEvent.client_event_id == client_event_key,
         )
     )
     if existing:
         if existing.input_hash != fingerprint:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="client_event_id was already used for a different demo event.",
+                detail="client_event_id was already used for a different workflow event.",
             )
         if scrubbed and commit:
             db.commit()
@@ -585,12 +585,12 @@ def append_demo_event(
             int((event.completed_at - event.started_at).total_seconds() * 1000),
         )
 
-    row = OpenAIDemoEvent(
+    row = CatalogWorkflowEvent(
         id=f"event_{uuid4().hex[:24]}",
-        run_id=run.id,
+        workflow_id=workflow.id,
         client_event_id=client_event_key,
         input_hash=fingerprint,
-        sequence=run.next_event_sequence,
+        sequence=workflow.next_event_sequence,
         stage=event.stage,
         capability=event.capability,
         status=event.status,
@@ -605,8 +605,8 @@ def append_demo_event(
         duration_ms=duration_ms,
         usage_json=normalize_usage(event.usage),
         moderation_json=normalize_moderation(event.moderation, settings=settings),
-        request_json=sanitize_demo_payload(event.request_payload, settings=settings),
-        response_json=sanitize_demo_payload(event.response_payload, settings=settings),
+        request_json=sanitize_workflow_payload(event.request_payload, settings=settings),
+        response_json=sanitize_workflow_payload(event.response_payload, settings=settings),
         error_code=(
             _safe_text(event.error_code, max_length=128) if event.error_code else None
         ),
@@ -616,17 +616,17 @@ def append_demo_event(
         completed_at=event.completed_at,
         created_at=now,
     )
-    run.next_event_sequence += 1
-    run.current_stage = event.stage
-    run.status = event.status
-    run.updated_at = now
-    run.expires_at = now + timedelta(days=max(1, settings.catalog_studio_trace_retention_days))
+    workflow.next_event_sequence += 1
+    workflow.current_stage = event.stage
+    workflow.status = event.status
+    workflow.updated_at = now
+    workflow.expires_at = now + timedelta(days=max(1, settings.catalog_studio_trace_retention_days))
     if event.draft_id:
-        run.draft_revision_id = event.draft_id
+        workflow.draft_revision_id = event.draft_id
     if event.image_job_id:
-        run.image_job_id = event.image_job_id
+        workflow.image_job_id = event.image_job_id
     if event.published_product_id:
-        run.published_product_id = event.published_product_id
+        workflow.published_product_id = event.published_product_id
     db.add(row)
     if commit:
         db.commit()
@@ -635,10 +635,10 @@ def append_demo_event(
     return row
 
 
-def project_demo_event(event: OpenAIDemoEvent, *, developer: bool) -> DemoEventResponse:
+def project_workflow_event(event: CatalogWorkflowEvent, *, developer: bool) -> WorkflowEventResponse:
     details = None
     if developer:
-        details = DemoDeveloperEvent(
+        details = WorkflowDeveloperEvent(
             model=event.model,
             request_id=event.request_id,
             duration_ms=event.duration_ms,
@@ -649,7 +649,7 @@ def project_demo_event(event: OpenAIDemoEvent, *, developer: bool) -> DemoEventR
             error_code=event.error_code,
             payload_expired=event.payload_expired,
         )
-    return DemoEventResponse(
+    return WorkflowEventResponse(
         id=event.id,
         sequence=event.sequence,
         stage=event.stage,
@@ -662,41 +662,41 @@ def project_demo_event(event: OpenAIDemoEvent, *, developer: bool) -> DemoEventR
     )
 
 
-def get_demo_run_projection(
+def get_catalog_workflow_projection(
     db: Session,
     *,
-    run_id: str,
+    workflow_id: str,
     principal: AuthenticatedPrincipal,
     developer: bool,
     settings: Settings,
-) -> DemoRunResponse:
-    cleanup_expired_demo_payloads(db, settings=settings)
-    run = db.get(OpenAIDemoRun, run_id)
-    is_owner = bool(run and run.owner_provider_user_id == principal.provider_user_id)
-    if not run or (not is_owner and not settings.catalog_studio_shared_demo_runs):
-        raise HTTPException(status_code=404, detail="Catalog Studio demo run not found.")
+) -> CatalogWorkflowResponse:
+    cleanup_expired_workflow_payloads(db, settings=settings)
+    workflow = db.get(CatalogWorkflow, workflow_id)
+    is_owner = bool(workflow and workflow.owner_provider_user_id == principal.provider_user_id)
+    if not workflow or (not is_owner and not settings.catalog_studio_shared_workflows):
+        raise HTTPException(status_code=404, detail="Catalog Studio catalog workflow not found.")
     if developer and not is_owner:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Developer details are available only to the demo run owner.",
+            detail="Developer details are available only to the catalog workflow owner.",
         )
     events = db.scalars(
-        select(OpenAIDemoEvent)
-        .where(OpenAIDemoEvent.run_id == run.id)
-        .order_by(OpenAIDemoEvent.sequence)
+        select(CatalogWorkflowEvent)
+        .where(CatalogWorkflowEvent.workflow_id == workflow.id)
+        .order_by(CatalogWorkflowEvent.sequence)
     ).all()
-    return DemoRunResponse(
-        id=run.id,
-        title=run.title,
-        business_summary=run.business_summary,
-        status=run.status,
-        current_stage=run.current_stage,
-        draft_id=run.draft_revision_id,
-        image_job_id=run.image_job_id,
-        published_product_id=run.published_product_id,
+    return CatalogWorkflowResponse(
+        id=workflow.id,
+        title=workflow.title,
+        business_summary=workflow.business_summary,
+        status=workflow.status,
+        current_stage=workflow.current_stage,
+        draft_id=workflow.draft_revision_id,
+        image_job_id=workflow.image_job_id,
+        published_product_id=workflow.published_product_id,
         is_owner=is_owner,
-        created_at=run.created_at,
-        updated_at=run.updated_at,
-        expires_at=run.expires_at,
-        events=[project_demo_event(event, developer=developer) for event in events],
+        created_at=workflow.created_at,
+        updated_at=workflow.updated_at,
+        expires_at=workflow.expires_at,
+        events=[project_workflow_event(event, developer=developer) for event in events],
     )

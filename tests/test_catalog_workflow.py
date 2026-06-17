@@ -13,17 +13,17 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.catalog.demo_schemas import DemoEventInput
+from app.catalog.workflow_schemas import WorkflowEventInput
 from app.config import Settings
 from app.database import Base
-from app.models import CatalogProduct, OpenAIDemoEvent, OpenAIDemoRun, SyntheticRun
+from app.models import CatalogProduct, CatalogWorkflowEvent, CatalogWorkflow, SyntheticRun
 from app.services.auth.clerk import AuthenticatedPrincipal
-from app.services.demo_trace import (
-    append_demo_event,
-    cleanup_expired_demo_payloads,
-    get_demo_run_projection,
-    sanitize_demo_payload,
-    start_demo_run,
+from app.services.catalog_workflow import (
+    append_workflow_event,
+    cleanup_expired_workflow_payloads,
+    get_catalog_workflow_projection,
+    sanitize_workflow_payload,
+    start_catalog_workflow,
 )
 
 
@@ -57,7 +57,7 @@ def _settings(**overrides) -> Settings:
         "catalog_studio_trace_max_object_keys": 12,
         "catalog_studio_trace_max_bytes": 4096,
         "catalog_studio_trace_redacted_keys": "internal_note",
-        "catalog_studio_shared_demo_runs": False,
+        "catalog_studio_shared_workflows": False,
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)
@@ -72,8 +72,8 @@ def _principal(subject: str = "user_admin") -> AuthenticatedPrincipal:
     )
 
 
-def test_demo_trace_migration_adds_tables_without_changing_catalog_rows(tmp_path):
-    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'demo-trace.db'}", future=True)
+def test_catalog_workflow_migration_preserves_rows_and_supports_downgrade(tmp_path):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'catalog-workflow.db'}", future=True)
     with engine.begin() as connection:
         connection.execute(text("create table catalog_draft_revisions (id varchar(64) primary key)"))
         connection.execute(text("create table image_generation_jobs (id varchar(64) primary key)"))
@@ -91,15 +91,100 @@ def test_demo_trace_migration_adds_tables_without_changing_catalog_rows(tmp_path
         migration.op = Operations(MigrationContext.configure(connection))
         migration.upgrade()
 
+        connection.execute(
+            text(
+                """
+                insert into openai_demo_runs (
+                    id, owner_provider, owner_provider_user_id, idempotency_key_hash,
+                    request_hash, title, business_summary, status, current_stage,
+                    next_event_sequence, created_at, updated_at, expires_at
+                ) values (
+                    'workflow_existing', 'clerk', 'user_admin', 'key_hash',
+                    'request_hash', 'Existing workflow', 'Existing summary', 'started',
+                    'run', 2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                insert into openai_demo_events (
+                    id, run_id, client_event_id, input_hash, sequence, stage, capability,
+                    status, business_summary, usage_json, moderation_json, request_json,
+                    response_json, retryable, payload_expired, created_at
+                ) values (
+                    'event_existing', 'workflow_existing', 'workflow-started', 'event_hash',
+                    1, 'run', 'run', 'started', 'Existing summary', '{}', '{}', '{}',
+                    '{}', 0, 0, CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
+        rename_path = (
+            Path(__file__).parents[1]
+            / "alembic/versions/f4a5b6c7d8e9_promote_catalog_workflows.py"
+        )
+        rename_spec = importlib.util.spec_from_file_location(
+            "promote_catalog_workflows_migration", rename_path
+        )
+        assert rename_spec and rename_spec.loader
+        rename_migration = importlib.util.module_from_spec(rename_spec)
+        rename_spec.loader.exec_module(rename_migration)
+        rename_migration.op = Operations(MigrationContext.configure(connection))
+        rename_migration.upgrade()
+
         table_names = set(inspect(connection).get_table_names())
         catalog_count = connection.scalar(text("select count(*) from catalog_products"))
+        workflow_count = connection.scalar(text("select count(*) from catalog_workflows"))
+        event_parent = connection.scalar(
+            text("select workflow_id from catalog_workflow_events where id = 'event_existing'")
+        )
+        migrated_stage = connection.execute(
+            text(
+                "select stage, capability from catalog_workflow_events "
+                "where id = 'event_existing'"
+            )
+        ).one()
+        inspector = inspect(connection)
+        schema_object_names = {
+            item["name"]
+            for table_name in ("catalog_workflows", "catalog_workflow_events")
+            for collection in (
+                inspector.get_indexes(table_name),
+                inspector.get_unique_constraints(table_name),
+                inspector.get_check_constraints(table_name),
+            )
+            for item in collection
+            if item.get("name")
+        }
 
-    assert {"openai_demo_runs", "openai_demo_events"} <= table_names
-    assert catalog_count == 1
+        assert {"catalog_workflows", "catalog_workflow_events"} <= table_names
+        assert "openai_demo_runs" not in table_names
+        assert "openai_demo_events" not in table_names
+        assert catalog_count == 1
+        assert workflow_count == 1
+        assert event_parent == "workflow_existing"
+        assert migrated_stage == ("workflow", "workflow")
+        assert all("demo" not in name for name in schema_object_names)
+
+        rename_migration.downgrade()
+        downgraded_tables = set(inspect(connection).get_table_names())
+        downgraded_parent = connection.scalar(
+            text("select run_id from openai_demo_events where id = 'event_existing'")
+        )
+        downgraded_stage = connection.execute(
+            text("select stage, capability from openai_demo_events where id = 'event_existing'")
+        ).one()
+
+    assert {"openai_demo_runs", "openai_demo_events"} <= downgraded_tables
+    assert downgraded_parent == "workflow_existing"
+    assert downgraded_stage == ("run", "run")
 
 
 def test_start_run_records_owner_and_ordered_initial_event(db):
-    run = start_demo_run(
+    workflow = start_catalog_workflow(
         db,
         principal=_principal(),
         title="Create the launch coat",
@@ -107,7 +192,7 @@ def test_start_run_records_owner_and_ordered_initial_event(db):
         settings=_settings(),
         idempotency_key="start-launch-coat",
     )
-    replay = start_demo_run(
+    replay = start_catalog_workflow(
         db,
         principal=_principal(),
         title="Create the launch coat",
@@ -116,7 +201,7 @@ def test_start_run_records_owner_and_ordered_initial_event(db):
         idempotency_key="start-launch-coat",
     )
     with pytest.raises(HTTPException) as conflict:
-        start_demo_run(
+        start_catalog_workflow(
             db,
             principal=_principal(),
             title="A different launch coat",
@@ -126,35 +211,35 @@ def test_start_run_records_owner_and_ordered_initial_event(db):
         )
 
     events = db.scalars(
-        select(OpenAIDemoEvent)
-        .where(OpenAIDemoEvent.run_id == run.id)
-        .order_by(OpenAIDemoEvent.sequence)
+        select(CatalogWorkflowEvent)
+        .where(CatalogWorkflowEvent.workflow_id == workflow.id)
+        .order_by(CatalogWorkflowEvent.sequence)
     ).all()
-    assert run.owner_provider_user_id == "user_admin"
-    assert replay.id == run.id
+    assert workflow.owner_provider_user_id == "user_admin"
+    assert replay.id == workflow.id
     assert conflict.value.status_code == 409
-    assert run.next_event_sequence == 2
+    assert workflow.next_event_sequence == 2
     assert [(event.sequence, event.stage, event.status) for event in events] == [
-        (1, "run", "started")
+        (1, "workflow", "started")
     ]
 
 
 def test_projection_preserves_allowlisted_developer_fields(db):
     settings = _settings()
     principal = _principal()
-    run = start_demo_run(
+    workflow = start_catalog_workflow(
         db,
         principal=principal,
         title="Launch coat",
         business_summary="Run started.",
         settings=settings,
-        idempotency_key="projection-run",
+        idempotency_key="projection-workflow",
     )
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         principal=principal,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id="responses-1",
             stage="draft",
             capability="responses",
@@ -177,11 +262,11 @@ def test_projection_preserves_allowlisted_developer_fields(db):
         settings=settings,
     )
 
-    business = get_demo_run_projection(
-        db, run_id=run.id, principal=principal, developer=False, settings=settings
+    business = get_catalog_workflow_projection(
+        db, workflow_id=workflow.id, principal=principal, developer=False, settings=settings
     )
-    developer = get_demo_run_projection(
-        db, run_id=run.id, principal=principal, developer=True, settings=settings
+    developer = get_catalog_workflow_projection(
+        db, workflow_id=workflow.id, principal=principal, developer=True, settings=settings
     )
 
     assert business.events[-1].business_summary == "Product details are ready for review."
@@ -225,7 +310,7 @@ def test_redaction_removes_sensitive_content_at_every_depth():
         },
     }
 
-    projected = sanitize_demo_payload(raw, settings=settings)
+    projected = sanitize_workflow_payload(raw, settings=settings)
     encoded = json.dumps(projected, sort_keys=True)
 
     assert projected["product"]["title"] == "Safe Coat"
@@ -265,15 +350,15 @@ def test_oversized_payloads_are_deterministically_bounded():
         "response": {"result": {"nested": {"too": {"deep": True}}}},
     }
 
-    first = sanitize_demo_payload(raw, settings=settings)
-    second = sanitize_demo_payload(raw, settings=settings)
+    first = sanitize_workflow_payload(raw, settings=settings)
+    second = sanitize_workflow_payload(raw, settings=settings)
     encoded = json.dumps(first, sort_keys=True, separators=(",", ":"))
 
     assert first == second
     assert len(encoded.encode()) <= settings.catalog_studio_trace_max_bytes
     assert "truncated" in encoded.lower()
 
-    string_limited = sanitize_demo_payload(
+    string_limited = sanitize_workflow_payload(
         {"title": "A title that is much too long"},
         settings=_settings(catalog_studio_trace_max_string_length=12),
     )
@@ -283,30 +368,30 @@ def test_oversized_payloads_are_deterministically_bounded():
 def test_run_ownership_and_shared_business_view(db):
     owner = _principal("owner")
     other = _principal("other")
-    private_settings = _settings(catalog_studio_shared_demo_runs=False)
-    run = start_demo_run(
+    private_settings = _settings(catalog_studio_shared_workflows=False)
+    workflow = start_catalog_workflow(
         db,
         principal=owner,
-        title="Private run",
+        title="Private workflow",
         business_summary="Private summary",
         settings=private_settings,
-        idempotency_key="private-run",
+        idempotency_key="private-workflow",
     )
 
     with pytest.raises(HTTPException) as hidden:
-        get_demo_run_projection(
-            db, run_id=run.id, principal=other, developer=False, settings=private_settings
+        get_catalog_workflow_projection(
+            db, workflow_id=workflow.id, principal=other, developer=False, settings=private_settings
         )
     assert hidden.value.status_code == 404
 
-    shared_settings = _settings(catalog_studio_shared_demo_runs=True)
-    shared = get_demo_run_projection(
-        db, run_id=run.id, principal=other, developer=False, settings=shared_settings
+    shared_settings = _settings(catalog_studio_shared_workflows=True)
+    shared = get_catalog_workflow_projection(
+        db, workflow_id=workflow.id, principal=other, developer=False, settings=shared_settings
     )
-    assert shared.title == "Private run"
+    assert shared.title == "Private workflow"
     with pytest.raises(HTTPException) as forbidden:
-        get_demo_run_projection(
-            db, run_id=run.id, principal=other, developer=True, settings=shared_settings
+        get_catalog_workflow_projection(
+            db, workflow_id=workflow.id, principal=other, developer=True, settings=shared_settings
         )
     assert forbidden.value.status_code == 403
 
@@ -329,21 +414,21 @@ def test_retention_scrubs_payloads_without_deleting_catalog_records(db):
         )
     )
     db.commit()
-    run = start_demo_run(
+    workflow = start_catalog_workflow(
         db,
         principal=principal,
-        title="Expiring run",
+        title="Expiring workflow",
         business_summary="Run started.",
         settings=settings,
-        idempotency_key="expiring-run",
+        idempotency_key="expiring-workflow",
         published_product_id="cat_retained",
         now=now - timedelta(days=3),
     )
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         principal=principal,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id="old-event",
             stage="draft",
             capability="responses",
@@ -356,11 +441,11 @@ def test_retention_scrubs_payloads_without_deleting_catalog_records(db):
         now=now - timedelta(days=2),
     )
 
-    scrubbed = cleanup_expired_demo_payloads(db, settings=settings, now=now)
+    scrubbed = cleanup_expired_workflow_payloads(db, settings=settings, now=now)
 
     assert scrubbed == 2
     assert db.get(CatalogProduct, "cat_retained") is not None
-    events = db.scalars(select(OpenAIDemoEvent).where(OpenAIDemoEvent.run_id == run.id)).all()
+    events = db.scalars(select(CatalogWorkflowEvent).where(CatalogWorkflowEvent.workflow_id == workflow.id)).all()
     assert events
     assert all(event.payload_expired for event in events)
     assert all(event.request_json == {"_retention": "expired"} for event in events)
@@ -369,15 +454,15 @@ def test_retention_scrubs_payloads_without_deleting_catalog_records(db):
 def test_failed_stage_and_retry_append_history_idempotently(db):
     settings = _settings()
     principal = _principal()
-    run = start_demo_run(
+    workflow = start_catalog_workflow(
         db,
         principal=principal,
-        title="Retry run",
+        title="Retry workflow",
         business_summary="Run started.",
         settings=settings,
-        idempotency_key="retry-run",
+        idempotency_key="retry-workflow",
     )
-    failed_input = DemoEventInput(
+    failed_input = WorkflowEventInput(
         client_event_id="image-attempt-1",
         stage="image",
         capability="image_generation",
@@ -386,16 +471,16 @@ def test_failed_stage_and_retry_append_history_idempotently(db):
         error_code="provider_timeout",
         retryable=True,
     )
-    first = append_demo_event(
-        db, run_id=run.id, principal=principal, event=failed_input, settings=settings
+    first = append_workflow_event(
+        db, workflow_id=workflow.id, principal=principal, event=failed_input, settings=settings
     )
-    replay = append_demo_event(
-        db, run_id=run.id, principal=principal, event=failed_input, settings=settings
+    replay = append_workflow_event(
+        db, workflow_id=workflow.id, principal=principal, event=failed_input, settings=settings
     )
     with pytest.raises(HTTPException) as conflict:
-        append_demo_event(
+        append_workflow_event(
             db,
-            run_id=run.id,
+            workflow_id=workflow.id,
             principal=principal,
             event=failed_input.model_copy(
                 update={"business_summary": "A different event reused the same ID."}
@@ -403,11 +488,11 @@ def test_failed_stage_and_retry_append_history_idempotently(db):
             settings=settings,
         )
     assert conflict.value.status_code == 409
-    succeeded = append_demo_event(
+    succeeded = append_workflow_event(
         db,
-        run_id=run.id,
+        workflow_id=workflow.id,
         principal=principal,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id="image-attempt-2",
             stage="image",
             capability="image_generation",
@@ -420,8 +505,8 @@ def test_failed_stage_and_retry_append_history_idempotently(db):
     assert replay.id == first.id
     assert (first.sequence, succeeded.sequence) == (2, 3)
     events = db.scalars(
-        select(OpenAIDemoEvent)
-        .where(OpenAIDemoEvent.run_id == run.id)
-        .order_by(OpenAIDemoEvent.sequence)
+        select(CatalogWorkflowEvent)
+        .where(CatalogWorkflowEvent.workflow_id == workflow.id)
+        .order_by(CatalogWorkflowEvent.sequence)
     ).all()
     assert [event.status for event in events] == ["started", "failed", "succeeded"]

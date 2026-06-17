@@ -20,20 +20,20 @@ from app.catalog.ai_schemas import (
     CatalogAIDraftResult,
     CatalogAIProductProposal,
 )
-from app.catalog.demo_schemas import DemoEventInput
+from app.catalog.workflow_schemas import WorkflowEventInput
 from app.config import Settings
 from app.models import (
     CatalogAdminMutation,
     CatalogDraftRevision,
     CatalogProduct,
-    OpenAIDemoRun,
+    CatalogWorkflow,
     Store,
     SyntheticRun,
 )
 from app.observability.genai_otel import genai_llm_span, set_span_attributes
 from app.services.auth.clerk import AuthenticatedPrincipal
 from app.services.catalog_normalization import catalog_key_for_values, catalog_product_id_for_key
-from app.services.demo_trace import append_demo_event, normalize_usage
+from app.services.catalog_workflow import append_workflow_event, normalize_usage
 
 
 CATALOG_AI_INSTRUCTIONS = """You create private Sterling Hollis retail catalog drafts.
@@ -70,14 +70,14 @@ class CatalogAIService:
         self,
         db: Session,
         *,
-        run_id: str,
+        workflow_id: str,
         command: CatalogAICommandRequest,
         idempotency_key: str,
         principal: AuthenticatedPrincipal,
     ) -> CatalogAICommandResult:
         return execute_catalog_ai_command(
             db,
-            run_id=run_id,
+            workflow_id=workflow_id,
             command=command,
             idempotency_key=idempotency_key,
             principal=principal,
@@ -90,9 +90,9 @@ def _conflict(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
-def _command_hash(run_id: str, command: CatalogAICommandRequest) -> str:
+def _command_hash(workflow_id: str, command: CatalogAICommandRequest) -> str:
     payload = json.dumps(
-        {"run_id": run_id, **command.model_dump(mode="json")},
+        {"workflow_id": workflow_id, **command.model_dump(mode="json")},
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -100,9 +100,9 @@ def _command_hash(run_id: str, command: CatalogAICommandRequest) -> str:
 
 
 def _mutation_key(
-    *, run_id: str, idempotency_key: str, principal: AuthenticatedPrincipal
+    *, workflow_id: str, idempotency_key: str, principal: AuthenticatedPrincipal
 ) -> str:
-    source = f"{principal.provider}:{principal.provider_user_id}:{run_id}:{idempotency_key}"
+    source = f"{principal.provider}:{principal.provider_user_id}:{workflow_id}:{idempotency_key}"
     return f"ai_{hashlib.sha256(source.encode()).hexdigest()}"
 
 
@@ -115,24 +115,24 @@ def _event_prefix(mutation_key: str) -> str:
     return f"catalog-ai-{mutation_key.removeprefix('ai_')[:32]}"
 
 
-def _owned_run(
+def _owned_workflow(
     db: Session,
     *,
-    run_id: str,
+    workflow_id: str,
     principal: AuthenticatedPrincipal,
     lock: bool,
-) -> OpenAIDemoRun:
-    statement = select(OpenAIDemoRun).where(OpenAIDemoRun.id == run_id)
+) -> CatalogWorkflow:
+    statement = select(CatalogWorkflow).where(CatalogWorkflow.id == workflow_id)
     if lock:
         statement = statement.with_for_update()
-    run = db.scalar(statement)
+    workflow = db.scalar(statement)
     if (
-        run is None
-        or run.owner_provider != principal.provider
-        or run.owner_provider_user_id != principal.provider_user_id
+        workflow is None
+        or workflow.owner_provider != principal.provider
+        or workflow.owner_provider_user_id != principal.provider_user_id
     ):
-        raise HTTPException(status_code=404, detail="Catalog Studio demo run not found.")
-    return run
+        raise HTTPException(status_code=404, detail="Catalog Studio catalog workflow not found.")
+    return workflow
 
 
 def _draft_version(db: Session, revision: CatalogDraftRevision) -> int:
@@ -150,19 +150,19 @@ def _draft_version(db: Session, revision: CatalogDraftRevision) -> int:
 def _validate_command_state(
     db: Session,
     *,
-    run: OpenAIDemoRun,
+    workflow: CatalogWorkflow,
     command: CatalogAICommandRequest,
     principal: AuthenticatedPrincipal,
 ) -> tuple[CatalogDraftRevision | None, int]:
     if command.current_draft_id is None:
-        if run.draft_revision_id is not None:
+        if workflow.draft_revision_id is not None:
             raise _conflict(
-                "This demo run already has a draft; refine its current draft instead."
+                "This catalog workflow already has a draft; refine its current draft instead."
             )
         return None, 0
 
-    if run.draft_revision_id != command.current_draft_id:
-        raise _conflict("The requested draft is no longer current for this demo run.")
+    if workflow.draft_revision_id != command.current_draft_id:
+        raise _conflict("The requested draft is no longer current for this catalog workflow.")
     revision = db.get(CatalogDraftRevision, command.current_draft_id)
     if revision is None or revision.created_by != principal.provider_user_id:
         raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
@@ -203,7 +203,7 @@ def _replay_existing_mutation(
 def _reserve_command(
     db: Session,
     *,
-    run_id: str,
+    workflow_id: str,
     command: CatalogAICommandRequest,
     idempotency_key: str,
     principal: AuthenticatedPrincipal,
@@ -212,10 +212,10 @@ def _reserve_command(
     if not key:
         raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
     mutation_key = _mutation_key(
-        run_id=run_id, idempotency_key=key, principal=principal
+        workflow_id=workflow_id, idempotency_key=key, principal=principal
     )
-    operation = f"catalog.ai:{run_id}"
-    request_hash = _command_hash(run_id, command)
+    operation = f"catalog.ai:{workflow_id}"
+    request_hash = _command_hash(workflow_id, command)
     existing = db.get(CatalogAdminMutation, mutation_key)
     if existing is not None:
         return existing, _replay_existing_mutation(
@@ -283,7 +283,7 @@ def _server_catalog_context(
         raise CatalogAICommandError(
             code="catalog_context_unavailable",
             detail=(
-                "Catalog Studio needs a loaded catalog run and inventory store "
+                "Catalog Studio needs a loaded catalog workflow and inventory store "
                 "before drafting products."
             ),
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -425,7 +425,7 @@ def _store_failure(
     db: Session,
     *,
     mutation: CatalogAdminMutation,
-    run_id: str,
+    workflow_id: str,
     principal: AuthenticatedPrincipal,
     settings: Settings,
     error: CatalogAICommandError,
@@ -438,13 +438,13 @@ def _store_failure(
         "status_code": error.status_code,
         "retryable": error.retryable,
     }
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         settings=settings,
         commit=False,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id=f"{prefix}-responses-failed",
             stage="draft",
             capability="responses",
@@ -463,7 +463,7 @@ def _record_failure(
     db: Session,
     *,
     mutation: CatalogAdminMutation,
-    run_id: str,
+    workflow_id: str,
     principal: AuthenticatedPrincipal,
     settings: Settings,
     error: CatalogAICommandError,
@@ -474,7 +474,7 @@ def _record_failure(
     _store_failure(
         db,
         mutation=persisted_mutation,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         settings=settings,
         error=error,
@@ -521,7 +521,7 @@ def _store_blocked(
     db: Session,
     *,
     mutation: CatalogAdminMutation,
-    run_id: str,
+    workflow_id: str,
     principal: AuthenticatedPrincipal,
     settings: Settings,
     model: str,
@@ -537,13 +537,13 @@ def _store_blocked(
         retryable=False,
         replayed=False,
     )
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         settings=settings,
         commit=False,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id=f"{prefix}-moderation",
             stage="moderation",
             capability="moderation",
@@ -557,13 +557,13 @@ def _store_blocked(
             response_payload={"status": "blocked", "moderation": moderation},
         ),
     )
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         settings=settings,
         commit=False,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id=f"{prefix}-responses",
             stage="draft",
             capability="responses",
@@ -590,7 +590,7 @@ def _store_success(
     db: Session,
     *,
     mutation: CatalogAdminMutation,
-    run_id: str,
+    workflow_id: str,
     command: CatalogAICommandRequest,
     principal: AuthenticatedPrincipal,
     settings: Settings,
@@ -601,9 +601,9 @@ def _store_success(
     moderation: dict[str, Any],
     duration_ms: int,
 ) -> CatalogAICommandResult:
-    run = _owned_run(db, run_id=run_id, principal=principal, lock=True)
+    workflow = _owned_workflow(db, workflow_id=workflow_id, principal=principal, lock=True)
     current_revision, current_version = _validate_command_state(
-        db, run=run, command=command, principal=principal
+        db, workflow=workflow, command=command, principal=principal
     )
     seed_run_id, store_id, _ = _server_catalog_context(db, current_revision)
     current_product_id = (
@@ -659,13 +659,13 @@ def _store_success(
         ),
     )
     prefix = _event_prefix(mutation.idempotency_key)
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         settings=settings,
         commit=False,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id=f"{prefix}-moderation",
             stage="moderation",
             capability="moderation",
@@ -680,13 +680,13 @@ def _store_success(
             response_payload={"status": "approved", "moderation": moderation},
         ),
     )
-    append_demo_event(
+    append_workflow_event(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         principal=principal,
         settings=settings,
         commit=False,
-        event=DemoEventInput(
+        event=WorkflowEventInput(
             client_event_id=f"{prefix}-responses",
             stage="draft",
             capability="responses",
@@ -724,7 +724,7 @@ def _store_success(
 def execute_catalog_ai_command(
     db: Session,
     *,
-    run_id: str,
+    workflow_id: str,
     command: CatalogAICommandRequest,
     idempotency_key: str,
     principal: AuthenticatedPrincipal,
@@ -737,7 +737,7 @@ def execute_catalog_ai_command(
     existing = db.get(
         CatalogAdminMutation,
         _mutation_key(
-            run_id=run_id,
+            workflow_id=workflow_id,
             idempotency_key=raw_idempotency_key,
             principal=principal,
         ),
@@ -745,16 +745,16 @@ def execute_catalog_ai_command(
     if existing is not None:
         return _replay_existing_mutation(
             existing,
-            operation=f"catalog.ai:{run_id}",
-            request_hash=_command_hash(run_id, command),
+            operation=f"catalog.ai:{workflow_id}",
+            request_hash=_command_hash(workflow_id, command),
         )
-    run = _owned_run(db, run_id=run_id, principal=principal, lock=False)
+    workflow = _owned_workflow(db, workflow_id=workflow_id, principal=principal, lock=False)
     current_revision, _ = _validate_command_state(
-        db, run=run, command=command, principal=principal
+        db, workflow=workflow, command=command, principal=principal
     )
     mutation, replay = _reserve_command(
         db,
-        run_id=run_id,
+        workflow_id=workflow_id,
         command=command,
         idempotency_key=raw_idempotency_key,
         principal=principal,
@@ -771,7 +771,7 @@ def execute_catalog_ai_command(
             model=settings.catalog_studio_responses_model,
             provider="openai",
             attributes={
-                "app.catalog_studio.run_id": run_id,
+                "app.catalog_studio.workflow_id": workflow_id,
                 "app.catalog_studio.action": (
                     "refine_draft" if current_revision else "create_draft"
                 ),
@@ -822,7 +822,7 @@ def execute_catalog_ai_command(
             return _store_blocked(
                 db,
                 mutation=mutation,
-                run_id=run_id,
+                workflow_id=workflow_id,
                 principal=principal,
                 settings=settings,
                 model=response_model,
@@ -842,7 +842,7 @@ def execute_catalog_ai_command(
         return _store_success(
             db,
             mutation=mutation,
-            run_id=run_id,
+            workflow_id=workflow_id,
             command=command,
             principal=principal,
             settings=settings,
@@ -857,7 +857,7 @@ def execute_catalog_ai_command(
         raise _record_failure(
             db,
             mutation=mutation,
-            run_id=run_id,
+            workflow_id=workflow_id,
             principal=principal,
             settings=settings,
             error=exc,
@@ -872,7 +872,7 @@ def execute_catalog_ai_command(
         raise _record_failure(
             db,
             mutation=mutation,
-            run_id=run_id,
+            workflow_id=workflow_id,
             principal=principal,
             settings=settings,
             error=error,
@@ -881,7 +881,7 @@ def execute_catalog_ai_command(
         raise _record_failure(
             db,
             mutation=mutation,
-            run_id=run_id,
+            workflow_id=workflow_id,
             principal=principal,
             settings=settings,
             error=_provider_failure(exc),
