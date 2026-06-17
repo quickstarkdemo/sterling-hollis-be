@@ -7,7 +7,7 @@ from typing import Callable
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,7 @@ from app.services.catalog_normalization import (
     store_inventory_id_for_values,
     variant_key_for_values,
 )
+from app.services.index_jobs import enqueue_index_job
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -129,6 +130,19 @@ def _draft_response(revision: CatalogDraftRevision) -> DraftRevisionResponse:
     )
 
 
+def draft_revision_version(db: Session, revision: CatalogDraftRevision) -> int:
+    """Return the owner-scoped ordinal used for optimistic draft commands."""
+    return int(
+        db.scalar(
+            select(func.count(CatalogDraftRevision.id)).where(
+                CatalogDraftRevision.catalog_product_id == revision.catalog_product_id,
+                CatalogDraftRevision.created_by == revision.created_by,
+            )
+        )
+        or 0
+    )
+
+
 def create_draft(
     db: Session,
     request: DraftMutationRequest,
@@ -192,6 +206,12 @@ def _validate_publishable(
         raise _conflict(f"Synthetic run {product.seed_run_id!r} does not exist.")
     if any(not variant.image_link and not variant.image_set for variant in product.variants):
         raise _conflict("Every catalog variant requires an image_link or image_set before publication.")
+    if any(
+        variant.image_set.get("source") == "catalog_studio"
+        and variant.image_set.get("approval_status") != "approved"
+        for variant in product.variants
+    ):
+        raise _conflict("Catalog Studio generated images require approval before publication.")
     store_ids = {row.store_id for variant in product.variants for row in variant.inventory}
     existing_store_ids = set(db.scalars(select(Store.id).where(Store.id.in_(store_ids))).all())
     missing = sorted(store_ids - existing_store_ids)
@@ -292,7 +312,11 @@ def _apply_snapshot(
                 price_max=variant.price_max,
                 link=variant.link,
                 image_link=variant.image_link,
-                image_set=variant.image_set,
+                image_set={
+                    key: value
+                    for key, value in variant.image_set.items()
+                    if key not in {"file_path", "history"}
+                },
                 metadata_json=variant.metadata,
             )
         )
@@ -338,6 +362,7 @@ def publish_draft(
         product = ProductDraft.model_validate(revision.snapshot_json)
         _validate_publishable(db, revision, product)
         row = _apply_snapshot(db, product_id, product, expected_version + 1)
+        enqueue_index_job(db, product.seed_run_id, commit=False, deduplicate=False)
         revision.status = "published"
         revision.published_at = datetime.now(timezone.utc)
         return LifecycleMutationResponse(

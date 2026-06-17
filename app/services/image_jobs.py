@@ -184,6 +184,15 @@ def recover_stale_image_generation_jobs(
         )
         job.finished_at = current_time
         db.add(job)
+        if job.requested_action:
+            from app.services.catalog_images import record_stale_catalog_image_job
+
+            record_stale_catalog_image_job(
+                db,
+                job=job,
+                settings=settings,
+                completed_at=current_time,
+            )
         recovered += 1
     if recovered:
         db.commit()
@@ -309,6 +318,19 @@ def process_image_generation_job(SessionLocal: sessionmaker, job_id: str) -> Ima
         job = db.get(ImageGenerationJob, job_id)
         if not job:
             raise ValueError(f"Image generation job {job_id} was not found.")
+
+        if job.requested_action:
+            from app.services.catalog_images import process_catalog_image_job
+
+            process_catalog_image_job(
+                db,
+                job=job,
+                settings=get_settings(),
+            )
+            refreshed = db.get(ImageGenerationJob, job_id)
+            if refreshed is None:
+                raise ValueError(f"Image generation job {job_id} was not found.")
+            return _to_response(refreshed)
 
         try:
             variants = query_variants_for_image_generation(

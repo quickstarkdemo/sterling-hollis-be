@@ -18,6 +18,12 @@ from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
     CatalogAIWorkflowResponse,
 )
+from app.catalog.image_schemas import (
+    CatalogImageApprovalRequest,
+    CatalogImageApprovalResponse,
+    CatalogImageCommandRequest,
+    CatalogImageJobResponse,
+)
 from app.catalog.workflow_schemas import (
     CatalogWorkflowResponse,
     CatalogWorkflowStartRequest,
@@ -33,6 +39,11 @@ from app.services.catalog_admin import (
     publish_draft,
 )
 from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
+from app.services.catalog_images import (
+    approve_catalog_image,
+    enqueue_catalog_image_job,
+    get_catalog_image_job,
+)
 from app.services.catalog_workflow import (
     append_workflow_event,
     get_catalog_workflow_projection,
@@ -310,3 +321,69 @@ def create_catalog_ai_draft(
         settings=settings,
     )
     return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), workflow=workflow)
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/image-commands",
+    response_model=CatalogImageJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Generate or refine an image for the current catalog draft",
+)
+def create_catalog_image_command(
+    workflow_id: str,
+    request: CatalogImageCommandRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> CatalogImageJobResponse:
+    return enqueue_catalog_image_job(
+        db,
+        workflow_id=workflow_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        settings=settings,
+    )
+
+
+@router.get(
+    "/catalog/workflows/{workflow_id}/image-jobs/{job_id}",
+    response_model=CatalogImageJobResponse,
+    summary="Read a Catalog Studio image job",
+)
+def catalog_image_job_detail(
+    workflow_id: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogImageJobResponse:
+    return get_catalog_image_job(
+        db,
+        workflow_id=workflow_id,
+        job_id=job_id,
+        principal=principal,
+    )
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/image-jobs/{job_id}/approve",
+    response_model=CatalogImageApprovalResponse,
+    summary="Approve a generated image for catalog publication",
+)
+def approve_catalog_image_job(
+    workflow_id: str,
+    job_id: str,
+    request: CatalogImageApprovalRequest,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> CatalogImageApprovalResponse:
+    return approve_catalog_image(
+        db,
+        workflow_id=workflow_id,
+        job_id=job_id,
+        request=request,
+        principal=principal,
+        settings=settings,
+    )

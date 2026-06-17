@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,7 @@ from app.models import (
 )
 from app.observability.genai_otel import genai_llm_span, set_span_attributes
 from app.services.auth.clerk import AuthenticatedPrincipal
+from app.services.catalog_admin import draft_revision_version
 from app.services.catalog_normalization import catalog_key_for_values, catalog_product_id_for_key
 from app.services.catalog_workflow import append_workflow_event, normalize_usage
 
@@ -135,18 +136,6 @@ def _owned_workflow(
     return workflow
 
 
-def _draft_version(db: Session, revision: CatalogDraftRevision) -> int:
-    return int(
-        db.scalar(
-            select(func.count(CatalogDraftRevision.id)).where(
-                CatalogDraftRevision.catalog_product_id == revision.catalog_product_id,
-                CatalogDraftRevision.created_by == revision.created_by,
-            )
-        )
-        or 0
-    )
-
-
 def _validate_command_state(
     db: Session,
     *,
@@ -166,7 +155,7 @@ def _validate_command_state(
     revision = db.get(CatalogDraftRevision, command.current_draft_id)
     if revision is None or revision.created_by != principal.provider_user_id:
         raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
-    actual_version = _draft_version(db, revision)
+    actual_version = draft_revision_version(db, revision)
     if actual_version != command.expected_draft_version:
         raise _conflict(
             f"Expected AI draft version {command.expected_draft_version}, "

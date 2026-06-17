@@ -253,6 +253,72 @@ paths:
         "502": {description: Moderation or structured Responses output failed.}
         "503": {description: Responses or catalog context is not configured.}
         "504": {description: Responses timed out.}
+  /api/admin/catalog/workflows/{workflow_id}/image-commands:
+    post:
+      tags: [catalog-studio-admin, images]
+      summary: Generate or refine an image for the current catalog draft
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: workflow_id, in: path, required: true, schema: {type: string}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CatalogImageCommandRequest"}
+      responses:
+        "202":
+          description: Durable image job queued for the current private draft.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogImageJobResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Workflow or current draft not found.}
+        "409": {description: Stale draft, conflicting idempotency key, or invalid refinement source.}
+  /api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}:
+    get:
+      tags: [catalog-studio-admin, images]
+      summary: Read a Catalog Studio image job
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: workflow_id, in: path, required: true, schema: {type: string}}
+        - {name: job_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Current durable image job state.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogImageJobResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Workflow or image job not found.}
+  /api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}/approve:
+    post:
+      tags: [catalog-studio-admin, images]
+      summary: Approve a generated image for catalog publication
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: workflow_id, in: path, required: true, schema: {type: string}}
+        - {name: job_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CatalogImageApprovalRequest"}
+      responses:
+        "200":
+          description: Image marked approved in the current private draft.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogImageApprovalResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Workflow, draft, or image job not found.}
+        "409": {description: Stale draft or image is no longer current.}
   /api/admin/catalog/workflows/{workflow_id}:
     get:
       tags: [catalog-studio-admin]
@@ -1187,6 +1253,52 @@ components:
           nullable: true
         workflow:
           $ref: "#/components/schemas/CatalogWorkflowResponse"
+    CatalogImageCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [draft_id, expected_draft_version]
+      properties:
+        action: {type: string, enum: [generate, refine], default: generate}
+        draft_id: {type: string, minLength: 1, maxLength: 64}
+        expected_draft_version: {type: integer, minimum: 1}
+        variant_index: {type: integer, minimum: 0, maximum: 99, default: 0}
+        refinement_prompt: {type: string, nullable: true, minLength: 1, maxLength: 2000}
+    CatalogImageJobResponse:
+      type: object
+      additionalProperties: false
+      required: [id, workflow_id, draft_id, expected_draft_version, action, variant_index, model, size, quality, output_format, status, created_at]
+      properties:
+        id: {type: string}
+        workflow_id: {type: string}
+        draft_id: {type: string}
+        expected_draft_version: {type: integer, minimum: 1}
+        action: {type: string, enum: [generate, refine]}
+        variant_index: {type: integer, minimum: 0}
+        model: {type: string}
+        size: {type: string}
+        quality: {type: string}
+        output_format: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed]}
+        error_message: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        started_at: {type: string, format: date-time, nullable: true}
+        finished_at: {type: string, format: date-time, nullable: true}
+    CatalogImageApprovalRequest:
+      type: object
+      additionalProperties: false
+      required: [draft_id, expected_draft_version]
+      properties:
+        draft_id: {type: string, minLength: 1, maxLength: 64}
+        expected_draft_version: {type: integer, minimum: 1}
+    CatalogImageApprovalResponse:
+      type: object
+      additionalProperties: false
+      required: [job_id, draft_id, variant_index, approval_status]
+      properties:
+        job_id: {type: string}
+        draft_id: {type: string}
+        variant_index: {type: integer, minimum: 0}
+        approval_status: {type: string, enum: [approved]}
     CatalogWorkflowStartRequest:
       type: object
       additionalProperties: false
