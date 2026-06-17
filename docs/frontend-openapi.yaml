@@ -48,6 +48,30 @@ paths:
           description: Missing or invalid Clerk token.
         "403":
           description: Valid Clerk user is not a Catalog Studio administrator.
+  /api/admin/catalog/products:
+    get:
+      tags: [catalog-studio-admin]
+      summary: Search products across administrative lifecycle states
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: q, in: query, schema: {type: string, maxLength: 255}}
+        - name: lifecycle_status
+          in: query
+          schema: {type: string, enum: [draft, published, archived]}
+        - {name: category, in: query, schema: {type: string, maxLength: 128}}
+        - {name: brand, in: query, schema: {type: string, maxLength: 128}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 24}}
+      responses:
+        "200":
+          description: Paginated administrative catalog results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminProductListResponse"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
   /api/admin/catalog/products/drafts:
     post:
       tags: [catalog-studio-admin]
@@ -99,6 +123,32 @@ paths:
         "403": {description: Valid Clerk user is not an administrator.}
         "409": {description: Version or idempotency conflict.}
         "422": {description: Invalid product snapshot.}
+  /api/admin/catalog/products/{product_id}/revisions:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Start a private revision from the current published snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRevisionRequest"
+      responses:
+        "201":
+          description: Complete private snapshot, optionally linked to a workflow.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDraftSnapshot"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Product or owned workflow not found.}
+        "409": {description: Version, workflow, or idempotency conflict.}
   /api/admin/catalog/products/{product_id}/publish:
     post:
       tags: [catalog-studio-admin]
@@ -1227,12 +1277,21 @@ components:
       required: [expected_version, product]
       properties:
         expected_version: {type: integer, minimum: 0}
+        current_draft_id: {type: string, nullable: true, maxLength: 64}
+        expected_draft_version: {type: integer, nullable: true, minimum: 1}
         moderation_state:
           type: string
           enum: [pending, approved, blocked]
           default: pending
         product:
           $ref: "#/components/schemas/CatalogProductDraft"
+    StartRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: {type: integer, minimum: 1}
+        workflow_id: {type: string, nullable: true, maxLength: 64}
     PublishRequest:
       type: object
       additionalProperties: false
@@ -1258,6 +1317,44 @@ components:
         moderation_state: {type: string, enum: [pending, approved, blocked]}
         created_by: {type: string}
         created_at: {type: string, format: date-time}
+    AdminDraftSnapshot:
+      type: object
+      additionalProperties: false
+      required: [revision, draft_version, product]
+      properties:
+        revision:
+          $ref: "#/components/schemas/DraftRevisionResponse"
+        draft_version: {type: integer, minimum: 1}
+        workflow_id: {type: string, nullable: true}
+        product:
+          $ref: "#/components/schemas/CatalogProductDraft"
+    AdminProductListItem:
+      type: object
+      additionalProperties: false
+      required: [product_id, lifecycle_status, version, title, brand, category, has_draft, updated_at]
+      properties:
+        product_id: {type: string}
+        lifecycle_status: {type: string, enum: [draft, published, archived]}
+        version: {type: integer, minimum: 0}
+        title: {type: string}
+        brand: {type: string}
+        category: {type: string}
+        has_draft: {type: boolean}
+        current_draft_id: {type: string, nullable: true}
+        current_draft_version: {type: integer, minimum: 1, nullable: true}
+        updated_at: {type: string, format: date-time}
+    AdminProductListResponse:
+      type: object
+      additionalProperties: false
+      required: [items, total, page, page_size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminProductListItem"
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1}
     LifecycleMutationResponse:
       type: object
       additionalProperties: false
@@ -1279,6 +1376,14 @@ components:
         brand: {type: string}
         category: {type: string}
         metadata: {type: object, additionalProperties: true}
+        published_snapshot:
+          allOf:
+            - $ref: "#/components/schemas/CatalogProductDraft"
+          nullable: true
+        current_draft:
+          allOf:
+            - $ref: "#/components/schemas/AdminDraftSnapshot"
+          nullable: true
         drafts:
           type: array
           items:

@@ -69,7 +69,9 @@ Generated image files are served from:
 | Image recommendations | `POST` | `/api/recommendations/image` |
 | Storefront chat | `POST` | `/api/chat` |
 | Catalog Studio administrator session and capabilities | `GET` | `/api/admin/session` |
+| Search products across lifecycle states | `GET` | `/api/admin/catalog/products` |
 | Create private product draft | `POST` | `/api/admin/catalog/products/drafts` |
+| Start a private revision from a published snapshot | `POST` | `/api/admin/catalog/products/{product_id}/revisions` |
 | Revise an existing product privately | `PUT` | `/api/admin/catalog/products/{product_id}/draft` |
 | Publish an approved draft | `POST` | `/api/admin/catalog/products/{product_id}/publish` |
 | Archive a published product | `POST` | `/api/admin/catalog/products/{product_id}/archive` |
@@ -292,22 +294,38 @@ as `/api/admin/session`. Drafts are private: they never appear in catalog lists,
 detail, search, related products, or recommendations. Editing an existing
 product also leaves its published snapshot visible until publication succeeds.
 
+`GET /api/admin/catalog/products` searches published, archived, and private
+draft state with `q`, `lifecycle_status`, `category`, `brand`, `page`, and
+`page_size`. Product detail returns separate `published_snapshot` and
+`current_draft` objects, including variants, inventory, safe image state, and
+the draft version needed for the next edit. Server-only file paths are never
+returned.
+
 Every mutation requires an `Idempotency-Key` header and an `expected_version`
 in its body. A retry with the same key and identical request replays the first
-result. Reusing the key for a different request returns `409`. A stale version
-also returns `409` without changing public state.
+result. Reusing the key for a different request returns `409`. A stale published
+version also returns `409` without changing public state.
 
 The lifecycle is:
 
 1. `POST /api/admin/catalog/products/drafts` creates a new-product draft with
-   `expected_version: 0`, or `PUT /api/admin/catalog/products/{product_id}/draft`
-   stages a revision using the current published version.
-2. The draft captures product fields, variants, per-store inventory, image
+   `expected_version: 0`.
+2. `POST /api/admin/catalog/products/{product_id}/revisions` clones an existing
+   published or archived snapshot into a private draft. An optional
+   `workflow_id` links that draft to an existing administrator-owned workflow
+   in the same transaction.
+3. `PUT /api/admin/catalog/products/{product_id}/draft` replaces the complete
+   private snapshot. Send the detail response's `current_draft.revision.id` as
+   `current_draft_id` and `current_draft.draft_version` as
+   `expected_draft_version`; stale edits return `409`. Safe detail responses can
+   be round-tripped without deleting hidden image-worker state. Explicitly
+   clearing `image_link` and `image_set` clears only the private reference.
+4. The draft captures product fields, variants, per-store inventory, image
    selection, and `moderation_state`.
-3. `POST /api/admin/catalog/products/{product_id}/publish` atomically replaces
+5. `POST /api/admin/catalog/products/{product_id}/publish` atomically replaces
    the published product, variant, and inventory projection. Publication is
    rejected unless moderation is `approved` and all referenced stores exist.
-4. `POST /api/admin/catalog/products/{product_id}/archive` removes the product
+6. `POST /api/admin/catalog/products/{product_id}/archive` removes the product
    from every public read surface while retaining its administrative record and
    revision history.
 

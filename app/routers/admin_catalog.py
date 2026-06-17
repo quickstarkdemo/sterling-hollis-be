@@ -7,12 +7,15 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
+    AdminDraftSnapshot,
+    AdminProductListResponse,
     AdminProductResponse,
     ArchiveRequest,
     DraftMutationRequest,
     DraftRevisionResponse,
     LifecycleMutationResponse,
     PublishRequest,
+    StartRevisionRequest,
 )
 from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
@@ -38,7 +41,9 @@ from app.services.catalog_admin import (
     archive_product,
     create_draft,
     get_admin_product,
+    list_admin_products,
     publish_draft,
+    start_product_revision,
 )
 from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
 from app.services.catalog_images import (
@@ -118,6 +123,35 @@ def create_product_draft(
     return result
 
 
+@router.get(
+    "/catalog/products",
+    response_model=AdminProductListResponse,
+    summary="Search products across administrative lifecycle states",
+)
+def admin_catalog_products(
+    q: str | None = Query(default=None, max_length=255),
+    lifecycle_status: Literal["draft", "published", "archived"] | None = Query(
+        default=None
+    ),
+    category: str | None = Query(default=None, max_length=128),
+    brand: str | None = Query(default=None, max_length=128),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=24, ge=1, le=100),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminProductListResponse:
+    return list_admin_products(
+        db,
+        principal=principal,
+        q=q,
+        lifecycle_status=lifecycle_status,
+        category=category,
+        brand=brand,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @router.put(
     "/catalog/products/{product_id}/draft",
     response_model=DraftRevisionResponse,
@@ -137,6 +171,29 @@ def revise_catalog_product(
         idempotency_key=idempotency_key,
         principal=principal,
         path_product_id=product_id,
+    )
+    return result
+
+
+@router.post(
+    "/catalog/products/{product_id}/revisions",
+    response_model=AdminDraftSnapshot,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a private revision from the current published snapshot",
+)
+def start_catalog_product_revision(
+    product_id: str,
+    request: StartRevisionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminDraftSnapshot:
+    result, _ = start_product_revision(
+        db,
+        product_id=product_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
     )
     return result
 
@@ -194,9 +251,9 @@ def archive_catalog_product(
 def admin_catalog_product(
     product_id: str,
     db: Session = Depends(get_db),
-    _: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
 ) -> AdminProductResponse:
-    product = get_admin_product(db, product_id)
+    product = get_admin_product(db, product_id, principal=principal)
     if product is None:
         raise HTTPException(status_code=404, detail="Catalog product not found.")
     return product
