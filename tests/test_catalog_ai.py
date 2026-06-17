@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -16,6 +17,7 @@ from app.catalog.ai_schemas import (
     CatalogAIProductProposal,
     CatalogAIVariantProposal,
 )
+from app.catalog.admin_schemas import DesignSpecificationDraft
 from app.config import Settings
 from app.database import Base
 from app.models import CatalogDraftRevision, CatalogWorkflowEvent, CatalogWorkflow, Store, SyntheticRun
@@ -112,6 +114,14 @@ def _proposal(*, title: str = "Midnight Atelier Coat", color: str = "Black"):
         brand="Sterling Hollis",
         category="womens_apparel",
         image_direction="Editorial studio photograph on a warm neutral backdrop.",
+        design_specification=DesignSpecificationDraft(
+            product_type="single-breasted coat",
+            silhouette="long sculpted column",
+            construction="notched collar with concealed front closure",
+            distinguishing_features=["curved shoulder seam", "welt pockets"],
+        ),
+        variant_axes=["color"],
+        primary_variant_index=0,
         variants=[
             CatalogAIVariantProposal(
                 color=color,
@@ -131,6 +141,42 @@ def _proposal(*, title: str = "Midnight Atelier Coat", color: str = "Black"):
             )
         ],
     )
+
+
+def test_product_proposal_accepts_declared_color_variants_with_one_shared_design():
+    proposal = _proposal()
+    proposal = proposal.model_copy(
+        update={
+            "variants": [
+                proposal.variants[0],
+                proposal.variants[0].model_copy(update={"color": "Ivory"}),
+            ]
+        }
+    )
+
+    validated = CatalogAIProductProposal.model_validate(proposal.model_dump())
+
+    assert validated.variant_axes == ["color"]
+    assert validated.primary_variant_index == 0
+    assert validated.design_specification.product_type == "single-breasted coat"
+
+
+def test_product_proposal_rejects_undeclared_material_drift():
+    proposal = _proposal()
+    payload = proposal.model_dump()
+    payload["variants"].append({**payload["variants"][0], "color": "Ivory", "material": "silk"})
+
+    with pytest.raises(ValidationError, match="material.*declared variant axis"):
+        CatalogAIProductProposal.model_validate(payload)
+
+
+def test_product_proposal_rejects_cross_variant_gender_or_season_drift():
+    proposal = _proposal()
+    payload = proposal.model_dump()
+    payload["variants"].append({**payload["variants"][0], "color": "Ivory", "gender": "men"})
+
+    with pytest.raises(ValidationError, match="gender and season"):
+        CatalogAIProductProposal.model_validate(payload)
 
 
 def _moderation(*, flagged: bool = False, category: str = "violence"):

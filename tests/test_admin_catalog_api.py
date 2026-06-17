@@ -16,6 +16,7 @@ from app.catalog.ai_schemas import (
     CatalogAIProductProposal,
     CatalogAIVariantProposal,
 )
+from app.catalog.admin_schemas import DesignSpecificationDraft
 from app.database import Base, get_db
 from app.main import create_app
 from app.routers.admin_catalog import get_catalog_ai_service
@@ -185,6 +186,8 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
         "/api/admin/catalog/workflows/{workflow_id}",
         "/api/admin/catalog/workflows/{workflow_id}/draft-commands",
         "/api/admin/catalog/workflows/{workflow_id}/image-commands",
+        "/api/admin/catalog/workflows/{workflow_id}/image-variant-sets",
+        "/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}",
         "/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}",
         "/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}/approve",
     ):
@@ -204,6 +207,14 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
         brand="Sterling Hollis",
         category="womens_apparel",
         image_direction="Editorial studio photograph on a neutral backdrop.",
+        design_specification=DesignSpecificationDraft(
+            product_type="single-breasted coat",
+            silhouette="long sculpted column",
+            construction="notched collar with concealed closure",
+            distinguishing_features=["curved shoulder seam"],
+        ),
+        variant_axes=["color"],
+        primary_variant_index=0,
         variants=[
             CatalogAIVariantProposal(
                 color="Black",

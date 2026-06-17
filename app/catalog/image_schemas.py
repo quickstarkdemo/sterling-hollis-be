@@ -31,6 +31,7 @@ class CatalogImageJobResponse(BaseModel):
     expected_draft_version: int
     action: Literal["generate", "refine"]
     variant_index: int
+    image_variant_set_id: str | None = None
     model: str
     size: str
     quality: str
@@ -52,3 +53,27 @@ class CatalogImageApprovalResponse(BaseModel):
     draft_id: str
     variant_index: int
     approval_status: Literal["approved"] = "approved"
+
+
+class CatalogImageVariantSetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    draft_id: str = Field(min_length=1, max_length=64)
+    expected_draft_version: int = Field(ge=1)
+
+
+class CatalogImageVariantSetResponse(BaseModel):
+    id: str
+    workflow_id: str
+    draft_id: str
+    expected_draft_version: int
+    primary_variant_index: int
+    status: Literal[
+        "queued",
+        "running",
+        "review",
+        "partially_failed",
+        "failed",
+        "complete",
+    ]
+    jobs: list[CatalogImageJobResponse]

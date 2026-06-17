@@ -20,6 +20,8 @@ from app.catalog.image_schemas import (
     CatalogImageApprovalResponse,
     CatalogImageCommandRequest,
     CatalogImageJobResponse,
+    CatalogImageVariantSetRequest,
+    CatalogImageVariantSetResponse,
 )
 from app.catalog.workflow_schemas import WorkflowEventInput
 from app.config import Settings
@@ -109,6 +111,7 @@ def _job_response(job: ImageGenerationJob) -> CatalogImageJobResponse:
         expected_draft_version=job.expected_draft_version or 0,
         action=job.requested_action or "generate",  # type: ignore[arg-type]
         variant_index=job.requested_variant_index or 0,
+        image_variant_set_id=job.image_variant_set_id,
         model=job.model,
         size=job.size,
         quality=job.quality,
@@ -241,6 +244,271 @@ def enqueue_catalog_image_job(
     return _job_response(job)
 
 
+def _variant_set_id(
+    *, workflow_id: str, draft_id: str, draft_version: int, primary_job_id: str
+) -> str:
+    fingerprint = _hash(
+        f"{workflow_id}:{draft_id}:{draft_version}:{primary_job_id}"
+    )[:20]
+    return f"imgset_{fingerprint}"
+
+
+def _latest_variant_set_jobs(
+    db: Session, *, image_variant_set_id: str
+) -> list[ImageGenerationJob]:
+    jobs = list(
+        db.scalars(
+            select(ImageGenerationJob)
+            .where(ImageGenerationJob.image_variant_set_id == image_variant_set_id)
+            .order_by(ImageGenerationJob.created_at, ImageGenerationJob.id)
+        ).all()
+    )
+    latest: dict[int, ImageGenerationJob] = {}
+    for job in jobs:
+        latest[job.requested_variant_index or 0] = job
+    return [latest[index] for index in sorted(latest)]
+
+
+def _variant_set_response(
+    db: Session,
+    *,
+    workflow: CatalogWorkflow,
+    revision: CatalogDraftRevision,
+    draft: ProductDraft,
+    image_variant_set_id: str,
+) -> CatalogImageVariantSetResponse:
+    jobs = _latest_variant_set_jobs(db, image_variant_set_id=image_variant_set_id)
+    statuses = {job.status for job in jobs}
+    if "running" in statuses:
+        family_status = "running"
+    elif "queued" in statuses:
+        family_status = "queued"
+    elif statuses == {"failed"}:
+        family_status = "failed"
+    elif "failed" in statuses:
+        family_status = "partially_failed"
+    else:
+        primary_image = draft.variants[draft.primary_variant_index].image_set
+        current_set_id = None
+        if primary_image.get("job_id"):
+            current_set_id = _variant_set_id(
+                workflow_id=workflow.id,
+                draft_id=revision.id,
+                draft_version=draft_revision_version(db, revision),
+                primary_job_id=str(primary_image["job_id"]),
+            )
+        primary_approved = (
+            primary_image.get("approval_status") == "approved"
+            and current_set_id == image_variant_set_id
+        )
+        children_approved = all(
+            draft.variants[job.requested_variant_index or 0].image_set.get(
+                "approval_status"
+            )
+            == "approved"
+            and draft.variants[job.requested_variant_index or 0].image_set.get("job_id")
+            == job.id
+            for job in jobs
+        )
+        family_status = "complete" if primary_approved and children_approved else "review"
+    return CatalogImageVariantSetResponse(
+        id=image_variant_set_id,
+        workflow_id=workflow.id,
+        draft_id=revision.id,
+        expected_draft_version=draft_revision_version(db, revision),
+        primary_variant_index=draft.primary_variant_index,
+        status=family_status,
+        jobs=[_job_response(job) for job in jobs],
+    )
+
+
+def enqueue_catalog_image_variant_set(
+    db: Session,
+    *,
+    workflow_id: str,
+    request: CatalogImageVariantSetRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    settings: Settings,
+) -> CatalogImageVariantSetResponse:
+    if not idempotency_key.strip():
+        raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
+    workflow = _owned_workflow(db, workflow_id, principal)
+    revision, draft = _current_draft(
+        db,
+        workflow=workflow,
+        draft_id=request.draft_id,
+        expected_version=request.expected_draft_version,
+        principal=principal,
+    )
+    if len(draft.variants) < 2 or not draft.variant_axes:
+        raise HTTPException(
+            status_code=422,
+            detail="A coordinated image variant set requires multiple declared variants.",
+        )
+    primary_index = draft.primary_variant_index
+    primary_image = draft.variants[primary_index].image_set
+    if (
+        primary_image.get("approval_status") != "approved"
+        or not primary_image.get("file_path")
+        or not primary_image.get("job_id")
+    ):
+        raise _conflict(
+            "Coordinated variant generation requires an approved primary image."
+        )
+    source_path = str(primary_image["file_path"])
+    if not Path(source_path).is_file():
+        raise _conflict("The approved primary image is no longer available.")
+
+    set_id = _variant_set_id(
+        workflow_id=workflow.id,
+        draft_id=revision.id,
+        draft_version=request.expected_draft_version,
+        primary_job_id=str(primary_image["job_id"]),
+    )
+    existing = _latest_variant_set_jobs(db, image_variant_set_id=set_id)
+    latest_by_variant = {job.requested_variant_index or 0: job for job in existing}
+    command_key_hash = _hash(idempotency_key.strip())
+    options = product_image_options(detail_count=1, settings=settings)
+    now = datetime.now(timezone.utc)
+    created: list[ImageGenerationJob] = []
+    primary = draft.variants[primary_index]
+    for variant_index, variant in enumerate(draft.variants):
+        if variant_index == primary_index:
+            continue
+        latest = latest_by_variant.get(variant_index)
+        if latest is not None and latest.status in {"queued", "running", "succeeded"}:
+            continue
+        child_key = _hash(f"{set_id}:{variant_index}:{command_key_hash}")
+        if db.scalar(
+            select(ImageGenerationJob.id).where(
+                ImageGenerationJob.workflow_id == workflow.id,
+                ImageGenerationJob.idempotency_key_hash == child_key,
+            )
+        ):
+            continue
+        changes: list[str] = []
+        if "color" in draft.variant_axes:
+            changes.append(
+                f"color from {primary.color or 'unspecified'} "
+                f"to {variant.color or 'unspecified'}"
+            )
+        if "material" in draft.variant_axes:
+            changes.append(
+                f"material from {primary.material or 'unspecified'} "
+                f"to {variant.material or 'unspecified'}"
+            )
+        refinement = (
+            "Preserve the approved primary product design, silhouette, construction, "
+            "camera angle, lighting, and composition exactly. Change only the declared "
+            "variant attributes: " + "; ".join(changes) + "."
+        )
+        child = ImageGenerationJob(
+            id=f"imgjob_{uuid4().hex[:12]}",
+            workflow_id=workflow.id,
+            draft_revision_id=revision.id,
+            expected_draft_version=request.expected_draft_version,
+            requested_action="refine",
+            requested_variant_index=variant_index,
+            image_variant_set_id=set_id,
+            idempotency_key_hash=child_key,
+            request_hash=_hash(refinement),
+            refinement_prompt=refinement,
+            source_image_path=source_path,
+            limit=1,
+            detail_count=1,
+            thumbnail_size=options.thumbnail_size,
+            overwrite=True,
+            missing_images_only=False,
+            model=options.model,
+            size=options.size,
+            quality=options.quality,
+            output_format=options.output_format,
+            status=IndexJobStatus.queued.value,
+            attempted=0,
+            generated=0,
+            skipped=0,
+            failed_count=0,
+            status_breakdown={},
+            result_sample=[],
+            created_at=now,
+        )
+        db.add(child)
+        created.append(child)
+    if created:
+        db.flush()
+        append_workflow_event(
+            db,
+            workflow_id=workflow.id,
+            principal=principal,
+            settings=settings,
+            commit=False,
+            event=WorkflowEventInput(
+                client_event_id=f"image-variant-set-{set_id}-{command_key_hash[:12]}",
+                stage="image",
+                capability="image_generation",
+                status="queued",
+                business_summary=f"Queued {len(created)} coherent product variant image(s).",
+                model=options.model,
+                request_payload={
+                    "image_variant_set_id": set_id,
+                    "draft_id": revision.id,
+                    "draft_version": request.expected_draft_version,
+                    "primary_variant_index": primary_index,
+                    "variant_axes": draft.variant_axes,
+                    "variant_indexes": [job.requested_variant_index for job in created],
+                },
+                draft_id=revision.id,
+            ),
+        )
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            concurrent = _latest_variant_set_jobs(
+                db, image_variant_set_id=set_id
+            )
+            if not concurrent:
+                raise _conflict(
+                    "Catalog image variant-set state changed; retry with fresh state."
+                ) from exc
+    else:
+        db.rollback()
+    revision = db.get(CatalogDraftRevision, revision.id)
+    assert revision is not None
+    return _variant_set_response(
+        db,
+        workflow=workflow,
+        revision=revision,
+        draft=ProductDraft.model_validate(revision.snapshot_json),
+        image_variant_set_id=set_id,
+    )
+
+
+def get_catalog_image_variant_set(
+    db: Session,
+    *,
+    workflow_id: str,
+    image_variant_set_id: str,
+    principal: AuthenticatedPrincipal,
+) -> CatalogImageVariantSetResponse:
+    workflow = _owned_workflow(db, workflow_id, principal, lock=False)
+    jobs = _latest_variant_set_jobs(db, image_variant_set_id=image_variant_set_id)
+    if not jobs or any(job.workflow_id != workflow.id for job in jobs):
+        raise HTTPException(status_code=404, detail="Catalog image variant set not found.")
+    revision = db.get(CatalogDraftRevision, jobs[0].draft_revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
+    draft = ProductDraft.model_validate(revision.snapshot_json)
+    return _variant_set_response(
+        db,
+        workflow=workflow,
+        revision=revision,
+        draft=draft,
+        image_variant_set_id=image_variant_set_id,
+    )
+
+
 def get_catalog_image_job(
     db: Session,
     *,
@@ -298,6 +566,16 @@ def _image_prompt(draft: ProductDraft, variant_index: int, refinement: str | Non
         f"Color: {variant.color or 'unspecified'}",
         f"Material: {variant.material or 'unspecified'}",
     ]
+    if draft.design_specification is not None:
+        design = draft.design_specification
+        lines.extend(
+            [
+                f"Product type: {design.product_type}",
+                f"Silhouette: {design.silhouette}",
+                f"Construction: {design.construction}",
+                "Distinguishing features: " + "; ".join(design.distinguishing_features),
+            ]
+        )
     if direction:
         lines.append(f"Art direction: {direction}")
     if refinement:
@@ -370,6 +648,10 @@ def _stale_catalog_image_result(
             status="failed",
             business_summary="Discarded an image generated for an older draft version.",
             model=job.model,
+            response_payload={
+                "image_variant_set_id": job.image_variant_set_id,
+                "variant_index": job.requested_variant_index,
+            },
             error_code="stale_draft",
             retryable=True,
             image_job_id=job.id,
@@ -405,6 +687,10 @@ def _process_catalog_image_job(
             status="running",
             business_summary="Generating the staged catalog image.",
             model=job.model,
+            request_payload={
+                "image_variant_set_id": job.image_variant_set_id,
+                "variant_index": job.requested_variant_index,
+            },
             image_job_id=job.id,
             started_at=started,
         ),
@@ -562,6 +848,8 @@ def _process_catalog_image_job(
                     "image_url": detail_url,
                     "thumbnail_url": thumb_url,
                     "approval_status": "review",
+                    "image_variant_set_id": job.image_variant_set_id,
+                    "variant_index": variant_index,
                 },
                 draft_id=revision.id,
                 image_job_id=job.id,
@@ -601,6 +889,10 @@ def _process_catalog_image_job(
                 duration_ms=max(0, int((monotonic() - timer) * 1000)),
                 error_code=code,
                 retryable=retryable,
+                response_payload={
+                    "image_variant_set_id": job.image_variant_set_id,
+                    "variant_index": job.requested_variant_index,
+                },
                 image_job_id=job.id,
                 started_at=started,
                 completed_at=job.finished_at,
@@ -708,7 +1000,11 @@ def approve_catalog_image(
             status="completed",
             business_summary="Approved the generated image for catalog publication.",
             model=job.model,
-            response_payload={"approval_status": "approved", "variant_index": variant_index},
+            response_payload={
+                "approval_status": "approved",
+                "variant_index": variant_index,
+                "image_variant_set_id": job.image_variant_set_id,
+            },
             draft_id=revision.id,
             image_job_id=job.id,
             completed_at=datetime.now(timezone.utc),
