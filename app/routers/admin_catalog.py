@@ -23,6 +23,8 @@ from app.catalog.image_schemas import (
     CatalogImageApprovalResponse,
     CatalogImageCommandRequest,
     CatalogImageJobResponse,
+    CatalogImageVariantSetRequest,
+    CatalogImageVariantSetResponse,
 )
 from app.catalog.workflow_schemas import (
     CatalogWorkflowResponse,
@@ -42,7 +44,9 @@ from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
 from app.services.catalog_images import (
     approve_catalog_image,
     enqueue_catalog_image_job,
+    enqueue_catalog_image_variant_set,
     get_catalog_image_job,
+    get_catalog_image_variant_set,
 )
 from app.services.catalog_workflow import (
     append_workflow_event,
@@ -344,6 +348,49 @@ def create_catalog_image_command(
         idempotency_key=idempotency_key,
         principal=principal,
         settings=settings,
+    )
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/image-variant-sets",
+    response_model=CatalogImageVariantSetResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Generate coherent images for the remaining catalog variants",
+)
+def create_catalog_image_variant_set(
+    workflow_id: str,
+    request: CatalogImageVariantSetRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> CatalogImageVariantSetResponse:
+    return enqueue_catalog_image_variant_set(
+        db,
+        workflow_id=workflow_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        settings=settings,
+    )
+
+
+@router.get(
+    "/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}",
+    response_model=CatalogImageVariantSetResponse,
+    summary="Read aggregate and child status for a catalog image variant set",
+)
+def catalog_image_variant_set_detail(
+    workflow_id: str,
+    image_variant_set_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogImageVariantSetResponse:
+    return get_catalog_image_variant_set(
+        db,
+        workflow_id=workflow_id,
+        image_variant_set_id=image_variant_set_id,
+        principal=principal,
     )
 
 

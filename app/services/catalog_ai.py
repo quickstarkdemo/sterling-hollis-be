@@ -40,7 +40,10 @@ from app.services.catalog_workflow import append_workflow_event, normalize_usage
 CATALOG_AI_INSTRUCTIONS = """You create private Sterling Hollis retail catalog drafts.
 Return only the requested structured product proposal. Preserve the current draft unless the
 presenter explicitly asks for a change. Use the provided category IDs, realistic luxury-retail
-prices, concise customer-safe copy, and useful image art direction. Do not include people,
+prices, concise customer-safe copy, and useful image art direction. Describe one recognizable
+product design in the shared design specification, declare only color or material axes that
+actually change, and choose the strongest representative as the primary variant. Do not include
+people,
 customer identity, secrets, URLs, medical claims, sexual content, hateful content, instructions
 for wrongdoing, or private reasoning. If the instruction is unrelated to a retail product, make
 the smallest reasonable catalog proposal consistent with the current draft."""
@@ -381,6 +384,9 @@ def _product_from_proposal(
             "source": "catalog_studio_responses",
             "image_direction": proposal.image_direction,
         },
+        design_specification=proposal.design_specification,
+        variant_axes=proposal.variant_axes,
+        primary_variant_index=proposal.primary_variant_index,
         variants=[
             VariantDraft(
                 color=variant.color,

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.catalog.admin_schemas import ProductDraft
+from app.catalog.admin_schemas import DesignSpecificationDraft, ProductDraft, VariantAxis
 from app.catalog.workflow_schemas import CatalogWorkflowResponse
 
 
@@ -56,7 +56,30 @@ class CatalogAIProductProposal(BaseModel):
     brand: Literal["Sterling Hollis"]
     category: CatalogCategory
     image_direction: str = Field(min_length=1, max_length=1000)
+    design_specification: DesignSpecificationDraft
+    variant_axes: list[VariantAxis] = Field(max_length=2)
+    primary_variant_index: int = Field(ge=0, le=3)
     variants: list[CatalogAIVariantProposal] = Field(min_length=1, max_length=4)
+
+    @model_validator(mode="after")
+    def validate_variant_family(self):
+        if self.primary_variant_index >= len(self.variants):
+            raise ValueError("primary_variant_index must reference a proposed variant")
+        if len(self.variant_axes) != len(set(self.variant_axes)):
+            raise ValueError("variant_axes must be unique")
+        for attribute in ("color", "material"):
+            values = {getattr(variant, attribute).casefold() for variant in self.variants}
+            if len(values) > 1 and attribute not in self.variant_axes:
+                raise ValueError(
+                    f"{attribute} changes require {attribute} to be a declared variant axis"
+                )
+        stable_values = {
+            (variant.gender.casefold(), variant.season.casefold())
+            for variant in self.variants
+        }
+        if len(stable_values) > 1:
+            raise ValueError("gender and season must remain stable across product variants")
+        return self
 
 
 class CatalogAICommandRequest(BaseModel):

@@ -669,6 +669,7 @@ class ImageGenerationJob(Base):
     expected_draft_version: Mapped[int | None] = mapped_column(Integer)
     requested_action: Mapped[str | None] = mapped_column(String(32))
     requested_variant_index: Mapped[int | None] = mapped_column(Integer)
+    image_variant_set_id: Mapped[str | None] = mapped_column(String(64), index=True)
     idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))
     request_hash: Mapped[str | None] = mapped_column(String(64))
     refinement_prompt: Mapped[str | None] = mapped_column(Text)

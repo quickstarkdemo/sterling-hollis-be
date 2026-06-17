@@ -78,6 +78,8 @@ Generated image files are served from:
 | Append ordered workflow event | `POST` | `/api/admin/catalog/workflows/{workflow_id}/events` |
 | Generate or refine moderated product draft | `POST` | `/api/admin/catalog/workflows/{workflow_id}/draft-commands` |
 | Generate or refine draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-commands` |
+| Generate coherent remaining variants | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets` |
+| Poll a coordinated variant set | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}` |
 | Poll one draft image job | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}` |
 | Approve draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}/approve` |
 | Read business or developer timeline | `GET` | `/api/admin/catalog/workflows/{workflow_id}` |
@@ -445,6 +447,31 @@ To refine an image, first approve its current result, then submit `action:
 input and preserves its history in the private draft. If the draft changes while
 the provider request is running, the worker discards the late result and reports
 a retryable `stale_draft` timeline event.
+
+AI-authored product drafts also carry a shared `design_specification`, declared
+`variant_axes` (`color` and/or `material`), and `primary_variant_index`. Generate
+and approve that primary variant through the single-image command before
+requesting the rest of the family:
+
+```http
+POST /api/admin/catalog/workflows/{workflow_id}/image-variant-sets
+Authorization: Bearer <Clerk token>
+Idempotency-Key: image-family-1
+Content-Type: application/json
+
+{
+  "draft_id": "draft_...",
+  "expected_draft_version": 1
+}
+```
+
+The response includes one `image_variant_set_id`, aggregate status, and the
+latest child job for each non-primary variant. Children use Image API edits from
+the approved primary and change only the declared axes. Poll the variant-set
+URL, approve each successful child with the normal approval endpoint, and wait
+for `complete` before publishing. A partial failure reports
+`partially_failed`; repeating the command queues only failed children and does
+not duplicate queued, successful, or approved siblings.
 
 ## Demo Observability Toggle
 

@@ -2,15 +2,36 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 ModerationState = Literal["pending", "approved", "blocked"]
 LifecycleStatus = Literal["draft", "published", "archived"]
 PublishedLifecycleStatus = Literal["published", "archived"]
 DraftStatus = Literal["draft", "published"]
+VariantAxis = Literal["color", "material"]
+
+
+class DesignSpecificationDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    product_type: str = Field(min_length=1, max_length=128)
+    silhouette: str = Field(min_length=1, max_length=255)
+    construction: str = Field(min_length=1, max_length=500)
+    distinguishing_features: list[
+        Annotated[str, Field(min_length=1, max_length=128)]
+    ] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_distinguishing_features(self):
+        normalized = [feature.strip().casefold() for feature in self.distinguishing_features]
+        if any(not feature for feature in normalized):
+            raise ValueError("distinguishing_features cannot contain blank values")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("distinguishing_features must be unique")
+        return self
 
 
 class InventoryDraft(BaseModel):
@@ -54,10 +75,35 @@ class ProductDraft(BaseModel):
     brand: str = Field(min_length=1, max_length=128)
     category: str = Field(min_length=1, max_length=128)
     metadata: dict = Field(default_factory=dict)
+    design_specification: DesignSpecificationDraft | None = None
+    variant_axes: list[VariantAxis] = Field(default_factory=list, max_length=2)
+    primary_variant_index: int = Field(default=0, ge=0)
     variants: list[VariantDraft] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_variants(self):
+        if self.primary_variant_index >= len(self.variants):
+            raise ValueError("primary_variant_index must reference a product variant")
+        if len(self.variant_axes) != len(set(self.variant_axes)):
+            raise ValueError("variant_axes must be unique")
+        if self.design_specification is not None or self.variant_axes:
+            for attribute in ("color", "material"):
+                values = {
+                    (getattr(row, attribute) or "").casefold()
+                    for row in self.variants
+                }
+                if len(values) > 1 and attribute not in self.variant_axes:
+                    raise ValueError(
+                        f"{attribute} changes require {attribute} to be a declared variant axis"
+                    )
+            stable_values = {
+                ((row.gender or "").casefold(), (row.season or "").casefold())
+                for row in self.variants
+            }
+            if len(stable_values) > 1:
+                raise ValueError(
+                    "gender and season must remain stable across product variants"
+                )
         variant_keys = [
             (
                 row.color.casefold() if row.color else None,
