@@ -33,19 +33,32 @@ def _to_response(job: IndexJob) -> IndexJobResponse:
     )
 
 
-def enqueue_index_job(db: Session, run_id: str, batch_size: int = 128) -> IndexJobResponse:
+def enqueue_index_job(
+    db: Session,
+    run_id: str,
+    batch_size: int = 128,
+    *,
+    commit: bool = True,
+    deduplicate: bool = True,
+) -> IndexJobResponse:
     run = db.get(SyntheticRun, run_id)
     if not run:
         raise ValueError("run_id not found")
 
-    existing = db.scalar(
-        select(IndexJob)
-        .where(IndexJob.run_id == run_id, IndexJob.status.in_([IndexJobStatus.queued.value, IndexJobStatus.running.value]))
-        .order_by(IndexJob.created_at.desc())
-        .limit(1)
-    )
-    if existing:
-        return _to_response(existing)
+    if deduplicate:
+        existing = db.scalar(
+            select(IndexJob)
+            .where(
+                IndexJob.run_id == run_id,
+                IndexJob.status.in_(
+                    [IndexJobStatus.queued.value, IndexJobStatus.running.value]
+                ),
+            )
+            .order_by(IndexJob.created_at.desc())
+            .limit(1)
+        )
+        if existing:
+            return _to_response(existing)
 
     job = IndexJob(
         id=f"idxjob_{uuid.uuid4().hex[:12]}",
@@ -59,8 +72,11 @@ def enqueue_index_job(db: Session, run_id: str, batch_size: int = 128) -> IndexJ
         created_at=datetime.now(timezone.utc),
     )
     db.add(job)
-    db.commit()
-    db.refresh(job)
+    if commit:
+        db.commit()
+        db.refresh(job)
+    else:
+        db.flush()
     return _to_response(job)
 
 

@@ -65,6 +65,7 @@ _BUILT_IN_REDACTED_KEYS = {
 
 _ALLOWED_KEYS = {
     "action",
+    "approval_status",
     "attributes",
     "availability",
     "base_version",
@@ -90,6 +91,7 @@ _ALLOWED_KEYS = {
     "image_job_id",
     "image_link",
     "image_set",
+    "image_url",
     "input",
     "inventory",
     "inventory_qty",
@@ -127,6 +129,7 @@ _ALLOWED_KEYS = {
     "tool",
     "tools",
     "usage",
+    "variant_index",
     "variant",
     "variant_id",
     "variants",

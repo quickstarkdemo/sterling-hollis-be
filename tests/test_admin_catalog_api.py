@@ -184,6 +184,9 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
         "/api/admin/catalog/workflows",
         "/api/admin/catalog/workflows/{workflow_id}",
         "/api/admin/catalog/workflows/{workflow_id}/draft-commands",
+        "/api/admin/catalog/workflows/{workflow_id}/image-commands",
+        "/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}",
+        "/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}/approve",
     ):
         operations = schema["paths"][path]
         assert all(

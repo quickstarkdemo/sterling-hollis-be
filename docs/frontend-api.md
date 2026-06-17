@@ -74,9 +74,12 @@ Generated image files are served from:
 | Publish an approved draft | `POST` | `/api/admin/catalog/products/{product_id}/publish` |
 | Archive a published product | `POST` | `/api/admin/catalog/products/{product_id}/archive` |
 | Inspect product lifecycle and draft history | `GET` | `/api/admin/catalog/products/{product_id}` |
-| Start sanitized OpenAI demo workflow | `POST` | `/api/admin/catalog/workflows` |
+| Start sanitized OpenAI catalog workflow | `POST` | `/api/admin/catalog/workflows` |
 | Append ordered workflow event | `POST` | `/api/admin/catalog/workflows/{workflow_id}/events` |
 | Generate or refine moderated product draft | `POST` | `/api/admin/catalog/workflows/{workflow_id}/draft-commands` |
+| Generate or refine draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-commands` |
+| Poll one draft image job | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}` |
+| Approve draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}/approve` |
 | Read business or developer timeline | `GET` | `/api/admin/catalog/workflows/{workflow_id}` |
 | Clerk demo fault state | `GET` | `/api/demo/observability` |
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
@@ -413,6 +416,35 @@ presenter instruction, system instructions, private reasoning, or raw provider
 objects. Provider timeouts and invalid structured output leave the prior draft
 unchanged and return a safe error whose `detail` object contains `code`,
 `message`, and `retryable` fields.
+
+## Catalog Studio Image Commands
+
+After a draft command succeeds, enqueue one image for a specific draft variant:
+
+```http
+POST /api/admin/catalog/workflows/{workflow_id}/image-commands
+Authorization: Bearer <Clerk token>
+Idempotency-Key: image-command-1
+Content-Type: application/json
+
+{
+  "action": "generate",
+  "draft_id": "draft_...",
+  "expected_draft_version": 1,
+  "variant_index": 0
+}
+```
+
+The existing background image worker processes the job with the configured
+Image API model and one medium-quality image by default. Poll the returned job,
+then approve a successful result using the same current draft ID and version.
+Publication rejects Catalog Studio generated images that remain in `review`.
+
+To refine an image, first approve its current result, then submit `action:
+"refine"` with a `refinement_prompt`. Refinement uses the approved image as its
+input and preserves its history in the private draft. If the draft changes while
+the provider request is running, the worker discards the late result and reports
+a retryable `stale_draft` timeline event.
 
 ## Demo Observability Toggle
 

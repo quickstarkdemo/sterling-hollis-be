@@ -660,6 +660,19 @@ class ImageGenerationJob(Base):
     store_id: Mapped[str | None] = mapped_column(ForeignKey("stores.id"), index=True)
     product_id: Mapped[str | None] = mapped_column(ForeignKey("catalog_products.id"), index=True)
     variant_id: Mapped[str | None] = mapped_column(ForeignKey("product_variants.id"), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_workflows.id", ondelete="SET NULL"), index=True
+    )
+    draft_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"), index=True
+    )
+    expected_draft_version: Mapped[int | None] = mapped_column(Integer)
+    requested_action: Mapped[str | None] = mapped_column(String(32))
+    requested_variant_index: Mapped[int | None] = mapped_column(Integer)
+    idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))
+    request_hash: Mapped[str | None] = mapped_column(String(64))
+    refinement_prompt: Mapped[str | None] = mapped_column(Text)
+    source_image_path: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String(128), index=True)
     brand: Mapped[str | None] = mapped_column(String(128), index=True)
     limit: Mapped[int] = mapped_column("requested_limit", Integer, nullable=False, default=20)
@@ -690,6 +703,11 @@ class ImageGenerationJob(Base):
         Index("ix_image_generation_jobs_status_created", "status", "created_at"),
         Index("ix_image_generation_jobs_category_brand", "category", "brand"),
         Index("ix_image_generation_jobs_status_heartbeat", "status", "last_heartbeat_at"),
+        UniqueConstraint(
+            "workflow_id",
+            "idempotency_key_hash",
+            name="uq_image_generation_jobs_workflow_idempotency",
+        ),
     )
 
 

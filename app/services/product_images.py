@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.models import CatalogProduct, Product, ProductVariant, StoreInventory
 
 try:
@@ -66,8 +66,9 @@ def product_image_options(
     thumbnail_size: int | None = None,
     overwrite: bool = False,
     dry_run: bool = False,
+    settings: Settings | None = None,
 ) -> ProductImageGenerationOptions:
-    settings = get_settings()
+    settings = settings or get_settings()
     return ProductImageGenerationOptions(
         model=model or settings.product_image_model,
         size=size or settings.product_image_size,
