@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import importlib.util
+from io import StringIO
 from pathlib import Path
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import Column, MetaData, String, Table, create_engine, inspect
+
+
+def _load_migration():
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic/versions/a5b6c7d8e9f0_add_catalog_image_workflow_fields.py"
+    )
+    spec = importlib.util.spec_from_file_location("catalog_image_migration", migration_path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    return migration
 
 
 def test_catalog_image_migration_adds_workflow_draft_and_idempotency_fields(tmp_path):
@@ -16,14 +29,7 @@ def test_catalog_image_migration_adds_workflow_draft_and_idempotency_fields(tmp_
     Table("image_generation_jobs", metadata, Column("id", String(64), primary_key=True))
     metadata.create_all(engine)
 
-    migration_path = (
-        Path(__file__).parents[1]
-        / "alembic/versions/a5b6c7d8e9f0_add_catalog_image_workflow_fields.py"
-    )
-    spec = importlib.util.spec_from_file_location("catalog_image_migration", migration_path)
-    assert spec and spec.loader
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
+    migration = _load_migration()
 
     with engine.begin() as connection:
         migration.op = Operations(MigrationContext.configure(connection))
@@ -46,3 +52,21 @@ def test_catalog_image_migration_adds_workflow_draft_and_idempotency_fields(tmp_
         constraint["name"]
         for constraint in inspector.get_unique_constraints("image_generation_jobs")
     }
+
+
+def test_catalog_image_migration_compiles_for_postgresql_identifier_limits():
+    migration = _load_migration()
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    migration.op = Operations(context)
+
+    migration.upgrade()
+    migration.downgrade()
+
+    sql = output.getvalue()
+    assert "FOREIGN KEY(workflow_id)" in sql
+    assert "FOREIGN KEY(draft_revision_id)" in sql
+    assert "DROP CONSTRAINT fk_image_jobs_draft_revision" in sql

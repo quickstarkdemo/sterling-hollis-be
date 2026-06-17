@@ -314,15 +314,29 @@ jobs:
         env:
           PRODUCT_API_IMAGE: ${{ steps.deploy_image.outputs.ref }}
         run: |
+          set -euo pipefail
+
           docker image inspect "${PRODUCT_API_IMAGE}" >/dev/null 2>&1 || docker pull "${PRODUCT_API_IMAGE}"
 
+          DEPLOY_STATUS=0
           if [[ "${{ steps.image_changes.outputs.changed }}" == "true" ]]; then
-            docker compose -f deploy/docker-compose.prod.yml up -d --remove-orphans
+            docker compose -f deploy/docker-compose.prod.yml up -d --remove-orphans || DEPLOY_STATUS=$?
           else
-            docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate --remove-orphans
+            docker compose -f deploy/docker-compose.prod.yml up -d --force-recreate --remove-orphans || DEPLOY_STATUS=$?
           fi
 
-          docker compose -f deploy/docker-compose.prod.yml ps
+          docker compose -f deploy/docker-compose.prod.yml ps -a || true
+
+          if [[ "$DEPLOY_STATUS" -ne 0 ]]; then
+            echo "Compose deployment failed with status ${DEPLOY_STATUS}."
+            echo "API container state:"
+            docker inspect "${PRODUCT_API_CONTAINER_NAME}" --format '{{json .State}}' 2>/dev/null || true
+            echo "Recent API logs:"
+            docker logs --tail 200 "${PRODUCT_API_CONTAINER_NAME}" 2>&1 || true
+            echo "Recent index-worker logs:"
+            docker logs --tail 100 "${PRODUCT_INDEX_WORKER_CONTAINER_NAME}" 2>&1 || true
+            exit "$DEPLOY_STATUS"
+          fi
 
       - name: Health check
         env:
