@@ -267,7 +267,12 @@ def _ordered_catalog_cards(
         return []
     product_map = {
         product.id: product
-        for product in db.scalars(select(CatalogProductModel).where(CatalogProductModel.id.in_(ids))).all()
+        for product in db.scalars(
+            select(CatalogProductModel).where(
+                CatalogProductModel.id.in_(ids),
+                CatalogProductModel.lifecycle_status == "published",
+            )
+        ).all()
     }
     cards: list[CatalogProduct] = []
     seen: set[str] = set()

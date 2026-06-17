@@ -12,13 +12,16 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base
 from app.models import (
+    CatalogProduct,
     Customer,
     CustomerCommunication,
     ExecutiveStrategyPacket,
     Order,
     OrderItem,
     Product,
+    ProductVariant,
     Store,
+    StoreInventory,
     SupplierProductOffer,
     SyntheticRun,
 )
@@ -45,6 +48,7 @@ from app.services.communications import (
     update_customer_email_draft,
     update_customer_sms_draft,
 )
+from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.index_jobs import process_next_index_job
 from app.services.lookup import find_customers, resolve_customer, resolve_store
 from app.services.customer_value import customer_value_summary
@@ -476,6 +480,83 @@ def _seed_data(session):
             OrderItem(id="item_5", order_id="order_3", product_id="peer_prod_2", quantity=1, unit_price=Decimal("525.00"), discount_amount=Decimal("0.00"), line_total=Decimal("525.00")),
         ]
     )
+    session.commit()
+
+
+def _seed_catalog_studio_discovery_products(session):
+    products = [
+        CatalogProduct(
+            id="cat_studio_published",
+            seed_run_id="run_test",
+            catalog_key="studio:published",
+            title="Sterling Atelier Voice Coat",
+            description="A sculpted ivory wool coat created in Catalog Studio.",
+            brand="Sterling Hollis",
+            category="womens_apparel",
+            lifecycle_status="published",
+            version=1,
+            metadata_json={
+                "story": "Created with Catalog Studio",
+                "_catalog_studio_authoring": {"private_trace": "never expose"},
+            },
+        ),
+        CatalogProduct(
+            id="cat_studio_draft",
+            seed_run_id="run_test",
+            catalog_key="studio:draft",
+            title="Sterling Atelier Draft Coat",
+            description="Private draft copy.",
+            brand="Sterling Hollis",
+            category="womens_apparel",
+            lifecycle_status="draft",
+            version=0,
+            metadata_json={"private_trace": "draft-only"},
+        ),
+        CatalogProduct(
+            id="cat_studio_archived",
+            seed_run_id="run_test",
+            catalog_key="studio:archived",
+            title="Sterling Atelier Archived Coat",
+            description="Archived copy.",
+            brand="Sterling Hollis",
+            category="womens_apparel",
+            lifecycle_status="archived",
+            version=2,
+            metadata_json={"private_trace": "archived-only"},
+        ),
+    ]
+    session.add_all(products)
+    for product in products:
+        variant = ProductVariant(
+            id=f"variant_{product.id}",
+            seed_run_id="run_test",
+            catalog_product_id=product.id,
+            variant_key=f"{product.catalog_key}:ivory:wool",
+            color="Ivory",
+            material="wool",
+            gender="women",
+            season="fall",
+            price_min=Decimal("895.00"),
+            price_max=Decimal("895.00"),
+            link=f"https://fashion.example/catalog/{product.id}",
+            image_link=f"https://fashion.example/images/{product.id}.jpg",
+            image_set={},
+            metadata_json={},
+        )
+        session.add(variant)
+        session.add(
+            StoreInventory(
+                id=f"inventory_{product.id}",
+                seed_run_id="run_test",
+                store_id="1001",
+                variant_id=variant.id,
+                size="M",
+                availability="in stock",
+                inventory_qty=7,
+                objective_weight=Decimal("0.9000"),
+                metadata_json={},
+            )
+        )
     session.commit()
 
 
@@ -2203,6 +2284,8 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "fashion_exec_campaign_autopilot_send" in tool_names
         assert "fashion_exec_export_csv" in tool_names
         assert "fashion_inventory_products" in tool_names
+        assert "fashion_catalog_search" in tool_names
+        assert "fashion_catalog_product_detail" in tool_names
         assert "fashion_product_margin_sales_opportunities" in tool_names
         assert "fashion_merch_export_csv" in tool_names
         assert "fashion_merch_inventory_view" in tool_names
@@ -2243,6 +2326,81 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "ui://widgets/associate/workspace.html" not in resources
         assert "ui://widgets/sms/review.html" not in resources
         assert "ui://widgets/merch/board.html" not in resources
+
+
+def test_mcp_catalog_discovery_exposes_only_published_normalized_products(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        backfill_catalog_from_legacy_products(session, run_id="run_test")
+        _seed_catalog_studio_discovery_products(session)
+
+        search = mcp_server.fashion_catalog_search(
+            query="Sterling Atelier",
+            store_id="1001",
+            limit=10,
+        )
+        detail = mcp_server.fashion_catalog_product_detail(
+            product_id="cat_studio_published",
+            store_id="1001",
+        )
+        draft = mcp_server.fashion_catalog_product_detail(
+            product_id="cat_studio_draft"
+        )
+        archived = mcp_server.fashion_catalog_product_detail(
+            product_id="cat_studio_archived"
+        )
+        legacy = mcp_server.fashion_catalog_product_detail(product_id="prod_1")
+
+    search_payload = search.structuredContent
+    assert search_payload["kind"] == "catalog_discovery"
+    assert search_payload["payload"]["mode"] == "search"
+    assert [item["id"] for item in search_payload["payload"]["products"]] == [
+        "cat_studio_published"
+    ]
+    assert search_payload["payload"]["products"][0]["catalog_id"] == (
+        "cat_studio_published"
+    )
+    assert detail.structuredContent["payload"]["mode"] == "detail"
+    assert detail.structuredContent["payload"]["products"][0]["metadata"] == {
+        "story": "Created with Catalog Studio"
+    }
+    assert draft.structuredContent["payload"]["found"] is False
+    assert archived.structuredContent["payload"]["found"] is False
+    assert legacy.structuredContent["payload"]["found"] is True
+    assert legacy.structuredContent["payload"]["products"][0]["id"].startswith("cat_")
+    serialized = repr(search_payload) + repr(detail.structuredContent)
+    assert "private_trace" not in serialized
+    assert "cat_studio_draft" not in serialized
+    assert "cat_studio_archived" not in serialized
+    assert search.meta["openai/outputTemplate"].startswith(
+        "ui://widgets/unified/workspace-"
+    )
+    widget_source = (
+        mcp_server._WIDGET_ASSET_DIR / "unified-widget.js"
+    ).read_text(encoding="utf-8")
+    assert 'raw.kind === "catalog_discovery"' in widget_source
+    assert 'text: "Catalog Discovery"' in widget_source
+    assert '["http:", "https:"].includes(parsed.protocol)' in widget_source
+
+
+def test_openai_product_feed_uses_published_normalized_catalog_without_duplicates(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        backfill_catalog_from_legacy_products(session, run_id="run_test")
+        _seed_catalog_studio_discovery_products(session)
+
+        feed = mcp_server.fashion_get_product_feed(store_id="1001", limit=500)
+
+    ids = [item["id"] for item in feed["items"]]
+    assert ids.count("cat_studio_published") == 1
+    assert "cat_studio_draft" not in ids
+    assert "cat_studio_archived" not in ids
+    published = next(
+        item for item in feed["items"] if item["id"] == "cat_studio_published"
+    )
+    assert published["price"] == "895.00 USD"
+    assert published["availability"] == "in_stock"
+    assert published["color"] == "Ivory"
 
 
 def test_send_customer_recommendations_email_tool(monkeypatch):

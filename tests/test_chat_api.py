@@ -12,7 +12,20 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.database import Base, get_db
 from app.main import create_app
-from app.models import ChatMessage, ChatToolCall, ChatTurn, Customer, CustomerAuthIdentity, Order, OrderItem, Store, SyntheticRun
+from app.models import (
+    CatalogProduct,
+    ChatMessage,
+    ChatToolCall,
+    ChatTurn,
+    Customer,
+    CustomerAuthIdentity,
+    Order,
+    OrderItem,
+    ProductVariant,
+    Store,
+    StoreInventory,
+    SyntheticRun,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal, ClerkAuthError
 from app.services.catalog_normalization import backfill_catalog_from_legacy_products
 from app.services.chat.evaluator import ChatEvaluation, ChatOrchestrationDecision
@@ -24,7 +37,7 @@ from app.services.chat.strands_agent import ShoppingAgentResult
 from app.services.chat.strands_orchestrator import CapturedToolCall, StrandsRunResult
 from app.services.chat.strands_tools import cards_payload
 from app.services.chat.triage import SearchConstraints, TriageDecision, triage_chat
-from app.services.chat.tools import catalog_cards
+from app.services.chat.tools import _ordered_catalog_cards, catalog_cards
 from app.services import demo_observability
 from tests.test_catalog_api import _product
 
@@ -377,6 +390,55 @@ def _chat_payload(message: str, current_product_id: str = "prod_1", **context):
             **context,
         },
     }
+
+
+def _add_studio_catalog_product(session, *, product_id: str, status: str, title: str):
+    product = CatalogProduct(
+        id=product_id,
+        seed_run_id="run_chat",
+        catalog_key=f"studio:{product_id}",
+        title=title,
+        description="A product authored in Catalog Studio.",
+        brand="Sterling Hollis",
+        category="womens_apparel",
+        lifecycle_status=status,
+        version=1,
+        metadata_json={"_catalog_studio_authoring": {"private_trace": "hidden"}},
+    )
+    variant = ProductVariant(
+        id=f"variant_{product_id}",
+        seed_run_id="run_chat",
+        catalog_product_id=product_id,
+        variant_key=f"studio:{product_id}:ivory:wool",
+        color="Ivory",
+        material="wool",
+        gender="women",
+        season="fall",
+        price_min=Decimal("895.00"),
+        price_max=Decimal("895.00"),
+        link=f"https://fashion.example/catalog/{product_id}",
+        image_link=f"https://fashion.example/images/{product_id}.jpg",
+        image_set={},
+        metadata_json={},
+    )
+    session.add_all(
+        [
+            product,
+            variant,
+            StoreInventory(
+                id=f"inventory_{product_id}",
+                seed_run_id="run_chat",
+                store_id="1001",
+                variant_id=variant.id,
+                size="M",
+                availability="in stock",
+                inventory_qty=5,
+                objective_weight=Decimal("0.9900"),
+                metadata_json={},
+            ),
+        ]
+    )
+    session.commit()
 
 
 def test_complementary_intent_frame_does_not_infer_unisex_from_current_product():
@@ -1210,6 +1272,76 @@ def test_catalog_search_on_pdp_ignores_current_product_category(monkeypatch):
     assert {card["category"] for card in payload["cards"]} == {"beauty"}
     assert all(card["price_min"] <= 150 for card in payload["cards"])
     assert payload["tool_trace"][1]["name"] == "semantic_catalog_search"
+
+
+def test_storefront_chat_discovers_published_studio_product_and_hides_private_states(monkeypatch):
+    with _chat_client(monkeypatch) as (client, SessionLocal):
+        with SessionLocal() as session:
+            _add_studio_catalog_product(
+                session,
+                product_id="cat_studio_voice_coat",
+                status="published",
+                title="Sterling Atelier Voice Coat",
+            )
+            _add_studio_catalog_product(
+                session,
+                product_id="cat_studio_private_coat",
+                status="draft",
+                title="Sterling Atelier Private Coat",
+            )
+            _add_studio_catalog_product(
+                session,
+                product_id="cat_studio_archived_coat",
+                status="archived",
+                title="Sterling Atelier Archived Coat",
+            )
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "show me the Sterling Atelier coat",
+                "context": {
+                    "page_type": "home",
+                    "route": "/",
+                    "store_id": "1001",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    ids = [card["id"] for card in payload["cards"]]
+    assert "cat_studio_voice_coat" in ids
+    assert "cat_studio_private_coat" not in ids
+    assert "cat_studio_archived_coat" not in ids
+    published = next(
+        card for card in payload["cards"] if card["id"] == "cat_studio_voice_coat"
+    )
+    assert published["catalog_id"] == "cat_studio_voice_coat"
+    assert "metadata" not in published
+
+
+def test_semantic_catalog_id_resolution_rechecks_publication_state(monkeypatch):
+    with _chat_client(monkeypatch) as (_, SessionLocal):
+        with SessionLocal() as session:
+            _add_studio_catalog_product(
+                session,
+                product_id="cat_semantic_published",
+                status="published",
+                title="Published Semantic Coat",
+            )
+            _add_studio_catalog_product(
+                session,
+                product_id="cat_semantic_archived",
+                status="archived",
+                title="Archived Semantic Coat",
+            )
+            cards = _ordered_catalog_cards(
+                session,
+                ["cat_semantic_archived", "cat_semantic_published"],
+                store_id="1001",
+            )
+
+    assert [card.id for card in cards] == ["cat_semantic_published"]
 
 
 def test_pairing_search_excludes_current_category(monkeypatch):

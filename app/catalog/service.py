@@ -263,10 +263,14 @@ def product_to_catalog(
     *,
     include_variants: bool = False,
     store_id: str | None = None,
+    variants: list[ProductVariant] | None = None,
+    inventory_rows: list[StoreInventory] | None = None,
 ) -> CatalogProduct | ProductDetailResponse:
-    variants = _product_variants(db, product.id)
+    if variants is None:
+        variants = _product_variants(db, product.id)
     variant_ids = [variant.id for variant in variants]
-    inventory_rows = _inventory_rows(db, variant_ids, store_id=store_id)
+    if inventory_rows is None:
+        inventory_rows = _inventory_rows(db, variant_ids, store_id=store_id)
     inventory_by_variant: dict[str, list[StoreInventory]] = {
         variant_id: [] for variant_id in variant_ids
     }
@@ -433,6 +437,39 @@ def list_products(
         for product_id in product_ids
         if product_id in product_map
     ]
+    variants = (
+        db.scalars(
+            select(ProductVariant)
+            .where(ProductVariant.catalog_product_id.in_(product_ids))
+            .order_by(
+                ProductVariant.catalog_product_id.asc(),
+                ProductVariant.price_min.asc(),
+                ProductVariant.id.asc(),
+            )
+        ).all()
+        if product_ids
+        else []
+    )
+    variants_by_product: dict[str, list[ProductVariant]] = {
+        product_id: [] for product_id in product_ids
+    }
+    variant_product_ids: dict[str, str] = {}
+    for variant in variants:
+        variants_by_product.setdefault(variant.catalog_product_id, []).append(variant)
+        variant_product_ids[variant.id] = variant.catalog_product_id
+
+    inventory_by_product: dict[str, list[StoreInventory]] = {
+        product_id: [] for product_id in product_ids
+    }
+    inventory_rows = _inventory_rows(
+        db,
+        list(variant_product_ids),
+        store_id=filters.store_id,
+    )
+    for inventory in inventory_rows:
+        product_id = variant_product_ids.get(inventory.variant_id)
+        if product_id:
+            inventory_by_product.setdefault(product_id, []).append(inventory)
     facets = []
     if include_facets:
         facets = [
@@ -443,7 +480,13 @@ def list_products(
         ]
     return ProductListResponse(
         items=[
-            product_to_catalog(db, product, store_id=filters.store_id)
+            product_to_catalog(
+                db,
+                product,
+                store_id=filters.store_id,
+                variants=variants_by_product.get(product.id, []),
+                inventory_rows=inventory_by_product.get(product.id, []),
+            )
             for product in products
         ],
         total=int(total),

@@ -770,6 +770,24 @@ body {
   padding: 8px;
 }
 
+.fw-catalog-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.fw-catalog-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.fw-catalog-image {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #f4f8fc;
+}
+
 .fw-rec-layout {
   display: grid;
   align-items: start;
