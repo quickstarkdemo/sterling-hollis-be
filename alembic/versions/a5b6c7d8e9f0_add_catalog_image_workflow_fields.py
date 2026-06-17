@@ -38,7 +38,7 @@ def upgrade() -> None:
             ondelete="SET NULL",
         )
         batch_op.create_foreign_key(
-            "fk_image_generation_jobs_draft_revision_id_catalog_draft_revisions",
+            "fk_image_jobs_draft_revision",
             "catalog_draft_revisions",
             ["draft_revision_id"],
             ["id"],
@@ -60,7 +60,7 @@ def downgrade() -> None:
         batch_op.drop_index("ix_image_generation_jobs_draft_revision_id")
         batch_op.drop_index("ix_image_generation_jobs_workflow_id")
         batch_op.drop_constraint(
-            "fk_image_generation_jobs_draft_revision_id_catalog_draft_revisions",
+            "fk_image_jobs_draft_revision",
             type_="foreignkey",
         )
         batch_op.drop_constraint(
