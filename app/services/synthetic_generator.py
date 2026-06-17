@@ -361,12 +361,18 @@ def generate_products(
 
         item = rng.choice(cat_cfg["items"])
         material = rng.choice(cat_cfg["materials"])
-        color = rng.choice(KNOWN_COLORS)
         gender = rng.choice(cat_cfg["genders"])
         season = rng.choice(KNOWN_SEASONS)
         brand = rng.choice(brands)
-        title = f"{brand} {color} {item}"
+        title = f"{brand} {item}"
         style_code = f"style_{family_idx:06d}"
+
+        remaining = count - len(products)
+        desired_variant_count = int(
+            _weighted_choice(rng, [("2", 0.25), ("3", 0.35), ("4", 0.25), ("5", 0.15)])
+        )
+        variant_count = max(1, min(desired_variant_count, len(KNOWN_COLORS), remaining))
+        colors = rng.sample(KNOWN_COLORS, k=variant_count)
 
         coverage = int(
             _weighted_choice(
@@ -383,7 +389,7 @@ def generate_products(
                 ],
             )
         )
-        coverage = max(1, min(coverage, len(stores), count - len(products)))
+        coverage = max(1, min(coverage, len(stores), 2))
 
         selected_stores = [anchor_store]
         if coverage > 1:
@@ -406,16 +412,42 @@ def generate_products(
 
         price_min, price_max = cat_cfg["price"]
         base_price = round(rng.uniform(price_min, price_max), 2)
+        description = (
+            f"{cat_cfg['label']} design in {material}. Crafted for {season} dressing and occasion-led styling "
+            "across stores and online."
+        )
+        sized_category = category_key not in {"handbags", "beauty", "home", "jewelry_accessories"}
+        if sized_category:
+            size_pool = [size_token for size_token in KNOWN_SIZES if size_token != "One Size"]
+            desired_size_depth = int(_weighted_choice(rng, [("1", 0.25), ("2", 0.50), ("3", 0.25)]))
+            size_depth = min(desired_size_depth, len(size_pool))
+            family_sizes = rng.sample(size_pool, k=size_depth)
+        else:
+            family_sizes = ["One Size"]
 
-        for store in selected_stores:
+        combinations = [
+            (color, store, family_sizes[(color_index + store_index) % len(family_sizes)])
+            for color_index, color in enumerate(colors)
+            for store_index, store in enumerate(selected_stores)
+        ]
+        rng.shuffle(combinations)
+        prioritized = []
+        for color_index, color in enumerate(colors):
+            preferred = next(
+                combination
+                for combination in combinations
+                if combination[0] == color
+                and combination[1]["id"] == anchor_store["id"]
+                and combination[2] == family_sizes[color_index % len(family_sizes)]
+            )
+            prioritized.append(preferred)
+        prioritized.extend(combination for combination in combinations if combination not in prioritized)
+
+        for color, store, size in prioritized:
             if len(products) >= count:
                 break
 
             price = round(base_price * rng.uniform(0.94, 1.06), 2)
-            description = (
-                f"{cat_cfg['label']} piece in {material}. Crafted for {season} dressing and occasion-led styling "
-                f"across {store['city']} and online clients."
-            )
 
             availability = _weighted_choice(rng, availability_weights)
             profile_multiplier = _store_inventory_multiplier(store["profile_type"])
@@ -430,11 +462,6 @@ def generate_products(
 
             margin_pct = round(rng.uniform(0.35, 0.72), 4)
             objective_weight = round(rng.uniform(objective_low, objective_high), 4)
-            if category_key in {"handbags", "beauty", "home", "jewelry_accessories"}:
-                size = "One Size"
-            else:
-                size = rng.choice([size_token for size_token in KNOWN_SIZES if size_token != "One Size"])
-
             pid = f"prod_{product_idx:06d}"
             products.append(
                 {
@@ -462,8 +489,12 @@ def generate_products(
                             "profile": store["profile_type"],
                             "feed_label": cat_cfg["label"],
                             "style_code": style_code,
+                            "variant_axes": ["color"],
+                            "family_title": title,
                             "depth_class": depth_class,
                             "coverage": coverage,
+                            "color_count": variant_count,
+                            "size_depth": len(family_sizes),
                         }
                     ),
                 }
