@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     catalog_studio_responses_timeout_seconds: float = 60.0
     catalog_studio_responses_max_output_tokens: int = 2500
     catalog_studio_realtime_enabled: bool = False
+    catalog_studio_realtime_model: str = "gpt-realtime-2"
+    catalog_studio_realtime_transcription_model: str = "gpt-4o-mini-transcribe"
+    catalog_studio_realtime_client_secret_ttl_seconds: int = 600
+    catalog_studio_realtime_timeout_seconds: float = 15.0
+    catalog_studio_realtime_safety_identifier_secret: str = ""
     catalog_studio_shared_workflows: bool = False
     catalog_studio_trace_retention_days: int = 7
     catalog_studio_trace_max_depth: int = 6

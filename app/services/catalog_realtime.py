@@ -1,0 +1,390 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+from typing import Any, Literal
+from uuid import uuid4
+
+from fastapi import HTTPException, status
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.catalog.ai_schemas import CatalogAICommandRequest
+from app.catalog.workflow_schemas import WorkflowEventInput
+from app.config import Settings
+from app.models import CatalogDraftRevision, CatalogWorkflow
+from app.services.auth.clerk import AuthenticatedPrincipal
+from app.services.catalog_admin import draft_revision_version
+from app.services.catalog_workflow import append_workflow_event
+
+
+RealtimeDraftToolName = Literal["create_catalog_draft", "refine_catalog_draft"]
+REALTIME_WEBRTC_URL = "https://api.openai.com/v1/realtime/calls"
+
+REALTIME_INSTRUCTIONS = """You are the voice interface for Sterling Hollis Catalog Studio.
+Help the presenter create or refine the private product draft in the current workflow. Keep
+spoken responses concise. Use only the provided catalog draft tool when the presenter asks for
+a product change. Never claim that a product was published, archived, or changed until the tool
+returns success. Do not request or repeat credentials, customer identity, or private data."""
+
+
+class CatalogRealtimeError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        code: str,
+        detail: str,
+        status_code: int,
+        retryable: bool,
+    ) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.status_code = status_code
+        self.retryable = retryable
+
+
+class CatalogRealtimeSessionResponse(BaseModel):
+    client_secret: str
+    expires_at: int = Field(ge=1)
+    workflow_id: str
+    model: str
+    webrtc_url: str = REALTIME_WEBRTC_URL
+    tool_names: list[RealtimeDraftToolName]
+
+
+class CatalogRealtimeToolArguments(BaseModel):
+    instruction: str = Field(min_length=1, max_length=4000)
+    current_draft_id: str | None = Field(default=None, max_length=64)
+    expected_draft_version: int = Field(ge=0)
+
+
+class CatalogRealtimeToolCallRequest(BaseModel):
+    call_id: str = Field(min_length=1, max_length=128)
+    name: RealtimeDraftToolName
+    arguments: CatalogRealtimeToolArguments
+
+    @model_validator(mode="after")
+    def validate_tool_state(self):
+        if self.name == "create_catalog_draft":
+            if (
+                self.arguments.current_draft_id is not None
+                or self.arguments.expected_draft_version != 0
+            ):
+                raise ValueError("create_catalog_draft requires a new-draft state")
+        elif (
+            self.arguments.current_draft_id is None
+            or self.arguments.expected_draft_version < 1
+        ):
+            raise ValueError("refine_catalog_draft requires the current draft and version")
+        return self
+
+    def to_catalog_command(self) -> CatalogAICommandRequest:
+        return CatalogAICommandRequest.model_validate(self.arguments.model_dump())
+
+
+class CatalogRealtimeService:
+    def __init__(self, settings: Settings, client: Any | None = None) -> None:
+        self.settings = settings
+        self.client = client
+
+    def create_session(
+        self,
+        db: Session,
+        *,
+        workflow_id: str,
+        principal: AuthenticatedPrincipal,
+    ) -> CatalogRealtimeSessionResponse:
+        workflow = db.scalar(
+            select(CatalogWorkflow).where(
+                CatalogWorkflow.id == workflow_id,
+                CatalogWorkflow.owner_provider == principal.provider,
+                CatalogWorkflow.owner_provider_user_id == principal.provider_user_id,
+            )
+        )
+        if workflow is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Catalog Studio catalog workflow not found.",
+            )
+        tool_name: RealtimeDraftToolName = (
+            "refine_catalog_draft"
+            if workflow.draft_revision_id
+            else "create_catalog_draft"
+        )
+        expected_draft_version = 0
+        if workflow.draft_revision_id:
+            revision = db.get(CatalogDraftRevision, workflow.draft_revision_id)
+            if revision is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The catalog workflow's current draft is unavailable.",
+                )
+            expected_draft_version = draft_revision_version(db, revision)
+        try:
+            provider = self._resolve_client()
+            created = provider.realtime.client_secrets.create(
+                expires_after={
+                    "anchor": "created_at",
+                    "seconds": self.settings.catalog_studio_realtime_client_secret_ttl_seconds,
+                },
+                session=self._session_config(
+                    tool_name,
+                    current_draft_id=workflow.draft_revision_id,
+                    expected_draft_version=expected_draft_version,
+                ),
+                extra_headers={
+                    "OpenAI-Safety-Identifier": self._safety_identifier(principal),
+                },
+            )
+            secret = str(getattr(created, "value", "") or "")
+            expires_at = int(getattr(created, "expires_at", 0) or 0)
+            if not secret or expires_at <= 0:
+                raise CatalogRealtimeError(
+                    code="realtime_invalid_response",
+                    detail="Realtime did not return a usable client credential.",
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    retryable=True,
+                )
+        except CatalogRealtimeError as exc:
+            self._record_session_event(
+                db,
+                workflow_id=workflow_id,
+                principal=principal,
+                status_value="failed",
+                error=exc,
+            )
+            raise
+        except Exception as exc:
+            error = self._provider_failure(exc)
+            self._record_session_event(
+                db,
+                workflow_id=workflow_id,
+                principal=principal,
+                status_value="failed",
+                error=error,
+            )
+            raise error from exc
+
+        self._record_session_event(
+            db,
+            workflow_id=workflow_id,
+            principal=principal,
+            status_value="succeeded",
+            tool_name=tool_name,
+        )
+        return CatalogRealtimeSessionResponse(
+            client_secret=secret,
+            expires_at=expires_at,
+            workflow_id=workflow_id,
+            model=self.settings.catalog_studio_realtime_model,
+            tool_names=[tool_name],
+        )
+
+    def _resolve_client(self) -> Any:
+        if not self.settings.catalog_studio_realtime_enabled:
+            raise CatalogRealtimeError(
+                code="realtime_disabled",
+                detail="The Realtime capability is disabled.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=False,
+            )
+        if not self.settings.openai_api_key:
+            raise CatalogRealtimeError(
+                code="realtime_unavailable",
+                detail="The Realtime capability is not configured.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=False,
+            )
+        if not self.settings.catalog_studio_realtime_safety_identifier_secret:
+            raise CatalogRealtimeError(
+                code="realtime_safety_identifier_unavailable",
+                detail="The Realtime safety identifier is not configured.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=False,
+            )
+        if self.client is not None:
+            return self.client
+        try:
+            from openai import OpenAI
+
+            return OpenAI(
+                api_key=self.settings.openai_api_key,
+                timeout=self.settings.catalog_studio_realtime_timeout_seconds,
+            )
+        except Exception as exc:  # pragma: no cover - environment-specific constructor failure
+            raise CatalogRealtimeError(
+                code="realtime_unavailable",
+                detail="The Realtime capability is unavailable.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=False,
+            ) from exc
+
+    def _safety_identifier(self, principal: AuthenticatedPrincipal) -> str:
+        source = f"{principal.provider}:{principal.provider_user_id}".encode()
+        secret = self.settings.catalog_studio_realtime_safety_identifier_secret.encode()
+        return hmac.new(secret, source, hashlib.sha256).hexdigest()
+
+    def _session_config(
+        self,
+        tool_name: RealtimeDraftToolName,
+        *,
+        current_draft_id: str | None = None,
+        expected_draft_version: int = 0,
+    ) -> dict[str, Any]:
+        parameters: dict[str, Any] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "instruction": {
+                    "type": "string",
+                    "description": "The requested product draft change, without private data.",
+                },
+                "expected_draft_version": {
+                    "type": "integer",
+                    "const": expected_draft_version,
+                },
+            },
+            "required": ["instruction", "expected_draft_version"],
+        }
+        if tool_name == "refine_catalog_draft":
+            parameters["properties"]["current_draft_id"] = {
+                "type": "string",
+                "const": current_draft_id,
+            }
+            parameters["required"].append("current_draft_id")
+        return {
+            "type": "realtime",
+            "model": self.settings.catalog_studio_realtime_model,
+            "instructions": REALTIME_INSTRUCTIONS,
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "transcription": {
+                        "model": self.settings.catalog_studio_realtime_transcription_model,
+                    }
+                }
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "name": tool_name,
+                    "description": (
+                        "Create the private product draft for this workflow."
+                        if tool_name == "create_catalog_draft"
+                        else "Refine the current private product draft for this workflow."
+                    ),
+                    "parameters": parameters,
+                }
+            ],
+            "tool_choice": "auto",
+        }
+
+    def _record_session_event(
+        self,
+        db: Session,
+        *,
+        workflow_id: str,
+        principal: AuthenticatedPrincipal,
+        status_value: Literal["succeeded", "failed"],
+        tool_name: RealtimeDraftToolName | None = None,
+        error: CatalogRealtimeError | None = None,
+    ) -> None:
+        append_workflow_event(
+            db,
+            workflow_id=workflow_id,
+            principal=principal,
+            settings=self.settings,
+            event=WorkflowEventInput(
+                client_event_id=f"realtime-session-{uuid4().hex}",
+                stage="voice",
+                capability="realtime",
+                status=status_value,
+                business_summary=(
+                    "Realtime voice is ready for this catalog workflow."
+                    if status_value == "succeeded"
+                    else (error.detail if error else "Realtime voice could not start.")
+                ),
+                model=self.settings.catalog_studio_realtime_model,
+                error_code=error.code if error else None,
+                retryable=error.retryable if error else False,
+                request_payload={
+                    "input": {
+                        "action": "create_realtime_session",
+                        "safety_identifier_attached": bool(
+                            self.settings.catalog_studio_realtime_enabled
+                            and self.settings.openai_api_key
+                            and self.settings.catalog_studio_realtime_safety_identifier_secret
+                        ),
+                    }
+                },
+                response_payload={
+                    "status": "ready" if status_value == "succeeded" else "failed",
+                    "tool_name": tool_name,
+                },
+            ),
+        )
+
+    @staticmethod
+    def _provider_failure(exc: Exception) -> CatalogRealtimeError:
+        if isinstance(exc, TimeoutError) or type(exc).__name__ == "APITimeoutError":
+            return CatalogRealtimeError(
+                code="realtime_timeout",
+                detail="Realtime timed out while creating a client credential.",
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                retryable=True,
+            )
+        if type(exc).__name__ in {"APIConnectionError", "ConnectError"}:
+            return CatalogRealtimeError(
+                code="realtime_unavailable",
+                detail="Realtime is temporarily unavailable.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=True,
+            )
+        provider_status = getattr(exc, "status_code", None)
+        return CatalogRealtimeError(
+            code="realtime_failed",
+            detail="Realtime could not create a client credential.",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            retryable=bool(provider_status == 429 or (provider_status and provider_status >= 500)),
+        )
+
+
+def record_realtime_tool_call(
+    db: Session,
+    *,
+    workflow_id: str,
+    request: CatalogRealtimeToolCallRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    settings: Settings,
+) -> None:
+    event_source = (
+        f"{principal.provider}:{principal.provider_user_id}:{workflow_id}:"
+        f"{idempotency_key.strip()}:{request.call_id}"
+    )
+    event_key = hashlib.sha256(event_source.encode()).hexdigest()[:32]
+    append_workflow_event(
+        db,
+        workflow_id=workflow_id,
+        principal=principal,
+        settings=settings,
+        event=WorkflowEventInput(
+            client_event_id=f"realtime-tool-{event_key}",
+            stage="voice",
+            capability="realtime",
+            status="succeeded",
+            business_summary="The presenter requested a product draft change by voice.",
+            model=settings.catalog_studio_realtime_model,
+            draft_id=request.arguments.current_draft_id,
+            request_payload={
+                "input": {
+                    "action": request.name,
+                    "draft_id": request.arguments.current_draft_id,
+                    "expected_draft_version": request.arguments.expected_draft_version,
+                }
+            },
+            response_payload={"status": "accepted", "tool_name": request.name},
+        ),
+    )

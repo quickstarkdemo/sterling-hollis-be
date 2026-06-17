@@ -75,7 +75,13 @@ def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, bool]
         "responses": {"configured": openai_configured},
         "moderation": {"configured": openai_configured},
         "image_generation": {"configured": openai_configured and image_storage_configured},
-        "realtime": {"configured": openai_configured and settings.catalog_studio_realtime_enabled},
+        "realtime": {
+            "configured": (
+                openai_configured
+                and settings.catalog_studio_realtime_enabled
+                and bool(settings.catalog_studio_realtime_safety_identifier_secret.strip())
+            )
+        },
         "worker_storage": {"configured": image_storage_configured},
         "catalog": {"configured": catalog_configured},
     }
