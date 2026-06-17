@@ -123,8 +123,23 @@ class ProductDraft(BaseModel):
 
 class DraftMutationRequest(BaseModel):
     expected_version: int = Field(ge=0)
+    current_draft_id: str | None = Field(default=None, max_length=64)
+    expected_draft_version: int | None = Field(default=None, ge=1)
     moderation_state: ModerationState = "pending"
     product: ProductDraft
+
+    @model_validator(mode="after")
+    def validate_draft_concurrency(self):
+        if (self.current_draft_id is None) != (self.expected_draft_version is None):
+            raise ValueError(
+                "current_draft_id and expected_draft_version must be provided together"
+            )
+        return self
+
+
+class StartRevisionRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    workflow_id: str | None = Field(default=None, max_length=64)
 
 
 class PublishRequest(BaseModel):
@@ -146,6 +161,33 @@ class DraftRevisionResponse(BaseModel):
     created_at: datetime
 
 
+class AdminDraftSnapshot(BaseModel):
+    revision: DraftRevisionResponse
+    draft_version: int = Field(ge=1)
+    workflow_id: str | None = None
+    product: ProductDraft
+
+
+class AdminProductListItem(BaseModel):
+    product_id: str
+    lifecycle_status: LifecycleStatus
+    version: int
+    title: str
+    brand: str
+    category: str
+    has_draft: bool
+    current_draft_id: str | None = None
+    current_draft_version: int | None = None
+    updated_at: datetime
+
+
+class AdminProductListResponse(BaseModel):
+    items: list[AdminProductListItem]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+
+
 class AdminProductResponse(BaseModel):
     product_id: str
     lifecycle_status: LifecycleStatus
@@ -155,6 +197,8 @@ class AdminProductResponse(BaseModel):
     brand: str
     category: str
     metadata: dict
+    published_snapshot: ProductDraft | None = None
+    current_draft: AdminDraftSnapshot | None = None
     drafts: list[DraftRevisionResponse] = Field(default_factory=list)
 
 

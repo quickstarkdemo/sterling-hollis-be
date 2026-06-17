@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.catalog.schemas import (
@@ -25,6 +25,7 @@ from app.catalog.schemas import (
     ProductSort,
     RecommendedProduct,
 )
+from app.catalog.authoring import public_product_metadata
 from app.models import CatalogProduct as CatalogProductModel
 from app.models import Product, ProductVariant, StoreInventory
 from app.schemas import CustomerRecommendationRequest, RetrievalMode
@@ -333,7 +334,7 @@ def product_to_catalog(
         )
     return ProductDetailResponse(
         **base.model_dump(),
-        metadata=dict(product.metadata_json or {}),
+        metadata=public_product_metadata(product.metadata_json),
         variants=variant_payload,
     )
 

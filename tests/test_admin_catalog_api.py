@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -23,6 +24,7 @@ from app.routers.admin_catalog import get_catalog_ai_service
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
+    CatalogWorkflow,
     CatalogWorkflowEvent,
     Product,
     Store,
@@ -181,7 +183,9 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
     assert security_scheme["scheme"] == "bearer"
     for path in (
         "/api/admin/session",
+        "/api/admin/catalog/products",
         "/api/admin/catalog/products/drafts",
+        "/api/admin/catalog/products/{product_id}/revisions",
         "/api/admin/catalog/workflows",
         "/api/admin/catalog/workflows/{workflow_id}",
         "/api/admin/catalog/workflows/{workflow_id}/draft-commands",
@@ -467,6 +471,294 @@ def test_revision_keeps_existing_snapshot_public_until_publish(monkeypatch):
         assert published.status_code == 200
         assert published.json()["version"] == 2
         assert client.get(f"/api/products/{product_id}").json()["title"] == "Revised Dress"
+        admin_detail = client.get(f"/api/admin/catalog/products/{product_id}").json()
+        assert admin_detail["current_draft"] is None
+        listed = client.get(
+            "/api/admin/catalog/products", params={"q": "Revised Dress"}
+        ).json()["items"]
+        assert listed[0]["has_draft"] is False
+
+
+def test_admin_product_search_covers_draft_and_published_lifecycle_states(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        created = client.post(
+            "/api/admin/catalog/products/drafts",
+            json=_snapshot(title="Searchable Studio Coat"),
+            headers=_headers("searchable-draft"),
+        )
+        assert created.status_code == 201
+
+        drafts = client.get(
+            "/api/admin/catalog/products",
+            params={"q": "studio coat", "lifecycle_status": "draft", "page_size": 1},
+        )
+        published = client.get(
+            "/api/admin/catalog/products",
+            params={"lifecycle_status": "published", "brand": "sterling hollis"},
+        )
+
+        assert drafts.status_code == published.status_code == 200
+        assert drafts.json()["total"] == 1
+        assert drafts.json()["page"] == 1
+        assert drafts.json()["page_size"] == 1
+        assert drafts.json()["items"][0]["lifecycle_status"] == "draft"
+        assert drafts.json()["items"][0]["has_draft"] is True
+        assert published.json()["total"] == 1
+        assert published.json()["items"][0]["title"] == "Published Dress"
+
+
+def test_start_revision_clones_published_snapshot_and_links_workflow(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            product_id = db.scalar(
+                select(CatalogProduct.id).where(CatalogProduct.title == "Published Dress")
+            )
+        workflow = client.post(
+            "/api/admin/catalog/workflows",
+            headers=_headers("revision-workflow"),
+            json={
+                "title": "Revise the published dress",
+                "business_summary": "Preparing a private catalog revision.",
+            },
+        ).json()
+        request = {"expected_version": 1, "workflow_id": workflow["id"]}
+
+        started = client.post(
+            f"/api/admin/catalog/products/{product_id}/revisions",
+            headers=_headers("start-revision"),
+            json=request,
+        )
+        replay = client.post(
+            f"/api/admin/catalog/products/{product_id}/revisions",
+            headers=_headers("start-revision"),
+            json=request,
+        )
+
+        assert started.status_code == replay.status_code == 201
+        assert started.json() == replay.json()
+        body = started.json()
+        assert body["draft_version"] == 1
+        assert body["workflow_id"] == workflow["id"]
+        assert body["product"]["title"] == "Published Dress"
+        assert body["product"]["variants"][0]["inventory"][0]["inventory_qty"] == 5
+        assert client.get(f"/api/products/{product_id}").json()["title"] == "Published Dress"
+        detail = client.get(f"/api/admin/catalog/products/{product_id}").json()
+        assert detail["published_snapshot"]["title"] == "Published Dress"
+        assert detail["current_draft"]["revision"]["id"] == body["revision"]["id"]
+        with sessions() as db:
+            linked = db.get(CatalogWorkflow, workflow["id"])
+            assert linked.draft_revision_id == body["revision"]["id"]
+            assert linked.published_product_id == product_id
+
+
+def test_publication_preserves_private_authoring_metadata_for_later_revisions(monkeypatch):
+    payload = _snapshot(title="Authoring Metadata Coat")
+    payload["product"]["design_specification"] = {
+        "product_type": "single-breasted coat",
+        "silhouette": "long tailored column",
+        "construction": "notched collar with concealed closure",
+        "distinguishing_features": ["curved shoulder seam"],
+    }
+    payload["product"]["variant_axes"] = ["color"]
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        draft = client.post(
+            "/api/admin/catalog/products/drafts",
+            headers=_headers("authoring-metadata-draft"),
+            json=payload,
+        ).json()
+        published = client.post(
+            f"/api/admin/catalog/products/{draft['product_id']}/publish",
+            headers=_headers("authoring-metadata-publish"),
+            json={"draft_id": draft["id"], "expected_version": 0},
+        )
+        public = client.get(f"/api/products/{draft['product_id']}")
+        revision = client.post(
+            f"/api/admin/catalog/products/{draft['product_id']}/revisions",
+            headers=_headers("authoring-metadata-revision"),
+            json={"expected_version": 1},
+        )
+
+        assert published.status_code == 200
+        assert "_catalog_studio_authoring" not in public.text
+        assert revision.status_code == 201
+        assert revision.json()["product"]["variant_axes"] == ["color"]
+        assert revision.json()["product"]["design_specification"]["product_type"] == (
+            "single-breasted coat"
+        )
+
+
+def test_safe_draft_round_trip_preserves_server_image_state_and_detects_conflicts(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            product_id = db.scalar(
+                select(CatalogProduct.id).where(CatalogProduct.title == "Published Dress")
+            )
+        started = client.post(
+            f"/api/admin/catalog/products/{product_id}/revisions",
+            headers=_headers("safe-round-trip-start"),
+            json={"expected_version": 1},
+        ).json()
+        first_id = started["revision"]["id"]
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, first_id)
+            snapshot = deepcopy(revision.snapshot_json)
+            snapshot["variants"][0]["image_set"] = {
+                "job_id": "image_job_private",
+                "primary_url": "https://example.com/published.jpg",
+                "file_path": "/private/catalog-studio/image.png",
+                "history": [{"file_path": "/private/catalog-studio/original.png"}],
+            }
+            revision.snapshot_json = snapshot
+            db.commit()
+
+        detail = client.get(f"/api/admin/catalog/products/{product_id}")
+        assert detail.status_code == 200
+        assert "file_path" not in detail.text
+        current = detail.json()["current_draft"]
+        product = current["product"]
+        product["title"] = "Privately Revised Dress"
+        replacement = {
+            "expected_version": 1,
+            "current_draft_id": current["revision"]["id"],
+            "expected_draft_version": current["draft_version"],
+            "moderation_state": "approved",
+            "product": product,
+        }
+        updated = client.put(
+            f"/api/admin/catalog/products/{product_id}/draft",
+            headers=_headers("safe-round-trip-update"),
+            json=replacement,
+        )
+        stale = client.put(
+            f"/api/admin/catalog/products/{product_id}/draft",
+            headers=_headers("safe-round-trip-stale"),
+            json=replacement,
+        )
+
+        assert updated.status_code == 201
+        assert stale.status_code == 409
+        assert client.get(f"/api/products/{product_id}").json()["title"] == "Published Dress"
+        with sessions() as db:
+            persisted = db.get(CatalogDraftRevision, updated.json()["id"])
+            assert persisted.snapshot_json["variants"][0]["image_set"]["file_path"].endswith(
+                "image.png"
+            )
+            assert persisted.snapshot_json["variants"][0]["image_set"]["history"][0][
+                "file_path"
+            ].endswith("original.png")
+
+        current = client.get(f"/api/admin/catalog/products/{product_id}").json()[
+            "current_draft"
+        ]
+        current["product"]["variants"][0]["image_link"] = None
+        current["product"]["variants"][0]["image_set"] = {}
+        cleared = client.put(
+            f"/api/admin/catalog/products/{product_id}/draft",
+            headers=_headers("safe-round-trip-clear"),
+            json={
+                "expected_version": 1,
+                "current_draft_id": current["revision"]["id"],
+                "expected_draft_version": current["draft_version"],
+                "moderation_state": "approved",
+                "product": current["product"],
+            },
+        )
+        blocked = client.post(
+            f"/api/admin/catalog/products/{product_id}/publish",
+            headers=_headers("safe-round-trip-publish"),
+            json={"draft_id": cleared.json()["id"], "expected_version": 1},
+        )
+        assert cleared.status_code == 201
+        assert blocked.status_code == 409
+        assert client.get(f"/api/products/{product_id}").json()["variants"][0][
+            "images"
+        ]["primary_url"]
+
+
+def test_client_cannot_persist_server_owned_image_paths(monkeypatch):
+    payload = _snapshot()
+    payload["product"]["variants"][0]["image_set"]["file_path"] = (
+        "/etc/not-a-catalog-image"
+    )
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        created = client.post(
+            "/api/admin/catalog/products/drafts",
+            headers=_headers("strip-client-file-path"),
+            json=payload,
+        )
+        assert created.status_code == 201
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, created.json()["id"])
+            assert "file_path" not in revision.snapshot_json["variants"][0]["image_set"]
+
+
+def test_variant_addition_and_removal_stay_private_until_each_publication(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            product_id = db.scalar(
+                select(CatalogProduct.id).where(CatalogProduct.title == "Published Dress")
+            )
+        started = client.post(
+            f"/api/admin/catalog/products/{product_id}/revisions",
+            headers=_headers("variant-add-start"),
+            json={"expected_version": 1},
+        ).json()
+        product = started["product"]
+        added_variant = deepcopy(product["variants"][0])
+        added_variant["variant_id"] = None
+        added_variant["color"] = "Black"
+        product["variant_axes"] = ["color"]
+        product["variants"].append(added_variant)
+        added = client.put(
+            f"/api/admin/catalog/products/{product_id}/draft",
+            headers=_headers("variant-add-update"),
+            json={
+                "expected_version": 1,
+                "current_draft_id": started["revision"]["id"],
+                "expected_draft_version": started["draft_version"],
+                "moderation_state": "approved",
+                "product": product,
+            },
+        )
+        assert added.status_code == 201
+        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 1
+        published_addition = client.post(
+            f"/api/admin/catalog/products/{product_id}/publish",
+            headers=_headers("variant-add-publish"),
+            json={"draft_id": added.json()["id"], "expected_version": 1},
+        )
+        assert published_addition.status_code == 200
+        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 2
+
+        started_removal = client.post(
+            f"/api/admin/catalog/products/{product_id}/revisions",
+            headers=_headers("variant-remove-start"),
+            json={"expected_version": 2},
+        ).json()
+        removal_product = started_removal["product"]
+        removal_product["variant_axes"] = []
+        removal_product["primary_variant_index"] = 0
+        removal_product["variants"] = removal_product["variants"][:1]
+        removed = client.put(
+            f"/api/admin/catalog/products/{product_id}/draft",
+            headers=_headers("variant-remove-update"),
+            json={
+                "expected_version": 2,
+                "current_draft_id": started_removal["revision"]["id"],
+                "expected_draft_version": started_removal["draft_version"],
+                "moderation_state": "approved",
+                "product": removal_product,
+            },
+        )
+        assert removed.status_code == 201
+        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 2
+        published_removal = client.post(
+            f"/api/admin/catalog/products/{product_id}/publish",
+            headers=_headers("variant-remove-publish"),
+            json={"draft_id": removed.json()["id"], "expected_version": 2},
+        )
+        assert published_removal.status_code == 200
+        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 1
 
 
 def test_idempotency_replays_result_and_rejects_key_reuse(monkeypatch):
