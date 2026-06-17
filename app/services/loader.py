@@ -6,13 +6,14 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
     CatalogProduct,
     Customer,
     CustomerCommunication,
+    ImageGenerationJob,
     Order,
     OrderItem,
     Product,
@@ -36,6 +37,16 @@ ENTITY_MODEL_MAP = {
     "store_daily_metrics": StoreDailyMetric,
     "supplier_product_offers": SupplierProductOffer,
 }
+
+SYNTHETIC_LOAD_ORDER = (
+    "stores",
+    "customers",
+    "products",
+    "orders",
+    "order_items",
+    "store_daily_metrics",
+    "supplier_product_offers",
+)
 
 
 DATETIME_FIELDS = {"joined_at", "ordered_at", "started_at", "completed_at", "embedded_at", "created_at", "updated_at"}
@@ -95,7 +106,7 @@ def _convert_value(field: str, value: str):
     return value
 
 
-def _parse_csv(path: Path) -> list[dict]:
+def parse_entity_csv(path: Path) -> list[dict]:
     rows: list[dict] = []
     with path.open("r", newline="", encoding="utf-8") as fp:
         reader = csv.DictReader(fp)
@@ -105,8 +116,18 @@ def _parse_csv(path: Path) -> list[dict]:
     return rows
 
 
-def reset_synthetic_tables(db: Session) -> None:
+def reset_synthetic_tables(
+    db: Session,
+    *,
+    detach_image_job_targets_for_run: str | None = None,
+) -> None:
     # FK-safe delete order.
+    if detach_image_job_targets_for_run:
+        db.execute(
+            update(ImageGenerationJob)
+            .where(ImageGenerationJob.run_id == detach_image_job_targets_for_run)
+            .values(store_id=None, product_id=None, variant_id=None)
+        )
     db.execute(delete(OrderItem))
     db.execute(delete(Order))
     db.execute(delete(CustomerCommunication))
@@ -153,13 +174,13 @@ def load_entity_csv(db: Session, run_id: str, data_dir: Path, entity: str) -> in
     if not csv_path.exists():
         raise FileNotFoundError(f"Missing CSV for entity {entity}: {csv_path}")
 
-    rows = _parse_csv(csv_path)
+    rows = parse_entity_csv(csv_path)
 
     # Clear previous rows from this run where applicable.
     if entity in {"stores", "customers", "products", "orders", "store_daily_metrics", "supplier_product_offers"}:
         db.execute(delete(model).where(model.seed_run_id == run_id))
     elif entity == "order_items":
-        order_ids = [r["id"] for r in _parse_csv(data_dir / run_id / "orders.csv")]
+        order_ids = [r["id"] for r in parse_entity_csv(data_dir / run_id / "orders.csv")]
         if order_ids:
             chunk_size = 5000
             for start in range(0, len(order_ids), chunk_size):

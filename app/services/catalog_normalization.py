@@ -50,9 +50,27 @@ def variant_key_for_values(
     gender: str | None,
     season: str | None,
 ) -> str:
+    catalog_key = catalog_key_for_values(brand=brand, title=title, category=category)
+    return _variant_key_for_catalog_key(
+        catalog_key,
+        color=color,
+        material=material,
+        gender=gender,
+        season=season,
+    )
+
+
+def _variant_key_for_catalog_key(
+    catalog_key: str,
+    *,
+    color: str | None,
+    material: str | None,
+    gender: str | None,
+    season: str | None,
+) -> str:
     return "|".join(
         [
-            catalog_key_for_values(brand=brand, title=title, category=category),
+            catalog_key,
             _clean(color),
             _clean(material),
             _clean(gender),
@@ -74,14 +92,16 @@ def store_inventory_id_for_values(*, store_id: str, variant_id: str, size: str) 
 
 
 def catalog_key_for_product(product: Product) -> str:
+    metadata = product.metadata_json if isinstance(product.metadata_json, dict) else {}
+    style_code = _clean(metadata.get("style_code"))
+    if style_code:
+        return "|".join(["source-family", _clean(product.seed_run_id), style_code])
     return catalog_key_for_values(brand=product.brand, title=product.title, category=product.category)
 
 
 def variant_key_for_product(product: Product) -> str:
-    return variant_key_for_values(
-        brand=product.brand,
-        title=product.title,
-        category=product.category,
+    return _variant_key_for_catalog_key(
+        catalog_key_for_product(product),
         color=product.color,
         material=product.material,
         gender=product.gender,
@@ -139,6 +159,7 @@ def backfill_catalog_from_legacy_products(db: Session, *, run_id: str | None = N
     for catalog_key, group in sorted(catalog_groups.items()):
         primary = group[0]
         source_ids = [product.id for product in group]
+        primary_metadata = primary.metadata_json if isinstance(primary.metadata_json, dict) else {}
         catalog_rows.append(
             {
                 "id": catalog_product_id_for_key(catalog_key),
@@ -152,6 +173,7 @@ def backfill_catalog_from_legacy_products(db: Session, *, run_id: str | None = N
                     "source": "legacy_products",
                     "source_product_ids": source_ids,
                     "source_product_count": len(source_ids),
+                    "source_style_code": primary_metadata.get("style_code"),
                 },
             }
         )

@@ -266,6 +266,41 @@ def test_products_are_distributed_across_multiple_stores(tmp_path: Path):
     assert len(multi_store_titles) / max(len(title_store_map), 1) >= 0.25
 
 
+def test_product_families_share_design_identity_across_color_variants(tmp_path: Path):
+    run_id = "run_test_product_families"
+    stores = _sample_stores(run_id)
+    volumes = GenerationVolumes(stores=2, products=180, customers=40, orders=80)
+
+    artifacts = generate_synthetic_dataset(
+        seed=9173,
+        run_id=run_id,
+        stores=stores,
+        volumes=volumes,
+        trailing_months=6,
+        output_root=tmp_path,
+        raw_snapshot={"stores": []},
+        now=datetime(2026, 3, 13, tzinfo=timezone.utc),
+    )
+
+    products = _read_csv(artifacts.output_dir / "products.csv")
+    families: dict[str, list[dict]] = {}
+    for row in products:
+        style_code = json.loads(row["metadata_json"])["style_code"]
+        families.setdefault(style_code, []).append(row)
+
+    coherent_families = [
+        rows
+        for rows in families.values()
+        if len({row["color"] for row in rows}) >= 2
+        and len({row["store_id"] for row in rows}) >= 2
+        and len({row["size"] for row in rows}) >= 2
+    ]
+
+    assert len(products) == volumes.products
+    assert coherent_families
+    assert all(len({row["title"] for row in rows}) == 1 for rows in coherent_families)
+
+
 def test_orders_show_holiday_seasonality_curve(tmp_path: Path):
     run_id = "run_test_8"
     stores = _sample_stores(run_id)
