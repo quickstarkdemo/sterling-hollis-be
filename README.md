@@ -154,6 +154,28 @@ provider or returning values. Realtime reports `feature_disabled`,
 configured result means the required settings are present; it does not prove
 that the provider or browser media connection is currently healthy.
 
+#### Production Realtime preflight
+
+1. Configure `OPENAI_API_KEY`, set `CATALOG_STUDIO_REALTIME_ENABLED=true`, and
+   set `CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET` to a dedicated random
+   secret. The model, transcription model, client-secret TTL, and timeout are
+   optional and use the defaults in the table above when omitted.
+2. Deploy backend `main`. The production workflow writes the runtime settings,
+   rejects an enabled deployment with a blank API key or safety secret, runs
+   database migrations, and completes the API health check.
+3. With an authorized Clerk session, call `GET /api/admin/session` and require
+   `capabilities.realtime.configured` to be `true`. Do not log the bearer token
+   or any runtime setting values.
+4. In Catalog Studio, start voice, grant microphone access, and confirm the
+   control reaches `listening`. Complete one instruction and then stop voice.
+   A permission denial, provider/session error, or WebRTC transport failure
+   must leave text authoring available and identify that boundary separately.
+
+The deployment check proves that required settings are non-empty, the session
+capability proves that the running API loaded them, and the browser check proves
+microphone and provider transport health. All three checks are required for an
+end-to-end production verification.
+
 Important environment notes:
 
 - `DOCKERHUB_IMAGE` must be lowercase and include a Docker Hub namespace, for
