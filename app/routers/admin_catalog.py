@@ -109,13 +109,17 @@ class CapabilityStatus(BaseModel):
     ] | None = None
 
 
+class CatalogCapabilityStatus(CapabilityStatus):
+    authoring_schema_version: Literal[2]
+
+
 class CatalogStudioCapabilities(BaseModel):
     responses: CapabilityStatus
     moderation: CapabilityStatus
     image_generation: CapabilityStatus
     realtime: CapabilityStatus
     worker_storage: CapabilityStatus
-    catalog: CapabilityStatus
+    catalog: CatalogCapabilityStatus
 
 
 class CatalogStudioSessionResponse(BaseModel):

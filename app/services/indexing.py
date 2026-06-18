@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import CatalogProduct, CatalogProductEmbedding, Product, ProductEmbedding
@@ -18,19 +18,6 @@ def build_product_embedding_text(product: Product) -> str:
     return f"{product.title}\n{product.description}\n{attrs_text}"
 
 
-def _unique_variant_values(product: CatalogProduct, attr: str) -> list[str]:
-    values: list[str] = []
-    seen: set[str] = set()
-    for variant in product.variants:
-        value = str(getattr(variant, attr, "") or "").strip()
-        key = value.lower()
-        if not value or key in seen:
-            continue
-        values.append(value)
-        seen.add(key)
-    return values
-
-
 def build_catalog_product_embedding_text(product: CatalogProduct) -> str:
     parts = [
         product.title,
@@ -38,15 +25,14 @@ def build_catalog_product_embedding_text(product: CatalogProduct) -> str:
         f"Brand: {product.brand}",
         f"Category: {product.category}",
     ]
-    for label, attr in [
-        ("Colors", "color"),
-        ("Materials", "material"),
-        ("Genders", "gender"),
-        ("Seasons", "season"),
+    for label, value in [
+        ("Color", product.color),
+        ("Material", product.material),
+        ("Gender", product.gender),
+        ("Season", product.season),
     ]:
-        values = _unique_variant_values(product, attr)
-        if values:
-            parts.append(f"{label}: {', '.join(values)}")
+        if value:
+            parts.append(f"{label}: {value}")
     return "\n".join(part for part in parts if part)
 
 
@@ -67,7 +53,6 @@ def _index_catalog_products_for_run(
     products = db.scalars(
         select(CatalogProduct)
         .where(CatalogProduct.seed_run_id == run_id)
-        .options(selectinload(CatalogProduct.variants))
         .order_by(CatalogProduct.id)
     ).all()
 

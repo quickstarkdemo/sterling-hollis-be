@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.catalog.schemas import (
     CatalogCategory,
     CatalogProduct,
-    CatalogVariant,
     CategoryListResponse,
     ImageAnalysisAttributes,
     ImageRecommendationResponse,
@@ -27,19 +26,22 @@ from app.catalog.schemas import (
     RecommendedProduct,
 )
 from app.catalog.authoring import public_product_metadata
+from app.catalog.legacy_projection import (
+    legacy_main_image_fallback,
+    legacy_variant_id,
+    legacy_variant_projection,
+)
 from app.models import CatalogProduct as CatalogProductModel
-from app.models import Product, ProductMediaAsset, ProductVariant, StoreInventory
+from app.models import Product, ProductInventory as ProductInventoryModel, ProductMediaAsset
 from app.schemas import CustomerRecommendationRequest, RetrievalMode
 from app.services.catalog_normalization import (
     catalog_key_for_product,
     catalog_product_id_for_key,
 )
-from app.services.demo_assets import demo_image_url
 from app.services.embeddings import EmbeddingService
 from app.services.image_analysis import image_analysis_query_text
 from app.services.inventory_status import is_in_stock, is_preorder
 from app.services.pinecone_service import PineconeService
-from app.services.product_images import product_variant_image_set
 from app.services.recommendations import customer_recommendations
 from app.services.taxonomy import CATEGORY_TAXONOMY
 
@@ -88,7 +90,7 @@ def _stock_state(availability: str, inventory_qty: int) -> str:
 def _conditions(filters: ProductFilters, *, include_search: bool = True):
     conditions = [CatalogProductModel.lifecycle_status == "published"]
     if filters.store_id:
-        conditions.append(StoreInventory.store_id == filters.store_id)
+        conditions.append(ProductInventoryModel.store_id == filters.store_id)
     if filters.category:
         conditions.append(
             func.lower(CatalogProductModel.category) == filters.category.lower()
@@ -98,26 +100,26 @@ def _conditions(filters: ProductFilters, *, include_search: bool = True):
             func.lower(CatalogProductModel.brand) == filters.brand.lower()
         )
     if filters.size:
-        conditions.append(func.lower(StoreInventory.size) == filters.size.lower())
+        conditions.append(func.lower(ProductInventoryModel.size) == filters.size.lower())
     if filters.color:
-        conditions.append(func.lower(ProductVariant.color) == filters.color.lower())
+        conditions.append(func.lower(CatalogProductModel.color) == filters.color.lower())
     if filters.availability:
         conditions.append(
-            func.lower(StoreInventory.availability) == filters.availability.lower()
+            func.lower(ProductInventoryModel.availability) == filters.availability.lower()
         )
     if filters.min_price is not None:
-        conditions.append(ProductVariant.price_max >= Decimal(str(filters.min_price)))
+        conditions.append(CatalogProductModel.price_max >= Decimal(str(filters.min_price)))
     if filters.max_price is not None:
-        conditions.append(ProductVariant.price_min <= Decimal(str(filters.max_price)))
+        conditions.append(CatalogProductModel.price_min <= Decimal(str(filters.max_price)))
     if filters.in_stock_only:
         conditions.append(
             and_(
-                func.lower(StoreInventory.availability) == "in stock",
-                StoreInventory.inventory_qty > 0,
+                func.lower(ProductInventoryModel.availability) == "in stock",
+                ProductInventoryModel.inventory_qty > 0,
             )
         )
     elif not filters.include_preorder:
-        conditions.append(func.lower(StoreInventory.availability) != "preorder")
+        conditions.append(func.lower(ProductInventoryModel.availability) != "preorder")
     if include_search and filters.q:
         token = f"%{filters.q.strip()}%"
         conditions.append(
@@ -126,8 +128,8 @@ def _conditions(filters: ProductFilters, *, include_search: bool = True):
                 CatalogProductModel.description.ilike(token),
                 CatalogProductModel.brand.ilike(token),
                 CatalogProductModel.category.ilike(token),
-                ProductVariant.color.ilike(token),
-                ProductVariant.material.ilike(token),
+                CatalogProductModel.color.ilike(token),
+                CatalogProductModel.material.ilike(token),
             )
         )
     return conditions
@@ -137,84 +139,79 @@ def _filtered_product_id_query(filters: ProductFilters):
     query = (
         select(
             CatalogProductModel.id.label("product_id"),
-            func.min(ProductVariant.price_min).label("price_min"),
-            func.max(ProductVariant.price_max).label("price_max"),
-            func.coalesce(func.sum(StoreInventory.inventory_qty), 0).label(
+            CatalogProductModel.price_min.label("price_min"),
+            CatalogProductModel.price_max.label("price_max"),
+            func.coalesce(func.sum(ProductInventoryModel.inventory_qty), 0).label(
                 "inventory_units"
             ),
-            func.coalesce(func.max(StoreInventory.objective_weight), 0).label(
-                "objective_weight"
-            ),
         )
-        .join(
-            ProductVariant, ProductVariant.catalog_product_id == CatalogProductModel.id
+        .outerjoin(
+            ProductInventoryModel,
+            ProductInventoryModel.catalog_product_id == CatalogProductModel.id,
         )
-        .outerjoin(StoreInventory, StoreInventory.variant_id == ProductVariant.id)
         .where(*_conditions(filters))
-        .group_by(CatalogProductModel.id)
+        .group_by(
+            CatalogProductModel.id,
+            CatalogProductModel.price_min,
+            CatalogProductModel.price_max,
+        )
     )
     if filters.sort == ProductSort.price_asc:
         query = query.order_by(
-            func.min(ProductVariant.price_min).asc(), CatalogProductModel.id.asc()
+            CatalogProductModel.price_min.asc(), CatalogProductModel.id.asc()
         )
     elif filters.sort == ProductSort.price_desc:
         query = query.order_by(
-            func.max(ProductVariant.price_max).desc(), CatalogProductModel.id.asc()
+            CatalogProductModel.price_max.desc(), CatalogProductModel.id.asc()
         )
     elif filters.sort == ProductSort.inventory_desc:
         query = query.order_by(
-            func.coalesce(func.sum(StoreInventory.inventory_qty), 0).desc(),
+            func.coalesce(func.sum(ProductInventoryModel.inventory_qty), 0).desc(),
             CatalogProductModel.id.asc(),
         )
     elif filters.sort == ProductSort.newest:
         query = query.order_by(CatalogProductModel.id.desc())
     else:
         query = query.order_by(
-            func.coalesce(func.max(StoreInventory.objective_weight), 0).desc(),
+            func.coalesce(func.sum(ProductInventoryModel.inventory_qty), 0).desc(),
             CatalogProductModel.id.asc(),
         )
     return query
 
 
 def _inventory_rows(
-    db: Session, variant_ids: list[str], *, store_id: str | None = None
-) -> list[StoreInventory]:
-    if not variant_ids:
+    db: Session, product_ids: list[str], *, store_id: str | None = None
+) -> list[ProductInventoryModel]:
+    if not product_ids:
         return []
-    query = select(StoreInventory).where(StoreInventory.variant_id.in_(variant_ids))
+    query = select(ProductInventoryModel).where(
+        ProductInventoryModel.catalog_product_id.in_(product_ids)
+    )
     if store_id:
-        query = query.where(StoreInventory.store_id == store_id)
+        query = query.where(ProductInventoryModel.store_id == store_id)
     return db.scalars(
-        query.order_by(StoreInventory.store_id.asc(), StoreInventory.size.asc())
+        query.order_by(
+            ProductInventoryModel.catalog_product_id.asc(),
+            ProductInventoryModel.store_id.asc(),
+            ProductInventoryModel.size_key.asc(),
+        )
     ).all()
 
 
-def _variant_images(
-    product: CatalogProductModel, variant: ProductVariant
-) -> ProductImages:
-    raw_image_set = product_variant_image_set(variant)
-    fallback = demo_image_url(product.category, variant.id, variant_hint=product.brand)
-    return ProductImages(
-        thumbnail_url=(raw_image_set or {}).get("thumbnail_url") or fallback,
-        primary_url=(raw_image_set or {}).get("primary_url") or fallback,
-        detail_urls=(raw_image_set or {}).get("detail_urls") or [fallback],
-    )
-
-
-def _variant_attributes(variant: ProductVariant) -> dict[str, str]:
+def _product_attributes(product: CatalogProductModel) -> dict[str, str]:
     return {
         key: value
         for key, value in {
-            "color": variant.color,
-            "material": variant.material,
-            "gender": variant.gender,
-            "season": variant.season,
+            "color": product.color,
+            "material": product.material,
+            "gender": product.gender,
+            "season": product.season,
         }.items()
         if value
     }
 
 
-def _inventory_api(row: StoreInventory) -> ProductInventory:
+def _inventory_api(row: ProductInventoryModel) -> ProductInventory:
     return ProductInventory(
         store_id=row.store_id,
         availability=row.availability,
@@ -224,7 +221,7 @@ def _inventory_api(row: StoreInventory) -> ProductInventory:
     )
 
 
-def _summary(rows: list[StoreInventory]) -> ProductInventorySummary:
+def _summary(rows: list[ProductInventoryModel]) -> ProductInventorySummary:
     total_units = sum(int(row.inventory_qty or 0) for row in rows)
     in_stock_rows = [
         row for row in rows if is_in_stock(row.availability, row.inventory_qty)
@@ -248,14 +245,6 @@ def _summary(rows: list[StoreInventory]) -> ProductInventorySummary:
         in_stock_store_count=len(in_stock_store_ids),
         availability=availability,
     )
-
-
-def _product_variants(db: Session, product_id: str) -> list[ProductVariant]:
-    return db.scalars(
-        select(ProductVariant)
-        .where(ProductVariant.catalog_product_id == product_id)
-        .order_by(ProductVariant.price_min.asc(), ProductVariant.id.asc())
-    ).all()
 
 
 def _media_images(asset: ProductMediaAsset) -> ProductImages:
@@ -282,39 +271,16 @@ def product_to_catalog(
     *,
     include_variants: bool = False,
     store_id: str | None = None,
-    variants: list[ProductVariant] | None = None,
-    inventory_rows: list[StoreInventory] | None = None,
+    inventory_rows: list[ProductInventoryModel] | None = None,
 ) -> CatalogProduct | ProductDetailResponse:
-    if variants is None:
-        variants = _product_variants(db, product.id)
-    variant_ids = [variant.id for variant in variants]
     if inventory_rows is None:
-        inventory_rows = _inventory_rows(db, variant_ids, store_id=store_id)
-    inventory_by_variant: dict[str, list[StoreInventory]] = {
-        variant_id: [] for variant_id in variant_ids
-    }
-    for row in inventory_rows:
-        inventory_by_variant.setdefault(row.variant_id, []).append(row)
-
-    default_variant = max(
-        variants,
-        key=lambda variant: (
-            sum(
-                int(row.inventory_qty or 0)
-                for row in inventory_by_variant.get(variant.id, [])
-            ),
-            -float(variant.price_min),
-            variant.id,
-        ),
-        default=None,
-    )
+        inventory_rows = _inventory_rows(db, [product.id], store_id=store_id)
     media_rows = _product_media(db, product.id)
     core_media = next((asset for asset in media_rows if asset.role == "core"), None)
     images = _media_images(core_media) if core_media else (
-        _variant_images(product, default_variant) if default_variant else ProductImages()
+        legacy_main_image_fallback(db, product) or ProductImages()
     )
-    price_min = min((float(variant.price_min) for variant in variants), default=0.0)
-    price_max = max((float(variant.price_max) for variant in variants), default=0.0)
+    inventory = [_inventory_api(row) for row in inventory_rows]
     summary = _summary(inventory_rows)
     base = CatalogProduct(
         id=product.id,
@@ -324,37 +290,27 @@ def product_to_catalog(
         brand=product.brand,
         category=product.category,
         category_label=category_label(product.category),
-        price=price_min,
-        price_min=price_min,
-        price_max=price_max,
-        default_variant_id=default_variant.id if default_variant else None,
-        link=default_variant.link if default_variant else None,
+        price=float(product.price_min),
+        price_min=float(product.price_min),
+        price_max=float(product.price_max),
+        default_variant_id=legacy_variant_id(product.id),
+        link=product.link,
         image_url=images.thumbnail_url,
         images=images,
-        attributes=_variant_attributes(default_variant) if default_variant else {},
+        attributes=_product_attributes(product),
         inventory_summary=summary,
     )
     if not include_variants:
         return base
 
-    variant_payload = []
-    for variant in variants:
-        rows = inventory_by_variant.get(variant.id, [])
-        variant_images = _variant_images(product, variant)
-        variant_payload.append(
-            CatalogVariant(
-                id=variant.id,
-                product_id=product.id,
-                price_min=float(variant.price_min),
-                price_max=float(variant.price_max),
-                link=variant.link,
-                image_url=variant_images.thumbnail_url,
-                images=variant_images,
-                attributes=_variant_attributes(variant),
-                sizes=sorted({row.size for row in rows}),
-                inventory=[_inventory_api(row) for row in rows],
-            )
+    variant_payload = [
+        legacy_variant_projection(
+            product,
+            images=images,
+            attributes=base.attributes,
+            inventory=inventory,
         )
+    ]
     return ProductDetailResponse(
         **base.model_dump(),
         metadata=public_product_metadata(product.metadata_json),
@@ -370,6 +326,7 @@ def product_to_catalog(
             )
             for asset in media_rows
         ],
+        inventory=inventory,
         variants=variant_payload,
     )
 
@@ -386,19 +343,19 @@ def list_categories(
 ) -> CategoryListResponse:
     conditions = [CatalogProductModel.lifecycle_status == "published"]
     if store_id:
-        conditions.append(StoreInventory.store_id == store_id)
+        conditions.append(ProductInventoryModel.store_id == store_id)
     rows = db.execute(
         select(
             CatalogProductModel.category,
             func.count(func.distinct(CatalogProductModel.id)),
-            func.min(ProductVariant.price_min),
-            func.max(ProductVariant.price_max),
-            func.coalesce(func.sum(StoreInventory.inventory_qty), 0),
+            func.min(CatalogProductModel.price_min),
+            func.max(CatalogProductModel.price_max),
+            func.coalesce(func.sum(ProductInventoryModel.inventory_qty), 0),
         )
-        .join(
-            ProductVariant, ProductVariant.catalog_product_id == CatalogProductModel.id
+        .outerjoin(
+            ProductInventoryModel,
+            ProductInventoryModel.catalog_product_id == CatalogProductModel.id,
         )
-        .outerjoin(StoreInventory, StoreInventory.variant_id == ProductVariant.id)
         .where(*conditions)
         .group_by(CatalogProductModel.category)
         .order_by(CatalogProductModel.category)
@@ -423,10 +380,10 @@ def _facet_group(
 ) -> ProductFacetGroup:
     rows = db.execute(
         select(column, func.count(func.distinct(CatalogProductModel.id)))
-        .join(
-            ProductVariant, ProductVariant.catalog_product_id == CatalogProductModel.id
+        .outerjoin(
+            ProductInventoryModel,
+            ProductInventoryModel.catalog_product_id == CatalogProductModel.id,
         )
-        .outerjoin(StoreInventory, StoreInventory.variant_id == ProductVariant.id)
         .where(*_conditions(filters), column.is_not(None))
         .group_by(column)
         .order_by(
@@ -468,46 +425,23 @@ def list_products(
         for product_id in product_ids
         if product_id in product_map
     ]
-    variants = (
-        db.scalars(
-            select(ProductVariant)
-            .where(ProductVariant.catalog_product_id.in_(product_ids))
-            .order_by(
-                ProductVariant.catalog_product_id.asc(),
-                ProductVariant.price_min.asc(),
-                ProductVariant.id.asc(),
-            )
-        ).all()
-        if product_ids
-        else []
-    )
-    variants_by_product: dict[str, list[ProductVariant]] = {
-        product_id: [] for product_id in product_ids
-    }
-    variant_product_ids: dict[str, str] = {}
-    for variant in variants:
-        variants_by_product.setdefault(variant.catalog_product_id, []).append(variant)
-        variant_product_ids[variant.id] = variant.catalog_product_id
-
-    inventory_by_product: dict[str, list[StoreInventory]] = {
+    inventory_by_product: dict[str, list[ProductInventoryModel]] = {
         product_id: [] for product_id in product_ids
     }
     inventory_rows = _inventory_rows(
         db,
-        list(variant_product_ids),
+        product_ids,
         store_id=filters.store_id,
     )
     for inventory in inventory_rows:
-        product_id = variant_product_ids.get(inventory.variant_id)
-        if product_id:
-            inventory_by_product.setdefault(product_id, []).append(inventory)
+        inventory_by_product.setdefault(inventory.catalog_product_id, []).append(inventory)
     facets = []
     if include_facets:
         facets = [
             _facet_group(db, filters, "brand", CatalogProductModel.brand),
             _facet_group(db, filters, "category", CatalogProductModel.category),
-            _facet_group(db, filters, "size", StoreInventory.size),
-            _facet_group(db, filters, "color", ProductVariant.color),
+            _facet_group(db, filters, "size", ProductInventoryModel.size),
+            _facet_group(db, filters, "color", CatalogProductModel.color),
         ]
     return ProductListResponse(
         items=[
@@ -515,7 +449,6 @@ def list_products(
                 db,
                 product,
                 store_id=filters.store_id,
-                variants=variants_by_product.get(product.id, []),
                 inventory_rows=inventory_by_product.get(product.id, []),
             )
             for product in products

@@ -16,7 +16,6 @@ from app.catalog.ai_schemas import (
     CatalogAICommandResult,
     CatalogAIInventoryProposal,
     CatalogAIProductProposal,
-    CatalogAIVariantProposal,
 )
 from app.catalog.admin_schemas import DesignSpecificationDraft
 from app.catalog.references import catalog_brand_id_for_name
@@ -442,6 +441,7 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
     proposal = CatalogAIProductProposal(
         title="Midnight Atelier Coat",
         description="A sculpted wool evening coat.",
+        brand_id=catalog_brand_id_for_name("Sterling Hollis"),
         brand="Sterling Hollis",
         category="womens_apparel",
         image_direction="Editorial studio photograph on a neutral backdrop.",
@@ -451,24 +451,18 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
             construction="notched collar with concealed closure",
             distinguishing_features=["curved shoulder seam"],
         ),
-        variant_axes=["color"],
-        primary_variant_index=0,
-        variants=[
-            CatalogAIVariantProposal(
-                color="Black",
-                material="wool",
-                gender="women",
-                season="fall",
-                price_min=895,
-                price_max=895,
-                inventory=[
-                    CatalogAIInventoryProposal(
-                        size="M",
-                        availability="in stock",
-                        inventory_qty=8,
-                        objective_weight=0.9,
-                    )
-                ],
+        price_min=895,
+        price_max=895,
+        color="Black",
+        material="wool",
+        gender="women",
+        season="fall",
+        inventory=[
+            CatalogAIInventoryProposal(
+                store_id="1001",
+                size="M",
+                availability="in stock",
+                inventory_qty=8,
             )
         ],
     )
@@ -535,6 +529,8 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
         assert body["status"] == "succeeded"
         assert body["draft"]["draft_version"] == 1
         assert body["draft"]["product"]["title"] == "Midnight Atelier Coat"
+        assert body["draft"]["product"]["schema_version"] == 2
+        assert "variants" not in body["draft"]["product"]
         assert body["workflow"]["draft_id"] == body["draft"]["id"]
         assert [event["capability"] for event in body["workflow"]["events"]] == [
             "workflow",
@@ -1081,7 +1077,7 @@ def test_variant_addition_and_removal_stay_private_until_each_publication(monkey
             json={"draft_id": added.json()["id"], "expected_version": 1},
         )
         assert published_addition.status_code == 200
-        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 2
+        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 1
 
         started_removal = client.post(
             f"/api/admin/catalog/products/{product_id}/revisions",
@@ -1104,7 +1100,7 @@ def test_variant_addition_and_removal_stay_private_until_each_publication(monkey
             },
         )
         assert removed.status_code == 201
-        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 2
+        assert len(client.get(f"/api/products/{product_id}").json()["variants"]) == 1
         published_removal = client.post(
             f"/api/admin/catalog/products/{product_id}/publish",
             headers=_headers("variant-remove-publish"),

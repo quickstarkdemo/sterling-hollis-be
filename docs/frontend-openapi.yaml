@@ -1413,6 +1413,16 @@ components:
           type: string
           nullable: true
           enum: [feature_disabled, missing_api_key, missing_safety_secret]
+    CatalogCapabilityStatus:
+      type: object
+      additionalProperties: false
+      required: [configured, authoring_schema_version]
+      properties:
+        configured:
+          type: boolean
+        authoring_schema_version:
+          type: integer
+          enum: [2]
     CatalogStudioCapabilities:
       type: object
       additionalProperties: false
@@ -1429,7 +1439,7 @@ components:
         worker_storage:
           $ref: "#/components/schemas/CapabilityStatus"
         catalog:
-          $ref: "#/components/schemas/CapabilityStatus"
+          $ref: "#/components/schemas/CatalogCapabilityStatus"
     CatalogStudioSessionResponse:
       type: object
       additionalProperties: false
@@ -1656,7 +1666,7 @@ components:
           enum: [pending, approved, blocked]
           default: pending
         product:
-          $ref: "#/components/schemas/CatalogProductDraft"
+          $ref: "#/components/schemas/CatalogProductDraftV2"
     StartRevisionRequest:
       type: object
       additionalProperties: false
@@ -2385,6 +2395,7 @@ components:
         default_variant_id:
           type: string
           nullable: true
+          deprecated: true
         link:
           type: string
           nullable: true
@@ -2409,13 +2420,14 @@ components:
         role: {type: string, enum: [core, variation]}
         intent: {type: string, enum: [manual, color, angle, scene, scale, people, freeform]}
         source_media_id: {type: string, nullable: true}
+        predecessor_media_id: {type: string, nullable: true}
         images: {$ref: "#/components/schemas/ProductImages"}
         display_order: {type: integer, minimum: 0}
     ProductDetailResponse:
       allOf:
         - $ref: "#/components/schemas/CatalogProduct"
         - type: object
-          required: [metadata, media, variants]
+          required: [metadata, media, inventory, variants]
           properties:
             metadata:
               type: object
@@ -2424,8 +2436,13 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/ProductMedia"
+            inventory:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProductInventory"
             variants:
               type: array
+              deprecated: true
               items:
                 $ref: "#/components/schemas/CatalogVariant"
     CatalogVariant:

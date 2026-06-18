@@ -80,7 +80,7 @@ class CatalogProduct(BaseModel):
     price: float
     price_min: float
     price_max: float
-    default_variant_id: str | None = None
+    default_variant_id: str | None = Field(default=None, deprecated=True)
     link: str | None = None
     image_url: str | None = None
     images: ProductImages | None = None
@@ -122,7 +122,8 @@ class ProductListResponse(BaseModel):
 class ProductDetailResponse(CatalogProduct):
     metadata: dict = Field(default_factory=dict)
     media: list[ProductMedia] = Field(default_factory=list)
-    variants: list[CatalogVariant] = Field(default_factory=list)
+    inventory: list[ProductInventory] = Field(default_factory=list)
+    variants: list[CatalogVariant] = Field(default_factory=list, deprecated=True)
 
 
 class ProductRecommendationRequest(BaseModel):

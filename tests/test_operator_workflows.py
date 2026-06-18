@@ -19,6 +19,7 @@ from app.models import (
     Order,
     OrderItem,
     Product,
+    ProductInventory,
     ProductVariant,
     Store,
     StoreInventory,
@@ -274,7 +275,7 @@ def _seed_data(session):
             availability="in stock",
             brand="Valentino",
             category="womens_apparel",
-            color="Ivory",
+            color="Legacy Red",
             size="M",
             material="silk",
             gender="women",
@@ -493,6 +494,13 @@ def _seed_catalog_studio_discovery_products(session):
             description="A sculpted ivory wool coat created in Catalog Studio.",
             brand="Sterling Hollis",
             category="womens_apparel",
+            price_min=Decimal("895.00"),
+            price_max=Decimal("895.00"),
+            link="https://fashion.example/catalog/cat_studio_published",
+            color="Ivory",
+            material="wool",
+            gender="women",
+            season="fall",
             lifecycle_status="published",
             version=1,
             metadata_json={
@@ -527,17 +535,24 @@ def _seed_catalog_studio_discovery_products(session):
     ]
     session.add_all(products)
     for product in products:
+        product.price_min = Decimal("895.00")
+        product.price_max = Decimal("895.00")
+        product.link = f"https://fashion.example/catalog/{product.id}"
+        product.color = "Ivory"
+        product.material = "wool"
+        product.gender = "women"
+        product.season = "fall"
         variant = ProductVariant(
             id=f"variant_{product.id}",
             seed_run_id="run_test",
             catalog_product_id=product.id,
             variant_key=f"{product.catalog_key}:ivory:wool",
-            color="Ivory",
+            color="Legacy Red",
             material="wool",
             gender="women",
             season="fall",
-            price_min=Decimal("895.00"),
-            price_max=Decimal("895.00"),
+            price_min=Decimal("999.00"),
+            price_max=Decimal("999.00"),
             link=f"https://fashion.example/catalog/{product.id}",
             image_link=f"https://fashion.example/images/{product.id}.jpg",
             image_set={},
@@ -552,8 +567,21 @@ def _seed_catalog_studio_discovery_products(session):
                 variant_id=variant.id,
                 size="M",
                 availability="in stock",
-                inventory_qty=7,
+                inventory_qty=2,
                 objective_weight=Decimal("0.9000"),
+                metadata_json={},
+            )
+        )
+        session.add(
+            ProductInventory(
+                id=f"product_inventory_{product.id}",
+                seed_run_id="run_test",
+                catalog_product_id=product.id,
+                store_id="1001",
+                size="M",
+                size_key="m",
+                availability="in stock",
+                inventory_qty=7,
                 metadata_json={},
             )
         )
@@ -2364,6 +2392,13 @@ def test_mcp_catalog_discovery_exposes_only_published_normalized_products(monkey
     assert detail.structuredContent["payload"]["products"][0]["metadata"] == {
         "story": "Created with Catalog Studio"
     }
+    detail_product = detail.structuredContent["payload"]["products"][0]
+    assert detail_product["price_min"] == 895.0
+    assert detail_product["attributes"]["color"] == "Ivory"
+    assert detail_product["inventory"][0]["inventory_qty"] == 7
+    assert detail_product["variants"][0]["price_min"] == 895.0
+    assert detail_product["variants"][0]["attributes"]["color"] == "Ivory"
+    assert detail_product["variants"][0]["inventory"][0]["inventory_qty"] == 7
     assert draft.structuredContent["payload"]["found"] is False
     assert archived.structuredContent["payload"]["found"] is False
     assert legacy.structuredContent["payload"]["found"] is True

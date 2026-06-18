@@ -15,12 +15,19 @@ from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
     CatalogAIInventoryProposal,
     CatalogAIProductProposal,
-    CatalogAIVariantProposal,
 )
 from app.catalog.admin_schemas import DesignSpecificationDraft
+from app.catalog.references import catalog_brand_id_for_name
 from app.config import Settings
 from app.database import Base
-from app.models import CatalogDraftRevision, CatalogWorkflowEvent, CatalogWorkflow, Store, SyntheticRun
+from app.models import (
+    CatalogBrand,
+    CatalogDraftRevision,
+    CatalogWorkflowEvent,
+    CatalogWorkflow,
+    Store,
+    SyntheticRun,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal
 from app.services.catalog_ai import CatalogAICommandError, execute_catalog_ai_command
 from app.services.catalog_workflow import get_catalog_workflow_projection, start_catalog_workflow
@@ -57,6 +64,14 @@ def db():
             profile_type="texas_core",
             services=[],
             raw_source={},
+        )
+    )
+    session.add(
+        CatalogBrand(
+            id=catalog_brand_id_for_name("Sterling Hollis"),
+            name="Sterling Hollis",
+            normalized_name="sterling hollis",
+            active=True,
         )
     )
     session.commit()
@@ -111,6 +126,7 @@ def _proposal(*, title: str = "Midnight Atelier Coat", color: str = "Black"):
     return CatalogAIProductProposal(
         title=title,
         description="A sculpted wool evening coat with a clean architectural line.",
+        brand_id=catalog_brand_id_for_name("Sterling Hollis"),
         brand="Sterling Hollis",
         category="womens_apparel",
         image_direction="Editorial studio photograph on a warm neutral backdrop.",
@@ -120,62 +136,52 @@ def _proposal(*, title: str = "Midnight Atelier Coat", color: str = "Black"):
             construction="notched collar with concealed front closure",
             distinguishing_features=["curved shoulder seam", "welt pockets"],
         ),
-        variant_axes=["color"],
-        primary_variant_index=0,
-        variants=[
-            CatalogAIVariantProposal(
-                color=color,
-                material="wool",
-                gender="women",
-                season="fall",
-                price_min=895,
-                price_max=895,
-                inventory=[
-                    CatalogAIInventoryProposal(
-                        size="M",
-                        availability="in stock",
-                        inventory_qty=8,
-                        objective_weight=0.9,
-                    )
-                ],
+        price_min=895,
+        price_max=895,
+        link="https://example.com/midnight-atelier-coat",
+        color=color,
+        material="wool",
+        gender="women",
+        season="fall",
+        inventory=[
+            CatalogAIInventoryProposal(
+                store_id="1001",
+                size="M",
+                availability="in stock",
+                inventory_qty=8,
             )
         ],
     )
 
 
-def test_product_proposal_accepts_declared_color_variants_with_one_shared_design():
+def test_product_proposal_contains_one_product_and_optional_inventory():
     proposal = _proposal()
-    proposal = proposal.model_copy(
-        update={
-            "variants": [
-                proposal.variants[0],
-                proposal.variants[0].model_copy(update={"color": "Ivory"}),
-            ]
-        }
-    )
 
     validated = CatalogAIProductProposal.model_validate(proposal.model_dump())
 
-    assert validated.variant_axes == ["color"]
-    assert validated.primary_variant_index == 0
+    assert validated.color == "Black"
+    assert validated.price_min == 895
+    assert validated.inventory[0].store_id == "1001"
     assert validated.design_specification.product_type == "single-breasted coat"
+    assert "variants" not in validated.model_dump()
 
 
-def test_product_proposal_rejects_undeclared_material_drift():
+def test_product_proposal_rejects_invalid_price_range():
     proposal = _proposal()
     payload = proposal.model_dump()
-    payload["variants"].append({**payload["variants"][0], "color": "Ivory", "material": "silk"})
+    payload["price_min"] = 900
+    payload["price_max"] = 800
 
-    with pytest.raises(ValidationError, match="material.*declared variant axis"):
+    with pytest.raises(ValidationError, match="price_max"):
         CatalogAIProductProposal.model_validate(payload)
 
 
-def test_product_proposal_rejects_cross_variant_gender_or_season_drift():
+def test_product_proposal_rejects_duplicate_store_and_size_inventory():
     proposal = _proposal()
     payload = proposal.model_dump()
-    payload["variants"].append({**payload["variants"][0], "color": "Ivory", "gender": "men"})
+    payload["inventory"].append(dict(payload["inventory"][0]))
 
-    with pytest.raises(ValidationError, match="gender and season"):
+    with pytest.raises(ValidationError, match="inventory store"):
         CatalogAIProductProposal.model_validate(payload)
 
 
@@ -260,7 +266,10 @@ def test_valid_instruction_saves_one_moderated_draft_and_safe_events(db):
     assert result.draft is not None
     assert result.draft.draft_version == 1
     assert result.draft.product.title == "Midnight Atelier Coat"
-    assert result.draft.product.variants[0].inventory[0].store_id == "1001"
+    assert result.draft.product.schema_version == 2
+    assert result.draft.product.inventory[0].store_id == "1001"
+    assert result.draft.product.brand_id == catalog_brand_id_for_name("Sterling Hollis")
+    assert "variants" not in result.draft.product.model_dump()
     assert result.draft.product.seed_run_id == "run_catalog"
     assert len(db.scalars(select(CatalogDraftRevision)).all()) == 1
 
@@ -295,6 +304,69 @@ def test_valid_instruction_saves_one_moderated_draft_and_safe_events(db):
     assert call["text_format"] is CatalogAIProductProposal
     assert call["safety_identifier"] != _principal().provider_user_id
     assert private_instruction in json.dumps(call["input"])
+    assert catalog_brand_id_for_name("Sterling Hollis") in json.dumps(call["input"])
+    assert "Dallas Downtown" in json.dumps(call["input"])
+
+
+def test_unknown_ai_brand_requires_explicit_add_brand(db):
+    settings = _settings()
+    workflow = _run(db, settings)
+    proposal = _proposal().model_copy(
+        update={"brand_id": "brand_unknown", "brand": "Unknown Atelier"}
+    )
+
+    with pytest.raises(CatalogAICommandError) as failure:
+        execute_catalog_ai_command(
+            db,
+            workflow_id=workflow.id,
+            command=CatalogAICommandRequest(
+                instruction="Create an Unknown Atelier coat.", expected_draft_version=0
+            ),
+            idempotency_key="command-unknown-brand",
+            principal=_principal(),
+            settings=settings,
+            client=_FakeClient(_response(proposal)),
+        )
+
+    assert failure.value.code == "unknown_catalog_brand"
+    assert failure.value.status_code == 422
+    assert "Add Brand" in failure.value.detail
+    assert db.scalars(select(CatalogDraftRevision)).all() == []
+
+
+def test_unknown_ai_inventory_store_is_rejected(db):
+    settings = _settings()
+    workflow = _run(db, settings)
+    proposal = _proposal().model_copy(
+        update={
+            "inventory": [
+                CatalogAIInventoryProposal(
+                    store_id="store_unknown",
+                    size="M",
+                    availability="in stock",
+                    inventory_qty=8,
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(CatalogAICommandError) as failure:
+        execute_catalog_ai_command(
+            db,
+            workflow_id=workflow.id,
+            command=CatalogAICommandRequest(
+                instruction="Stock the coat in an unknown store.",
+                expected_draft_version=0,
+            ),
+            idempotency_key="command-unknown-store",
+            principal=_principal(),
+            settings=settings,
+            client=_FakeClient(_response(proposal)),
+        )
+
+    assert failure.value.code == "unknown_catalog_store"
+    assert failure.value.status_code == 422
+    assert db.scalars(select(CatalogDraftRevision)).all() == []
 
 
 def test_follow_up_refines_same_product_and_increments_draft_version(db):
