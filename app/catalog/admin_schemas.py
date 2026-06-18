@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
+from app.catalog.references import catalog_brand_id_for_name
+
 
 ModerationState = Literal["pending", "approved", "blocked"]
 LifecycleStatus = Literal["draft", "published", "archived"]
@@ -243,6 +245,37 @@ class LifecycleMutationResponse(BaseModel):
     version: int
 
 
+class BrandCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=128)
+
+
+class BrandReference(BaseModel):
+    id: str
+    name: str
+
+
+class StoreReference(BaseModel):
+    id: str
+    name: str
+    city: str
+    state: str
+    label: str
+
+
+class CatalogChoice(BaseModel):
+    id: str
+    label: str
+
+
+class CatalogReferenceData(BaseModel):
+    brands: list[BrandReference]
+    stores: list[StoreReference]
+    categories: list[CatalogChoice]
+    availability: list[CatalogChoice]
+
+
 class ProductInventoryDraftV2(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -261,6 +294,7 @@ class ProductDraftV2(BaseModel):
     seed_run_id: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=255)
     description: str = Field(min_length=1)
+    brand_id: str = Field(min_length=1, max_length=64)
     brand: str = Field(min_length=1, max_length=128)
     category: str = Field(min_length=1, max_length=128)
     price_min: Decimal = Field(ge=0)
@@ -396,6 +430,7 @@ def product_draft_v2_from_v1(product: ProductDraft) -> ProductDraftV2:
         seed_run_id=product.seed_run_id,
         title=product.title,
         description=product.description,
+        brand_id=catalog_brand_id_for_name(product.brand),
         brand=product.brand,
         category=product.category,
         price_min=min(variant.price_min for variant in product.variants),
@@ -449,7 +484,10 @@ def product_draft_v1_from_v2(product: ProductDraftV2) -> ProductDraft:
 
 def product_draft_v2_from_snapshot(snapshot: dict) -> ProductDraftV2:
     if snapshot.get("schema_version") == 2:
-        return ProductDraftV2.model_validate(snapshot)
+        payload = dict(snapshot)
+        if not payload.get("brand_id") and payload.get("brand"):
+            payload["brand_id"] = catalog_brand_id_for_name(payload["brand"])
+        return ProductDraftV2.model_validate(payload)
     return product_draft_v2_from_v1(ProductDraft.model_validate(snapshot))
 
 

@@ -219,6 +219,40 @@ paths:
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Valid Clerk user is not an administrator.}
         "404": {description: Product or draft history not found.}
+  /api/admin/catalog/v2/references:
+    get:
+      tags: [catalog-studio-admin]
+      summary: List canonical catalog authoring references
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Sorted active brands, named stores, categories, and availability choices.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogReferenceData"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+  /api/admin/catalog/v2/brands:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Add a canonical catalog brand
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BrandCreateRequest"}
+      responses:
+        "201":
+          description: Canonical brand created or idempotently replayed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrandReference"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "409": {description: Normalized brand or idempotency conflict.}
+        "422": {description: Invalid brand name.}
   /api/admin/catalog/v2/products:
     get:
       tags: [catalog-studio-admin]
@@ -1508,6 +1542,53 @@ components:
         availability: {type: string, minLength: 1, maxLength: 32}
         inventory_qty: {type: integer, minimum: 0}
         metadata: {type: object, additionalProperties: true, default: {}}
+    BrandCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+    BrandReference:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    StoreReference:
+      type: object
+      additionalProperties: false
+      required: [id, name, city, state, label]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        city: {type: string}
+        state: {type: string}
+        label: {type: string}
+    CatalogChoice:
+      type: object
+      additionalProperties: false
+      required: [id, label]
+      properties:
+        id: {type: string}
+        label: {type: string}
+    CatalogReferenceData:
+      type: object
+      additionalProperties: false
+      required: [brands, stores, categories, availability]
+      properties:
+        brands:
+          type: array
+          items: {$ref: "#/components/schemas/BrandReference"}
+        stores:
+          type: array
+          items: {$ref: "#/components/schemas/StoreReference"}
+        categories:
+          type: array
+          items: {$ref: "#/components/schemas/CatalogChoice"}
+        availability:
+          type: array
+          items: {$ref: "#/components/schemas/CatalogChoice"}
     CatalogProductDraftV2:
       type: object
       additionalProperties: false
@@ -1516,6 +1597,7 @@ components:
         - seed_run_id
         - title
         - description
+        - brand_id
         - brand
         - category
         - price_min
@@ -1528,6 +1610,7 @@ components:
         seed_run_id: {type: string, minLength: 1, maxLength: 64}
         title: {type: string, minLength: 1, maxLength: 255}
         description: {type: string, minLength: 1}
+        brand_id: {type: string, minLength: 1, maxLength: 64}
         brand: {type: string, minLength: 1, maxLength: 128}
         category: {type: string, minLength: 1, maxLength: 128}
         price_min: {type: number, minimum: 0}

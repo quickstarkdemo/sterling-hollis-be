@@ -18,12 +18,17 @@ from app.catalog.admin_schemas import (
     AdminProductListResponse,
     AdminProductResponse,
     AdminProductResponseV2,
+    BrandCreateRequest,
+    BrandReference,
+    CatalogChoice,
+    CatalogReferenceData,
     DraftMutationRequest,
     DraftMutationRequestV2,
     DraftRevisionResponse,
     LifecycleMutationResponse,
     ProductDraft,
     ProductDraftV2,
+    StoreReference,
     StartRevisionRequest,
     product_draft_v1_from_snapshot,
     product_draft_v1_from_v2,
@@ -35,8 +40,16 @@ from app.catalog.authoring import (
     persisted_product_metadata,
     public_product_metadata,
 )
+from app.catalog.references import (
+    CATALOG_AVAILABILITY_CHOICES,
+    CATALOG_AVAILABILITY_VALUES,
+    catalog_brand_id_for_name,
+    display_brand_name,
+    normalized_brand_name,
+)
 from app.models import (
     CatalogAdminMutation,
+    CatalogBrand,
     CatalogDraftRevision,
     CatalogProduct,
     CatalogWorkflow,
@@ -58,6 +71,7 @@ from app.services.catalog_normalization import (
     variant_key_for_values,
 )
 from app.services.index_jobs import enqueue_index_job
+from app.services.taxonomy import CATEGORY_TAXONOMY
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -117,6 +131,139 @@ def _idempotent(
             "Catalog state changed while the mutation was being applied; retry with fresh state."
         ) from exc
     return response, False
+
+
+def list_catalog_references(db: Session) -> CatalogReferenceData:
+    brands = db.scalars(
+        select(CatalogBrand)
+        .where(CatalogBrand.active.is_(True))
+        .order_by(func.lower(CatalogBrand.name), CatalogBrand.id)
+    ).all()
+    stores = db.scalars(
+        select(Store).order_by(
+            func.lower(Store.name),
+            func.lower(Store.city),
+            func.lower(Store.state),
+            Store.id,
+        )
+    ).all()
+    categories = sorted(
+        (
+            CatalogChoice(id=category_id, label=str(config["label"]))
+            for category_id, config in CATEGORY_TAXONOMY.items()
+        ),
+        key=lambda item: (item.label.casefold(), item.id),
+    )
+    return CatalogReferenceData(
+        brands=[BrandReference(id=brand.id, name=brand.name) for brand in brands],
+        stores=[
+            StoreReference(
+                id=store.id,
+                name=store.name,
+                city=store.city,
+                state=store.state,
+                label=f"{store.name} — {store.city}, {store.state}",
+            )
+            for store in stores
+        ],
+        categories=categories,
+        availability=[
+            CatalogChoice(id=value, label=label)
+            for value, label in CATALOG_AVAILABILITY_CHOICES
+        ],
+    )
+
+
+def add_catalog_brand(
+    db: Session,
+    request: BrandCreateRequest,
+    *,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+) -> tuple[BrandReference, bool]:
+    display_name = display_brand_name(request.name)
+    normalized_name = normalized_brand_name(display_name)
+    payload = {"name": display_name}
+
+    def action() -> dict:
+        existing = db.scalar(
+            select(CatalogBrand).where(
+                CatalogBrand.normalized_name == normalized_name
+            )
+        )
+        if existing is not None:
+            raise _conflict(
+                f"Brand {existing.name!r} already exists as a canonical catalog brand."
+            )
+        brand = CatalogBrand(
+            id=catalog_brand_id_for_name(normalized_name),
+            name=display_name,
+            normalized_name=normalized_name,
+            active=True,
+        )
+        db.add(brand)
+        db.flush()
+        return BrandReference(id=brand.id, name=brand.name).model_dump(mode="json")
+
+    response, replayed = _idempotent(
+        db,
+        key=idempotency_key,
+        operation="catalog.v2.add-brand",
+        payload=payload,
+        principal=principal,
+        action=action,
+    )
+    return BrandReference.model_validate(response), replayed
+
+
+def _canonicalize_v2_references(
+    db: Session, product: ProductDraftV2
+) -> ProductDraftV2:
+    brand = db.get(CatalogBrand, product.brand_id)
+    if brand is None or not brand.active:
+        raise HTTPException(status_code=422, detail="The selected catalog brand is not active.")
+    if normalized_brand_name(product.brand) != brand.normalized_name:
+        raise HTTPException(
+            status_code=422,
+            detail="brand must match the selected canonical brand_id.",
+        )
+    if product.category not in CATEGORY_TAXONOMY:
+        raise HTTPException(status_code=422, detail="The selected catalog category is invalid.")
+    invalid_availability = sorted(
+        {
+            row.availability
+            for row in product.inventory
+            if row.availability not in CATALOG_AVAILABILITY_VALUES
+        }
+    )
+    if invalid_availability:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported inventory availability: {invalid_availability[0]!r}.",
+        )
+    store_ids = {row.store_id for row in product.inventory}
+    existing_store_ids = set(
+        db.scalars(select(Store.id).where(Store.id.in_(store_ids))).all()
+    )
+    missing_store_ids = sorted(store_ids - existing_store_ids)
+    if missing_store_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown catalog store_id: {missing_store_ids[0]!r}.",
+        )
+    return product.model_copy(update={"brand": brand.name})
+
+
+def _active_brand_for_name(db: Session, name: str) -> CatalogBrand:
+    brand = db.scalar(
+        select(CatalogBrand).where(
+            CatalogBrand.normalized_name == normalized_brand_name(name),
+            CatalogBrand.active.is_(True),
+        )
+    )
+    if brand is None:
+        raise _conflict("Add this brand to the canonical catalog registry before publishing.")
+    return brand
 
 
 def _product_id(product: ProductDraft) -> str:
@@ -411,6 +558,7 @@ def _published_snapshot_v2(db: Session, row: CatalogProduct) -> ProductDraftV2:
         seed_run_id=row.seed_run_id,
         title=row.title,
         description=row.description,
+        brand_id=row.brand_id or catalog_brand_id_for_name(row.brand),
         brand=row.brand,
         category=row.category,
         price_min=row.price_min,
@@ -572,17 +720,18 @@ def create_draft_v2(
             status_code=422,
             detail="New catalog product IDs are assigned by the server.",
         )
+    canonical_product = _canonicalize_v2_references(db, request.product)
     product_id = path_product_id or catalog_product_id_for_key(
         catalog_key_for_values(
-            brand=request.product.brand,
-            title=request.product.title,
-            category=request.product.category,
+            brand=canonical_product.brand,
+            title=canonical_product.title,
+            category=canonical_product.category,
         )
     )
     if path_product_id and request.product.product_id not in (None, path_product_id):
         raise HTTPException(status_code=422, detail="Body product_id must match the path product_id.")
 
-    product = request.product.model_copy(update={"product_id": product_id})
+    product = canonical_product.model_copy(update={"product_id": product_id})
     payload = request.model_dump(mode="json")
     payload["product"] = product.model_dump(mode="json")
     operation = f"catalog.v2.draft:{product_id}"
@@ -691,6 +840,7 @@ def _apply_snapshot(
     db: Session, product_id: str, product: ProductDraft, version: int
 ) -> CatalogProduct:
     canonical = product_draft_v2_from_v1(product)
+    brand_reference = _active_brand_for_name(db, product.brand)
     catalog_key = catalog_key_for_values(
         brand=product.brand, title=product.title, category=product.category
     )
@@ -734,7 +884,8 @@ def _apply_snapshot(
             catalog_key=catalog_key,
             title=product.title,
             description=product.description,
-            brand=product.brand,
+            brand_id=brand_reference.id,
+            brand=brand_reference.name,
             category=product.category,
             price_min=canonical.price_min,
             price_max=canonical.price_max,
@@ -754,7 +905,8 @@ def _apply_snapshot(
         row.catalog_key = catalog_key
         row.title = product.title
         row.description = product.description
-        row.brand = product.brand
+        row.brand_id = brand_reference.id
+        row.brand = brand_reference.name
         row.category = product.category
         row.price_min = canonical.price_min
         row.price_max = canonical.price_max

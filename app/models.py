@@ -134,6 +134,27 @@ class Product(Base):
     )
 
 
+class CatalogBrand(Base):
+    __tablename__ = "catalog_brands"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
+    active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    products: Mapped[list["CatalogProduct"]] = relationship(back_populates="brand_reference")
+
+
 class CatalogProduct(Base):
     __tablename__ = "catalog_products"
 
@@ -142,6 +163,9 @@ class CatalogProduct(Base):
     catalog_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    brand_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_brands.id"), nullable=True, index=True
+    )
     brand: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     price_min: Mapped[Decimal] = mapped_column(
@@ -175,6 +199,7 @@ class CatalogProduct(Base):
     inventory: Mapped[list["ProductInventory"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
+    brand_reference: Mapped[CatalogBrand | None] = relationship(back_populates="products")
 
     __table_args__ = (
         CheckConstraint("price_min >= 0", name="ck_catalog_products_price_min_non_negative"),
