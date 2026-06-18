@@ -19,6 +19,7 @@ from app.catalog.ai_schemas import (
     CatalogAIVariantProposal,
 )
 from app.catalog.admin_schemas import DesignSpecificationDraft
+from app.catalog.references import catalog_brand_id_for_name
 from app.database import Base, get_db
 from app.main import create_app
 from app.routers.admin_catalog import get_catalog_ai_service
@@ -168,6 +169,7 @@ def _snapshot_v2(*, title="Studio Coat", product_id=None, expected_version=0):
         "seed_run_id": "run_catalog",
         "title": title,
         "description": "A product-level merchandising draft.",
+        "brand_id": catalog_brand_id_for_name("Sterling Hollis"),
         "brand": "Sterling Hollis",
         "category": "womens_apparel",
         "price_min": 250,
@@ -1331,15 +1333,7 @@ def test_v2_inventory_validation_and_stale_versions_fail_without_writes(monkeypa
             json=unknown_store,
             headers=_headers("v2-unknown-store-draft"),
         )
-        assert unknown_draft.status_code == 201
-        unknown_publish = client.post(
-            f"/api/admin/catalog/v2/products/{unknown_draft.json()['product_id']}/publish",
-            json={"draft_id": unknown_draft.json()["id"], "expected_version": 0},
-            headers=_headers("v2-unknown-store-publish"),
-        )
-        assert unknown_publish.status_code == 409
-        with sessions() as db:
-            assert db.get(CatalogProduct, unknown_draft.json()["product_id"]) is None
+        assert unknown_draft.status_code == 422
 
         with sessions() as db:
             product_id = db.scalar(

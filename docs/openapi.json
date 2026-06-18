@@ -476,6 +476,40 @@
         "title": "Body_image_recommendations_api_recommendations_image_post",
         "type": "object"
       },
+      "BrandCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "BrandCreateRequest",
+        "type": "object"
+      },
+      "BrandReference": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "BrandReference",
+        "type": "object"
+      },
       "CapabilityStatus": {
         "properties": {
           "configured": {
@@ -678,6 +712,24 @@
           "product_count"
         ],
         "title": "CatalogCategory",
+        "type": "object"
+      },
+      "CatalogChoice": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "CatalogChoice",
         "type": "object"
       },
       "CatalogImageApprovalRequest": {
@@ -1336,6 +1388,46 @@
           "arguments"
         ],
         "title": "CatalogRealtimeToolCallRequest",
+        "type": "object"
+      },
+      "CatalogReferenceData": {
+        "properties": {
+          "availability": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogChoice"
+            },
+            "title": "Availability",
+            "type": "array"
+          },
+          "brands": {
+            "items": {
+              "$ref": "#/components/schemas/BrandReference"
+            },
+            "title": "Brands",
+            "type": "array"
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogChoice"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "stores": {
+            "items": {
+              "$ref": "#/components/schemas/StoreReference"
+            },
+            "title": "Stores",
+            "type": "array"
+          }
+        },
+        "required": [
+          "brands",
+          "stores",
+          "categories",
+          "availability"
+        ],
+        "title": "CatalogReferenceData",
         "type": "object"
       },
       "CatalogStudioCapabilities": {
@@ -3777,6 +3869,12 @@
             "title": "Brand",
             "type": "string"
           },
+          "brand_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Brand Id",
+            "type": "string"
+          },
           "category": {
             "maxLength": 128,
             "minLength": 1,
@@ -3930,6 +4028,7 @@
           "seed_run_id",
           "title",
           "description",
+          "brand_id",
           "brand",
           "category",
           "price_min",
@@ -3946,6 +4045,12 @@
             "maxLength": 128,
             "minLength": 1,
             "title": "Brand",
+            "type": "string"
+          },
+          "brand_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Brand Id",
             "type": "string"
           },
           "category": {
@@ -4083,6 +4188,7 @@
           "seed_run_id",
           "title",
           "description",
+          "brand_id",
           "brand",
           "category",
           "price_min",
@@ -4790,6 +4896,39 @@
           "expected_version"
         ],
         "title": "StartRevisionRequest",
+        "type": "object"
+      },
+      "StoreReference": {
+        "properties": {
+          "city": {
+            "title": "City",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "city",
+          "state",
+          "label"
+        ],
+        "title": "StoreReference",
         "type": "object"
       },
       "StrategyTagIntensity": {
@@ -6854,6 +6993,65 @@
         ]
       }
     },
+    "/api/admin/catalog/v2/brands": {
+      "post": {
+        "operationId": "add_catalog_brand_v2_api_admin_catalog_v2_brands_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrandCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandReference"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Add a canonical catalog brand",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
     "/api/admin/catalog/v2/products": {
       "get": {
         "operationId": "admin_catalog_products_v2_api_admin_catalog_v2_products_get",
@@ -7360,6 +7558,32 @@
           }
         ],
         "summary": "Start a canonical product-level revision",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v2/references": {
+      "get": {
+        "operationId": "catalog_references_v2_api_admin_catalog_v2_references_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogReferenceData"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "List canonical catalog authoring references",
         "tags": [
           "catalog-studio-admin"
         ]

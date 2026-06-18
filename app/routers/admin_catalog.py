@@ -13,6 +13,9 @@ from app.catalog.admin_schemas import (
     AdminProductResponse,
     AdminProductResponseV2,
     ArchiveRequest,
+    BrandCreateRequest,
+    BrandReference,
+    CatalogReferenceData,
     DraftMutationRequest,
     DraftMutationRequestV2,
     DraftRevisionResponse,
@@ -42,12 +45,14 @@ from app.catalog.workflow_schemas import (
 from app.config import Settings, get_settings
 from app.database import get_db
 from app.services.catalog_admin import (
+    add_catalog_brand,
     archive_product,
     create_draft,
     create_draft_v2,
     get_admin_product,
     get_admin_product_v2,
     list_admin_products,
+    list_catalog_references,
     publish_draft,
     start_product_revision,
     start_product_revision_v2,
@@ -287,6 +292,39 @@ def admin_catalog_product(
     if product is None:
         raise HTTPException(status_code=404, detail="Catalog product not found.")
     return product
+
+
+@router.get(
+    "/catalog/v2/references",
+    response_model=CatalogReferenceData,
+    summary="List canonical catalog authoring references",
+)
+def catalog_references_v2(
+    db: Session = Depends(get_db),
+    _: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogReferenceData:
+    return list_catalog_references(db)
+
+
+@router.post(
+    "/catalog/v2/brands",
+    response_model=BrandReference,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a canonical catalog brand",
+)
+def add_catalog_brand_v2(
+    request: BrandCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> BrandReference:
+    result, _ = add_catalog_brand(
+        db,
+        request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
 
 
 @router.post(

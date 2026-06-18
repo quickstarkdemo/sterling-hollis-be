@@ -9,7 +9,19 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.catalog.authoring import authoring_metadata
-from app.models import CatalogProduct, Product, ProductInventory, ProductVariant, StoreInventory
+from app.catalog.references import (
+    catalog_brand_id_for_name,
+    display_brand_name,
+    normalized_brand_name,
+)
+from app.models import (
+    CatalogBrand,
+    CatalogProduct,
+    Product,
+    ProductInventory,
+    ProductVariant,
+    StoreInventory,
+)
 from app.services.inventory_status import is_in_stock, is_preorder
 
 
@@ -297,6 +309,25 @@ def backfill_catalog_from_legacy_products(db: Session, *, run_id: str | None = N
         query = query.where(Product.seed_run_id == run_id)
     products = db.scalars(query).all()
 
+    brand_names: dict[str, list[str]] = defaultdict(list)
+    for product in products:
+        normalized = normalized_brand_name(product.brand)
+        if normalized:
+            brand_names[normalized].append(display_brand_name(product.brand))
+    for normalized, names in sorted(brand_names.items()):
+        brand_id = catalog_brand_id_for_name(normalized)
+        if db.get(CatalogBrand, brand_id) is None:
+            canonical_name = sorted(set(names), key=lambda value: (value.casefold(), value))[0]
+            db.add(
+                CatalogBrand(
+                    id=brand_id,
+                    name=canonical_name,
+                    normalized_name=normalized,
+                    active=True,
+                )
+            )
+    db.flush()
+
     if run_id:
         db.execute(delete(StoreInventory).where(StoreInventory.seed_run_id == run_id))
         db.execute(delete(ProductVariant).where(ProductVariant.seed_run_id == run_id))
@@ -333,6 +364,7 @@ def backfill_catalog_from_legacy_products(db: Session, *, run_id: str | None = N
                 "catalog_key": catalog_key,
                 "title": primary.title,
                 "description": primary.description,
+                "brand_id": catalog_brand_id_for_name(primary.brand),
                 "brand": primary.brand,
                 "category": primary.category,
                 "price_min": min(prices),

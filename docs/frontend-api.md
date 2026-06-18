@@ -69,6 +69,8 @@ Generated image files are served from:
 | Image recommendations | `POST` | `/api/recommendations/image` |
 | Storefront chat | `POST` | `/api/chat` |
 | Catalog Studio administrator session and capabilities | `GET` | `/api/admin/session` |
+| List canonical brands, stores, categories, and availability choices | `GET` | `/api/admin/catalog/v2/references` |
+| Add a canonical brand | `POST` | `/api/admin/catalog/v2/brands` |
 | Search products across lifecycle states | `GET` | `/api/admin/catalog/products` |
 | Create private product draft | `POST` | `/api/admin/catalog/products/drafts` |
 | Start a private revision from a published snapshot | `POST` | `/api/admin/catalog/products/{product_id}/revisions` |
@@ -340,6 +342,15 @@ contains product-level price, link, color, material, gender, season, media, and
 store inventory. It never returns `variants`, `variant_axes`,
 `primary_variant_index`, objective weights, or variant-owned inventory.
 
+Load `GET /api/admin/catalog/v2/references` once per editor session for sorted,
+admin-safe brands, named stores, canonical categories, and availability choices.
+The response intentionally omits store source metadata and technical seed data.
+Create missing brands with `POST /api/admin/catalog/v2/brands` and a fresh
+`Idempotency-Key`; normalized case/whitespace collisions return `409` and never
+create a duplicate. V2 drafts must send the selected `brand_id` together with
+its returned display `brand`, and every inventory `store_id` must exist in the
+reference response.
+
 The v2 lifecycle mirrors the existing optimistic, idempotent workflow:
 
 - `GET /api/admin/catalog/v2/products` lists lifecycle state.
@@ -369,6 +380,7 @@ fail without partial writes.
     "seed_run_id": "run_catalog",
     "title": "Studio Coat",
     "description": "A structured wool coat.",
+    "brand_id": "brand_0dfb170c78a23d9c30ff",
     "brand": "Sterling Hollis",
     "category": "womens_apparel",
     "price_min": 250,
