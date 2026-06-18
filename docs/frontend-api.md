@@ -279,6 +279,40 @@ authorization: Bearer <Clerk token>
 Missing or invalid Clerk credentials return `401`. Valid non-administrator
 credentials return `403`. Successful responses use `Cache-Control: no-store`.
 
+### Production Realtime readiness check
+
+Realtime has three required production values and four optional overrides:
+
+| Setting | Production requirement | Default | Secret |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | required | none | yes |
+| `CATALOG_STUDIO_REALTIME_ENABLED` | must be `true` | `false` | no |
+| `CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET` | required and non-empty | none | yes |
+| `CATALOG_STUDIO_REALTIME_MODEL` | optional | `gpt-realtime-2` | no |
+| `CATALOG_STUDIO_REALTIME_TRANSCRIPTION_MODEL` | optional | `gpt-4o-mini-transcribe` | no |
+| `CATALOG_STUDIO_REALTIME_CLIENT_SECRET_TTL_SECONDS` | optional | `600` | no |
+| `CATALOG_STUDIO_REALTIME_TIMEOUT_SECONDS` | optional | `15` | no |
+
+After deploying backend `main`, verify the deployment's Realtime configuration
+gate, migration, and health-check steps succeeded. Then request the authenticated
+administrator session and require this safe response before requesting browser
+media access:
+
+```json
+{
+  "capabilities": {
+    "realtime": {"configured": true}
+  }
+}
+```
+
+Do not infer provider or browser health from that response. The final production
+check is to grant microphone access in Catalog Studio, reach `listening`, complete
+one instruction, and stop the session. Keep text authoring enabled when the
+browser reports permission denial or when session creation, provider exchange,
+or WebRTC transport fails; those are distinct operational boundaries from the
+three configuration reasons returned by `GET /api/admin/session`.
+
 ### Testing protected APIs in Swagger
 
 The generated FastAPI docs are available at `/docs`. Public endpoints can use
