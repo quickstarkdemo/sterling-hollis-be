@@ -26,6 +26,8 @@ from app.routers.admin_catalog import get_catalog_realtime_service
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
+    ProductInventory,
+    ProductVariant,
     CatalogWorkflow,
     CatalogWorkflowEvent,
     Product,
@@ -160,6 +162,52 @@ def _snapshot(*, title="Studio Coat", product_id=None, moderation_state="approve
     return {"expected_version": 0, "moderation_state": moderation_state, "product": product}
 
 
+def _snapshot_v2(*, title="Studio Coat", product_id=None, expected_version=0):
+    product = {
+        "schema_version": 2,
+        "seed_run_id": "run_catalog",
+        "title": title,
+        "description": "A product-level merchandising draft.",
+        "brand": "Sterling Hollis",
+        "category": "womens_apparel",
+        "price_min": 250,
+        "price_max": 300,
+        "link": "https://example.com/studio-coat",
+        "color": "Black",
+        "material": "wool",
+        "gender": "women",
+        "season": "fall",
+        "metadata": {"source": "catalog_studio_v2"},
+        "media": [
+            {
+                "media_id": "media_studio_coat",
+                "role": "core",
+                "intent": "manual",
+                "image_set": {
+                    "primary_url": "https://example.com/studio-coat.jpg"
+                },
+                "approval_status": "approved",
+                "display_order": 0,
+            }
+        ],
+        "inventory": [
+            {
+                "store_id": "1001",
+                "size": None,
+                "availability": "in stock",
+                "inventory_qty": 8,
+            }
+        ],
+    }
+    if product_id:
+        product["product_id"] = product_id
+    return {
+        "expected_version": expected_version,
+        "moderation_state": "approved",
+        "product": product,
+    }
+
+
 def _headers(key: str):
     return {"Idempotency-Key": key}
 
@@ -189,6 +237,13 @@ def test_openapi_exposes_clerk_bearer_authorization_for_admin_routes(monkeypatch
         "/api/admin/catalog/products",
         "/api/admin/catalog/products/drafts",
         "/api/admin/catalog/products/{product_id}/revisions",
+        "/api/admin/catalog/v2/products",
+        "/api/admin/catalog/v2/products/drafts",
+        "/api/admin/catalog/v2/products/{product_id}",
+        "/api/admin/catalog/v2/products/{product_id}/draft",
+        "/api/admin/catalog/v2/products/{product_id}/revisions",
+        "/api/admin/catalog/v2/products/{product_id}/publish",
+        "/api/admin/catalog/v2/products/{product_id}/archive",
         "/api/admin/catalog/workflows",
         "/api/admin/catalog/workflows/{workflow_id}",
         "/api/admin/catalog/workflows/{workflow_id}/draft-commands",
@@ -1123,3 +1178,191 @@ def test_archive_removes_public_visibility_but_retains_admin_history(monkeypatch
         assert history.status_code == 200
         assert history.json()["lifecycle_status"] == "archived"
         assert history.json()["version"] == 2
+
+
+def test_v2_product_draft_publishes_canonical_state_and_keeps_v1_compatibility(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        draft = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=_snapshot_v2(),
+            headers=_headers("v2-create"),
+        )
+        assert draft.status_code == 201
+        product_id = draft.json()["product_id"]
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, draft.json()["id"])
+            assert revision.snapshot_json["schema_version"] == 2
+            assert "variants" not in revision.snapshot_json
+
+        published = client.post(
+            f"/api/admin/catalog/v2/products/{product_id}/publish",
+            json={"draft_id": draft.json()["id"], "expected_version": 0},
+            headers=_headers("v2-publish"),
+        )
+        assert published.status_code == 200
+
+        canonical = client.get(f"/api/admin/catalog/v2/products/{product_id}")
+        assert canonical.status_code == 200
+        canonical_product = canonical.json()["published_snapshot"]
+        assert canonical_product["schema_version"] == 2
+        assert "variants" not in canonical_product
+        assert canonical_product["price_min"] == 250.0
+        assert canonical_product["price_max"] == 300.0
+        assert canonical_product["inventory"] == [
+            {
+                "store_id": "1001",
+                "size": None,
+                "availability": "in stock",
+                "inventory_qty": 8,
+                "metadata": {},
+            }
+        ]
+
+        compatibility = client.get(f"/api/admin/catalog/products/{product_id}")
+        assert compatibility.status_code == 200
+        assert len(compatibility.json()["published_snapshot"]["variants"]) == 1
+        v1_payload = {
+            "expected_version": 1,
+            "moderation_state": "approved",
+            "product": compatibility.json()["published_snapshot"],
+        }
+        v1_payload["product"]["title"] = "Studio Coat Updated"
+        v1_payload["product"]["variants"][0]["inventory"][0]["inventory_qty"] = 9
+        v1_draft = client.put(
+            f"/api/admin/catalog/products/{product_id}/draft",
+            json=v1_payload,
+            headers=_headers("v1-compat-save"),
+        )
+        assert v1_draft.status_code == 201
+        translated = client.get(f"/api/admin/catalog/v2/products/{product_id}")
+        translated_draft = translated.json()["current_draft"]["product"]
+        assert translated_draft["schema_version"] == 2
+        assert "variants" not in translated_draft
+        republished = client.post(
+            f"/api/admin/catalog/products/{product_id}/publish",
+            json={"draft_id": v1_draft.json()["id"], "expected_version": 1},
+            headers=_headers("v1-compat-publish"),
+        )
+        assert republished.status_code == 200
+        with sessions() as db:
+            product = db.get(CatalogProduct, product_id)
+            inventory = db.scalar(
+                select(ProductInventory).where(
+                    ProductInventory.catalog_product_id == product_id
+                )
+            )
+            variants = db.scalars(
+                select(ProductVariant).where(
+                    ProductVariant.catalog_product_id == product_id
+                )
+            ).all()
+            assert product.title == "Studio Coat Updated"
+            assert inventory.inventory_qty == 9
+            assert len(variants) == 1
+
+
+def test_v2_inventory_validation_and_stale_versions_fail_without_writes(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        duplicate = _snapshot_v2()
+        duplicate["product"]["inventory"].append(
+            {
+                "store_id": "1001",
+                "size": "",
+                "availability": "preorder",
+                "inventory_qty": 1,
+            }
+        )
+        invalid = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=duplicate,
+            headers=_headers("v2-invalid-duplicate"),
+        )
+        assert invalid.status_code == 422
+
+        whitespace_duplicate = _snapshot_v2(title="Whitespace Duplicate Coat")
+        whitespace_duplicate["product"]["inventory"][0]["size"] = "M Tall"
+        whitespace_duplicate["product"]["inventory"].append(
+            {
+                "store_id": "  1001  ",
+                "size": "m   tall",
+                "availability": "preorder",
+                "inventory_qty": 1,
+            }
+        )
+        whitespace_response = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=whitespace_duplicate,
+            headers=_headers("v2-invalid-whitespace-duplicate"),
+        )
+        assert whitespace_response.status_code == 422
+
+        malformed_media = _snapshot_v2(title="Malformed Media Coat")
+        malformed_media["product"]["media"][0]["role"] = "variation"
+        media_response = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=malformed_media,
+            headers=_headers("v2-invalid-media"),
+        )
+        assert media_response.status_code == 422
+
+        invalid_price = _snapshot_v2(title="Invalid Price Coat")
+        invalid_price["product"]["price_min"] = 301
+        invalid_price["product"]["price_max"] = 300
+        price_response = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=invalid_price,
+            headers=_headers("v2-invalid-price"),
+        )
+        assert price_response.status_code == 422
+
+        negative = _snapshot_v2(title="Negative Inventory Coat")
+        negative["product"]["inventory"][0]["inventory_qty"] = -1
+        negative_response = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=negative,
+            headers=_headers("v2-invalid-negative"),
+        )
+        assert negative_response.status_code == 422
+
+        unknown_store = _snapshot_v2(title="Unknown Store Coat")
+        unknown_store["product"]["inventory"][0]["store_id"] = "missing-store"
+        unknown_draft = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=unknown_store,
+            headers=_headers("v2-unknown-store-draft"),
+        )
+        assert unknown_draft.status_code == 201
+        unknown_publish = client.post(
+            f"/api/admin/catalog/v2/products/{unknown_draft.json()['product_id']}/publish",
+            json={"draft_id": unknown_draft.json()["id"], "expected_version": 0},
+            headers=_headers("v2-unknown-store-publish"),
+        )
+        assert unknown_publish.status_code == 409
+        with sessions() as db:
+            assert db.get(CatalogProduct, unknown_draft.json()["product_id"]) is None
+
+        with sessions() as db:
+            product_id = db.scalar(
+                select(CatalogProduct.id).where(
+                    CatalogProduct.title == "Published Dress"
+                )
+            )
+        stale_payload = _snapshot_v2(
+            title="Published Dress",
+            product_id=product_id,
+            expected_version=0,
+        )
+        stale = client.put(
+            f"/api/admin/catalog/v2/products/{product_id}/draft",
+            json=stale_payload,
+            headers=_headers("v2-stale"),
+        )
+        assert stale.status_code == 409
+        with sessions() as db:
+            assert db.scalar(
+                select(CatalogDraftRevision).where(
+                    CatalogDraftRevision.catalog_product_id == product_id,
+                    CatalogDraftRevision.snapshot_json["schema_version"].as_integer()
+                    == 2,
+                )
+            ) is None

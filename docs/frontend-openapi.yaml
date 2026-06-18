@@ -219,6 +219,133 @@ paths:
         "401": {description: Missing or invalid Clerk token.}
         "403": {description: Valid Clerk user is not an administrator.}
         "404": {description: Product or draft history not found.}
+  /api/admin/catalog/v2/products:
+    get:
+      tags: [catalog-studio-admin]
+      summary: Search canonical products across lifecycle states
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Paginated canonical product results.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminProductListResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+  /api/admin/catalog/v2/products/drafts:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Create a canonical product-level catalog draft
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DraftMutationRequestV2"}
+      responses:
+        "201":
+          description: Private canonical draft created or replayed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DraftRevisionResponse"}
+        "409": {description: Version or idempotency conflict.}
+        "422": {description: Invalid canonical product snapshot.}
+  /api/admin/catalog/v2/products/{product_id}:
+    get:
+      tags: [catalog-studio-admin]
+      summary: Inspect canonical product-level authoring state
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/ProductId"}]
+      responses:
+        "200":
+          description: Canonical published and private product state.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminProductResponseV2"}
+        "404": {description: Product or draft history not found.}
+  /api/admin/catalog/v2/products/{product_id}/draft:
+    put:
+      tags: [catalog-studio-admin]
+      summary: Stage a canonical product-level revision
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ProductId"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DraftMutationRequestV2"}
+      responses:
+        "201":
+          description: Private canonical revision created.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DraftRevisionResponse"}
+        "409": {description: Published version, draft version, or idempotency conflict.}
+        "422": {description: Invalid canonical product snapshot.}
+  /api/admin/catalog/v2/products/{product_id}/revisions:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Start a canonical revision from published state
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ProductId"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/StartRevisionRequest"}
+      responses:
+        "201":
+          description: Complete private canonical snapshot.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminDraftSnapshotV2"}
+        "404": {description: Product not found.}
+        "409": {description: Version or idempotency conflict.}
+  /api/admin/catalog/v2/products/{product_id}/publish:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Publish a canonical product-level draft
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ProductId"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PublishRequest"}
+      responses:
+        "200":
+          description: Product fields, media, and inventory published atomically.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LifecycleMutationResponse"}
+        "409": {description: Version, moderation, store, or completeness conflict.}
+  /api/admin/catalog/v2/products/{product_id}/archive:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Archive a canonical product
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ProductId"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ArchiveRequest"}
+      responses:
+        "200":
+          description: Canonical product archived.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/LifecycleMutationResponse"}
+        "409": {description: Version or idempotency conflict.}
   /api/admin/catalog/workflows:
     post:
       tags: [catalog-studio-admin]
@@ -1371,6 +1498,68 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/CatalogVariantDraft"
+    ProductInventoryDraftV2:
+      type: object
+      additionalProperties: false
+      required: [store_id, availability, inventory_qty]
+      properties:
+        store_id: {type: string, minLength: 1, maxLength: 64}
+        size: {type: string, nullable: true, maxLength: 64}
+        availability: {type: string, minLength: 1, maxLength: 32}
+        inventory_qty: {type: integer, minimum: 0}
+        metadata: {type: object, additionalProperties: true, default: {}}
+    CatalogProductDraftV2:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - seed_run_id
+        - title
+        - description
+        - brand
+        - category
+        - price_min
+        - price_max
+        - media
+        - inventory
+      properties:
+        schema_version: {type: integer, enum: [2], default: 2}
+        product_id: {type: string, nullable: true, maxLength: 64}
+        seed_run_id: {type: string, minLength: 1, maxLength: 64}
+        title: {type: string, minLength: 1, maxLength: 255}
+        description: {type: string, minLength: 1}
+        brand: {type: string, minLength: 1, maxLength: 128}
+        category: {type: string, minLength: 1, maxLength: 128}
+        price_min: {type: number, minimum: 0}
+        price_max: {type: number, minimum: 0}
+        link: {type: string, nullable: true, maxLength: 500}
+        color: {type: string, nullable: true, maxLength: 64}
+        material: {type: string, nullable: true, maxLength: 64}
+        gender: {type: string, nullable: true, maxLength: 32}
+        season: {type: string, nullable: true, maxLength: 32}
+        metadata: {type: object, additionalProperties: true, default: {}}
+        media:
+          type: array
+          maxItems: 24
+          items: {$ref: "#/components/schemas/ProductMediaDraft"}
+          default: []
+        inventory:
+          type: array
+          minItems: 1
+          items: {$ref: "#/components/schemas/ProductInventoryDraftV2"}
+    DraftMutationRequestV2:
+      type: object
+      additionalProperties: false
+      required: [expected_version, product]
+      properties:
+        expected_version: {type: integer, minimum: 0}
+        current_draft_id: {type: string, nullable: true, maxLength: 64}
+        expected_draft_version: {type: integer, nullable: true, minimum: 1}
+        moderation_state:
+          type: string
+          enum: [pending, approved, blocked]
+          default: pending
+        product: {$ref: "#/components/schemas/CatalogProductDraftV2"}
     DraftMutationRequest:
       type: object
       additionalProperties: false
@@ -1428,6 +1617,15 @@ components:
         workflow_id: {type: string, nullable: true}
         product:
           $ref: "#/components/schemas/CatalogProductDraft"
+    AdminDraftSnapshotV2:
+      type: object
+      additionalProperties: false
+      required: [revision, draft_version, product]
+      properties:
+        revision: {$ref: "#/components/schemas/DraftRevisionResponse"}
+        draft_version: {type: integer, minimum: 1}
+        workflow_id: {type: string, nullable: true}
+        product: {$ref: "#/components/schemas/CatalogProductDraftV2"}
     AdminProductListItem:
       type: object
       additionalProperties: false
@@ -1488,6 +1686,28 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DraftRevisionResponse"
+    AdminProductResponseV2:
+      type: object
+      additionalProperties: false
+      required: [product_id, lifecycle_status, version, title, description, brand, category, metadata, drafts]
+      properties:
+        product_id: {type: string}
+        lifecycle_status: {type: string, enum: [draft, published, archived]}
+        version: {type: integer, minimum: 0}
+        title: {type: string}
+        description: {type: string}
+        brand: {type: string}
+        category: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        published_snapshot:
+          allOf: [{$ref: "#/components/schemas/CatalogProductDraftV2"}]
+          nullable: true
+        current_draft:
+          allOf: [{$ref: "#/components/schemas/AdminDraftSnapshotV2"}]
+          nullable: true
+        drafts:
+          type: array
+          items: {$ref: "#/components/schemas/DraftRevisionResponse"}
     CatalogAICommandRequest:
       type: object
       additionalProperties: false

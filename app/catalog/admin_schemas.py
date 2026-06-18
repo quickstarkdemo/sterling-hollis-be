@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 
 ModerationState = Literal["pending", "approved", "blocked"]
@@ -241,3 +241,225 @@ class LifecycleMutationResponse(BaseModel):
     product_id: str
     lifecycle_status: PublishedLifecycleStatus
     version: int
+
+
+class ProductInventoryDraftV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    store_id: str = Field(min_length=1, max_length=64)
+    size: str | None = Field(default=None, max_length=64)
+    availability: str = Field(min_length=1, max_length=32)
+    inventory_qty: int = Field(ge=0)
+    metadata: dict = Field(default_factory=dict)
+
+
+class ProductDraftV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    schema_version: Literal[2] = 2
+    product_id: str | None = Field(default=None, max_length=64)
+    seed_run_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1)
+    brand: str = Field(min_length=1, max_length=128)
+    category: str = Field(min_length=1, max_length=128)
+    price_min: Decimal = Field(ge=0)
+    price_max: Decimal = Field(ge=0)
+    link: str | None = Field(default=None, max_length=500)
+    color: str | None = Field(default=None, max_length=64)
+    material: str | None = Field(default=None, max_length=64)
+    gender: str | None = Field(default=None, max_length=32)
+    season: str | None = Field(default=None, max_length=32)
+    metadata: dict = Field(default_factory=dict)
+    media: list[ProductMediaDraft] = Field(default_factory=list, max_length=24)
+    inventory: list[ProductInventoryDraftV2] = Field(min_length=1)
+
+    @field_serializer("price_min", "price_max", when_used="json")
+    def serialize_price(self, value: Decimal) -> float:
+        return float(value)
+
+    @model_validator(mode="after")
+    def validate_product_authoring(self):
+        if self.price_max < self.price_min:
+            raise ValueError("price_max must be greater than or equal to price_min")
+        inventory_keys = [
+            (
+                " ".join(row.store_id.casefold().split()),
+                " ".join((row.size or "").casefold().split()),
+            )
+            for row in self.inventory
+        ]
+        if len(inventory_keys) != len(set(inventory_keys)):
+            raise ValueError("inventory store and optional size combinations must be unique")
+        media_ids = [asset.media_id for asset in self.media]
+        if len(media_ids) != len(set(media_ids)):
+            raise ValueError("media_id values must be unique within a product")
+        display_orders = [asset.display_order for asset in self.media]
+        if len(display_orders) != len(set(display_orders)):
+            raise ValueError("media display_order values must be unique within a product")
+        if self.media:
+            core_assets = [asset for asset in self.media if asset.role == "core"]
+            if len(core_assets) != 1:
+                raise ValueError("product media requires exactly one core asset")
+            if core_assets[0].display_order != 0:
+                raise ValueError("the core media asset must be first in display order")
+            known_ids = set(media_ids)
+            if any(
+                asset.source_media_id and asset.source_media_id not in known_ids
+                for asset in self.media
+            ):
+                raise ValueError("media source_media_id must reference product media")
+            if core_assets[0].source_media_id is not None:
+                raise ValueError("the core media asset cannot reference a source asset")
+        return self
+
+
+class DraftMutationRequestV2(BaseModel):
+    expected_version: int = Field(ge=0)
+    current_draft_id: str | None = Field(default=None, max_length=64)
+    expected_draft_version: int | None = Field(default=None, ge=1)
+    moderation_state: ModerationState = "pending"
+    product: ProductDraftV2
+
+    @model_validator(mode="after")
+    def validate_draft_concurrency(self):
+        if (self.current_draft_id is None) != (self.expected_draft_version is None):
+            raise ValueError(
+                "current_draft_id and expected_draft_version must be provided together"
+            )
+        return self
+
+
+class AdminDraftSnapshotV2(BaseModel):
+    revision: DraftRevisionResponse
+    draft_version: int = Field(ge=1)
+    workflow_id: str | None = None
+    product: ProductDraftV2
+
+
+class AdminProductResponseV2(BaseModel):
+    product_id: str
+    lifecycle_status: LifecycleStatus
+    version: int
+    title: str
+    description: str
+    brand: str
+    category: str
+    metadata: dict
+    published_snapshot: ProductDraftV2 | None = None
+    current_draft: AdminDraftSnapshotV2 | None = None
+    drafts: list[DraftRevisionResponse] = Field(default_factory=list)
+
+
+def _availability_priority(value: str, quantity: int) -> int:
+    normalized = " ".join(value.strip().lower().replace("_", " ").split())
+    if normalized in {"in stock", "available"} and quantity > 0:
+        return 3
+    if normalized in {"preorder", "pre order", "pre-order"}:
+        return 2
+    return 1
+
+
+def product_draft_v2_from_v1(product: ProductDraft) -> ProductDraftV2:
+    primary = product.variants[product.primary_variant_index]
+    grouped: dict[tuple[str, str], list[tuple[VariantDraft, InventoryDraft]]] = {}
+    for variant in product.variants:
+        for row in variant.inventory:
+            key = (row.store_id.casefold(), row.size.strip().casefold())
+            grouped.setdefault(key, []).append((variant, row))
+    inventory = []
+    for entries in grouped.values():
+        first = entries[0][1]
+        display_size = first.size.strip()
+        source_variant_ids = sorted(
+            {variant.variant_id for variant, _ in entries if variant.variant_id}
+        )
+        metadata = dict(first.metadata)
+        if source_variant_ids:
+            metadata["source_variant_ids"] = source_variant_ids
+        inventory.append(
+            ProductInventoryDraftV2(
+                store_id=first.store_id,
+                size=None if display_size.casefold() == "one size" else display_size,
+                availability=max(
+                    (row for _, row in entries),
+                    key=lambda row: _availability_priority(
+                        row.availability, row.inventory_qty
+                    ),
+                ).availability,
+                inventory_qty=sum(row.inventory_qty for _, row in entries),
+                metadata=metadata,
+            )
+        )
+    return ProductDraftV2(
+        product_id=product.product_id,
+        seed_run_id=product.seed_run_id,
+        title=product.title,
+        description=product.description,
+        brand=product.brand,
+        category=product.category,
+        price_min=min(variant.price_min for variant in product.variants),
+        price_max=max(variant.price_max for variant in product.variants),
+        link=primary.link,
+        color=primary.color,
+        material=primary.material,
+        gender=primary.gender,
+        season=primary.season,
+        metadata=product.metadata,
+        media=product.media,
+        inventory=inventory,
+    )
+
+
+def product_draft_v1_from_v2(product: ProductDraftV2) -> ProductDraft:
+    core = next((asset for asset in product.media if asset.role == "core"), None)
+    return ProductDraft(
+        product_id=product.product_id,
+        seed_run_id=product.seed_run_id,
+        title=product.title,
+        description=product.description,
+        brand=product.brand,
+        category=product.category,
+        metadata=product.metadata,
+        media=product.media,
+        variants=[
+            VariantDraft(
+                color=product.color,
+                material=product.material,
+                gender=product.gender,
+                season=product.season,
+                price_min=product.price_min,
+                price_max=product.price_max,
+                link=product.link,
+                image_set=core.image_set if core else {},
+                inventory=[
+                    InventoryDraft(
+                        store_id=row.store_id,
+                        size=row.size or "One Size",
+                        availability=row.availability,
+                        inventory_qty=row.inventory_qty,
+                        metadata=row.metadata,
+                    )
+                    for row in product.inventory
+                ],
+            )
+        ],
+    )
+
+
+def product_draft_v2_from_snapshot(snapshot: dict) -> ProductDraftV2:
+    if snapshot.get("schema_version") == 2:
+        return ProductDraftV2.model_validate(snapshot)
+    return product_draft_v2_from_v1(ProductDraft.model_validate(snapshot))
+
+
+def product_draft_v1_from_snapshot(snapshot: dict) -> ProductDraft:
+    if snapshot.get("schema_version") == 2:
+        return product_draft_v1_from_v2(ProductDraftV2.model_validate(snapshot))
+    return ProductDraft.model_validate(snapshot)
+
+
+def product_draft_snapshot_from_v1(product: ProductDraft, original: dict) -> dict:
+    if original.get("schema_version") == 2:
+        return product_draft_v2_from_v1(product).model_dump(mode="json")
+    return product.model_dump(mode="json")

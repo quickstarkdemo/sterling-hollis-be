@@ -15,7 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.catalog.admin_schemas import ProductDraft, ProductMediaDraft
+from app.catalog.admin_schemas import (
+    ProductDraft,
+    ProductMediaDraft,
+    product_draft_snapshot_from_v1,
+    product_draft_v1_from_snapshot,
+)
 from app.catalog.image_schemas import (
     CatalogImageApprovalRequest,
     CatalogImageApprovalResponse,
@@ -102,7 +107,7 @@ def _current_draft(
         raise _conflict(
             f"Expected image draft version {expected_version}, but current version is {actual_version}."
         )
-    return revision, ProductDraft.model_validate(revision.snapshot_json)
+    return revision, product_draft_v1_from_snapshot(revision.snapshot_json)
 
 
 def _job_response(job: ImageGenerationJob) -> CatalogImageJobResponse:
@@ -333,7 +338,9 @@ def enqueue_catalog_media_job(
             provenance={},
         )
     )
-    revision.snapshot_json = draft.model_dump(mode="json")
+    revision.snapshot_json = product_draft_snapshot_from_v1(
+        draft, revision.snapshot_json
+    )
     options = product_image_options(detail_count=1, settings=settings)
     job = ImageGenerationJob(
         id=f"imgjob_{uuid4().hex[:12]}",
@@ -657,7 +664,7 @@ def enqueue_catalog_image_variant_set(
         db,
         workflow=workflow,
         revision=revision,
-        draft=ProductDraft.model_validate(revision.snapshot_json),
+        draft=product_draft_v1_from_snapshot(revision.snapshot_json),
         image_variant_set_id=set_id,
     )
 
@@ -676,7 +683,7 @@ def get_catalog_image_variant_set(
     revision = db.get(CatalogDraftRevision, jobs[0].draft_revision_id)
     if revision is None:
         raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
-    draft = ProductDraft.model_validate(revision.snapshot_json)
+    draft = product_draft_v1_from_snapshot(revision.snapshot_json)
     return _variant_set_response(
         db,
         workflow=workflow,
@@ -877,7 +884,7 @@ def _process_catalog_image_job(
     revision = db.get(CatalogDraftRevision, job.draft_revision_id)
     if revision is None:
         raise RuntimeError("Catalog draft no longer exists.")
-    draft = ProductDraft.model_validate(revision.snapshot_json)
+    draft = product_draft_v1_from_snapshot(revision.snapshot_json)
     variant_index = job.requested_variant_index or 0
     prompt = _image_prompt(draft, variant_index, job.refinement_prompt)
     options = product_image_options(
@@ -977,7 +984,7 @@ def _process_catalog_image_job(
                 written=written,
             )
 
-        current = ProductDraft.model_validate(revision.snapshot_json)
+        current = product_draft_v1_from_snapshot(revision.snapshot_json)
         generated_image_set = {
             "thumbnail_url": thumb_url,
             "primary_url": detail_url,
@@ -1015,7 +1022,9 @@ def _process_catalog_image_job(
             generated_image_set["history"] = history
             variant.image_link = detail_url
             variant.image_set = generated_image_set
-        revision.snapshot_json = current.model_dump(mode="json")
+        revision.snapshot_json = product_draft_snapshot_from_v1(
+            current, revision.snapshot_json
+        )
         job.status = IndexJobStatus.succeeded.value
         job.attempted = 1
         job.generated = 1
@@ -1204,7 +1213,9 @@ def approve_catalog_image(
                 provenance={"model": job.model, "job_id": job.id},
             )
         )
-    revision.snapshot_json = draft.model_dump(mode="json")
+    revision.snapshot_json = product_draft_snapshot_from_v1(
+        draft, revision.snapshot_json
+    )
     append_workflow_event(
         db,
         workflow_id=workflow.id,

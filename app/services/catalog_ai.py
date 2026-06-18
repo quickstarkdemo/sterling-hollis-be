@@ -13,7 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.catalog.admin_schemas import InventoryDraft, ProductDraft, VariantDraft
+from app.catalog.admin_schemas import (
+    InventoryDraft,
+    ProductDraft,
+    VariantDraft,
+    product_draft_v1_from_snapshot,
+)
 from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
     CatalogAICommandResult,
@@ -262,7 +267,7 @@ def _server_catalog_context(
     db: Session, revision: CatalogDraftRevision | None
 ) -> tuple[str, str, ProductDraft | None]:
     if revision is not None:
-        current = ProductDraft.model_validate(revision.snapshot_json)
+        current = product_draft_v1_from_snapshot(revision.snapshot_json)
         store_id = current.variants[0].inventory[0].store_id
         return current.seed_run_id, store_id, current
 
