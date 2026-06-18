@@ -32,6 +32,7 @@ from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
     CatalogWorkflow,
+    ProductMediaAsset,
     ProductVariant,
     Store,
     StoreInventory,
@@ -196,6 +197,8 @@ def _safe_image_value(value):
 
 def _safe_product_snapshot(product: ProductDraft) -> ProductDraft:
     payload = product.model_dump(mode="json")
+    for asset in payload.get("media", []):
+        asset["image_set"] = _safe_image_value(asset.get("image_set") or {})
     for variant in payload["variants"]:
         variant["image_set"] = _safe_image_value(variant.get("image_set") or {})
     return ProductDraft.model_validate(payload)
@@ -237,7 +240,15 @@ def _preserve_server_image_fields(
     incoming: ProductDraft, current: ProductDraft
 ) -> ProductDraft:
     current_variants = {_variant_identity(row): row for row in current.variants}
+    current_media = {row.media_id: row for row in current.media}
     payload = incoming.model_dump(mode="json")
+    for index, asset in enumerate(incoming.media):
+        previous_asset = current_media.get(asset.media_id)
+        if previous_asset is None or not asset.image_set:
+            continue
+        payload["media"][index]["image_set"] = _restore_server_image_fields(
+            asset.image_set, previous_asset.image_set
+        )
     for index, variant in enumerate(incoming.variants):
         previous = current_variants.get(_variant_identity(variant))
         if previous is None or not variant.image_set:
@@ -323,6 +334,24 @@ def _published_snapshot(db: Session, row: CatalogProduct) -> ProductDraft:
         ),
         0,
     )
+    media_payload = [
+        {
+            "media_id": asset.id,
+            "role": asset.role,
+            "intent": asset.intent,
+            "source_media_id": asset.source_media_id,
+            "parameters": dict(asset.parameters or {}),
+            "image_set": _safe_image_value(dict(asset.image_set or {})),
+            "approval_status": "approved",
+            "display_order": asset.display_order,
+            "provenance": dict(asset.provenance or {}),
+        }
+        for asset in db.scalars(
+            select(ProductMediaAsset)
+            .where(ProductMediaAsset.catalog_product_id == row.id)
+            .order_by(ProductMediaAsset.display_order.asc())
+        ).all()
+    ]
     return ProductDraft.model_validate(
         {
             "product_id": row.id,
@@ -335,6 +364,7 @@ def _published_snapshot(db: Session, row: CatalogProduct) -> ProductDraft:
             "design_specification": stored_authoring.get("design_specification"),
             "variant_axes": variant_axes,
             "primary_variant_index": primary_variant_index,
+            "media": media_payload,
             "variants": variant_payload,
         }
     )
@@ -458,6 +488,12 @@ def _validate_publishable(
         for variant in product.variants
     ):
         raise _conflict("Catalog Studio generated images require approval before publication.")
+    if product.media:
+        core_assets = [asset for asset in product.media if asset.role == "core"]
+        if len(core_assets) != 1 or core_assets[0].approval_status != "approved":
+            raise _conflict("Product media requires one approved core image before publication.")
+        if any(asset.approval_status != "approved" for asset in product.media):
+            raise _conflict("Every product media asset requires approval before publication.")
     store_ids = {row.store_id for variant in product.variants for row in variant.inventory}
     existing_store_ids = set(db.scalars(select(Store.id).where(Store.id.in_(store_ids))).all())
     missing = sorted(store_ids - existing_store_ids)
@@ -559,6 +595,11 @@ def _apply_snapshot(
                     ProductVariant.id.in_(existing_variant_ids)
                 )
             )
+        db.execute(
+            delete(ProductMediaAsset).where(
+                ProductMediaAsset.catalog_product_id == product_id
+            )
+        )
         db.flush()
 
     for variant in product.variants:
@@ -610,6 +651,26 @@ def _apply_snapshot(
                     metadata_json=inventory.metadata,
                 )
             )
+    for asset in product.media:
+        if asset.approval_status != "approved":
+            continue
+        db.add(
+            ProductMediaAsset(
+                id=asset.media_id,
+                catalog_product_id=product_id,
+                role=asset.role,
+                intent=asset.intent,
+                source_media_id=asset.source_media_id,
+                image_set={
+                    key: value
+                    for key, value in asset.image_set.items()
+                    if key not in {"file_path", "history"}
+                },
+                parameters=asset.parameters,
+                provenance=asset.provenance,
+                display_order=asset.display_order,
+            )
+        )
     db.flush()
     return row
 

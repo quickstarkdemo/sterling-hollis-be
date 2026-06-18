@@ -20,6 +20,7 @@ from app.catalog.schemas import (
     ProductInventory,
     ProductInventorySummary,
     ProductListResponse,
+    ProductMedia,
     ProductRecommendationRequest,
     ProductRecommendationResponse,
     ProductSort,
@@ -27,7 +28,7 @@ from app.catalog.schemas import (
 )
 from app.catalog.authoring import public_product_metadata
 from app.models import CatalogProduct as CatalogProductModel
-from app.models import Product, ProductVariant, StoreInventory
+from app.models import Product, ProductMediaAsset, ProductVariant, StoreInventory
 from app.schemas import CustomerRecommendationRequest, RetrievalMode
 from app.services.catalog_normalization import (
     catalog_key_for_product,
@@ -257,6 +258,24 @@ def _product_variants(db: Session, product_id: str) -> list[ProductVariant]:
     ).all()
 
 
+def _media_images(asset: ProductMediaAsset) -> ProductImages:
+    image_set = dict(asset.image_set or {})
+    primary_url = image_set.get("primary_url") or image_set.get("thumbnail_url")
+    return ProductImages(
+        thumbnail_url=image_set.get("thumbnail_url") or primary_url,
+        primary_url=primary_url,
+        detail_urls=list(image_set.get("detail_urls") or ([primary_url] if primary_url else [])),
+    )
+
+
+def _product_media(db: Session, product_id: str) -> list[ProductMediaAsset]:
+    return db.scalars(
+        select(ProductMediaAsset)
+        .where(ProductMediaAsset.catalog_product_id == product_id)
+        .order_by(ProductMediaAsset.display_order.asc(), ProductMediaAsset.id.asc())
+    ).all()
+
+
 def product_to_catalog(
     db: Session,
     product: CatalogProductModel,
@@ -289,10 +308,10 @@ def product_to_catalog(
         ),
         default=None,
     )
-    images = (
-        _variant_images(product, default_variant)
-        if default_variant
-        else ProductImages()
+    media_rows = _product_media(db, product.id)
+    core_media = next((asset for asset in media_rows if asset.role == "core"), None)
+    images = _media_images(core_media) if core_media else (
+        _variant_images(product, default_variant) if default_variant else ProductImages()
     )
     price_min = min((float(variant.price_min) for variant in variants), default=0.0)
     price_max = max((float(variant.price_max) for variant in variants), default=0.0)
@@ -339,6 +358,17 @@ def product_to_catalog(
     return ProductDetailResponse(
         **base.model_dump(),
         metadata=public_product_metadata(product.metadata_json),
+        media=[
+            ProductMedia(
+                id=asset.id,
+                role=asset.role,
+                intent=asset.intent,
+                source_media_id=asset.source_media_id,
+                images=_media_images(asset),
+                display_order=asset.display_order,
+            )
+            for asset in media_rows
+        ],
         variants=variant_payload,
     )
 

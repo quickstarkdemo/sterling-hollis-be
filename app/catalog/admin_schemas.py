@@ -12,6 +12,9 @@ LifecycleStatus = Literal["draft", "published", "archived"]
 PublishedLifecycleStatus = Literal["published", "archived"]
 DraftStatus = Literal["draft", "published"]
 VariantAxis = Literal["color", "material"]
+MediaRole = Literal["core", "variation"]
+MediaIntent = Literal["manual", "color", "angle", "scene", "scale", "people", "freeform"]
+MediaApprovalStatus = Literal["pending", "approved", "rejected"]
 
 
 class DesignSpecificationDraft(BaseModel):
@@ -41,6 +44,20 @@ class InventoryDraft(BaseModel):
     inventory_qty: int = Field(ge=0)
     objective_weight: Decimal = Field(default=Decimal("0"), ge=0, le=1)
     metadata: dict = Field(default_factory=dict)
+
+
+class ProductMediaDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    media_id: str = Field(min_length=1, max_length=64)
+    role: MediaRole
+    intent: MediaIntent = "manual"
+    source_media_id: str | None = Field(default=None, max_length=64)
+    parameters: dict = Field(default_factory=dict)
+    image_set: dict = Field(default_factory=dict)
+    approval_status: MediaApprovalStatus = "pending"
+    display_order: int = Field(ge=0)
+    provenance: dict = Field(default_factory=dict)
 
 
 class VariantDraft(BaseModel):
@@ -78,6 +95,7 @@ class ProductDraft(BaseModel):
     design_specification: DesignSpecificationDraft | None = None
     variant_axes: list[VariantAxis] = Field(default_factory=list, max_length=2)
     primary_variant_index: int = Field(default=0, ge=0)
+    media: list[ProductMediaDraft] = Field(default_factory=list, max_length=24)
     variants: list[VariantDraft] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -118,6 +136,23 @@ class ProductDraft(BaseModel):
         explicit_ids = [row.variant_id for row in self.variants if row.variant_id]
         if len(explicit_ids) != len(set(explicit_ids)):
             raise ValueError("variant_id values must be unique within a product")
+        media_ids = [asset.media_id for asset in self.media]
+        if len(media_ids) != len(set(media_ids)):
+            raise ValueError("media_id values must be unique within a product")
+        display_orders = [asset.display_order for asset in self.media]
+        if len(display_orders) != len(set(display_orders)):
+            raise ValueError("media display_order values must be unique within a product")
+        if self.media:
+            core_assets = [asset for asset in self.media if asset.role == "core"]
+            if len(core_assets) != 1:
+                raise ValueError("product media requires exactly one core asset")
+            if core_assets[0].display_order != 0:
+                raise ValueError("the core media asset must be first in display order")
+            known_ids = set(media_ids)
+            if any(asset.source_media_id and asset.source_media_id not in known_ids for asset in self.media):
+                raise ValueError("media source_media_id must reference product media")
+            if core_assets[0].source_media_id is not None:
+                raise ValueError("the core media asset cannot reference a source asset")
         return self
 
 

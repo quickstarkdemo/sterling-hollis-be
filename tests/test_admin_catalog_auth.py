@@ -156,7 +156,7 @@ def test_catalog_admin_session_reports_capabilities_without_secrets_or_probes():
             "responses": {"configured": True},
             "moderation": {"configured": True},
             "image_generation": {"configured": True},
-            "realtime": {"configured": False},
+            "realtime": {"configured": False, "reason": "feature_disabled"},
             "worker_storage": {"configured": True},
             "catalog": {"configured": True},
         },
@@ -172,9 +172,33 @@ def test_capability_status_reports_unconfigured_openai_without_probing():
         "responses": {"configured": False},
         "moderation": {"configured": False},
         "image_generation": {"configured": False},
-        "realtime": {"configured": False},
+        "realtime": {"configured": False, "reason": "feature_disabled"},
         "worker_storage": {"configured": False},
         "catalog": {"configured": True},
+    }
+
+
+def test_realtime_capability_reports_each_missing_prerequisite_without_values():
+    base = {
+        "catalog_studio_realtime_enabled": True,
+        "openai_api_key": "sk-secret-value",
+        "catalog_studio_realtime_safety_identifier_secret": "safety-secret-value",
+    }
+
+    assert catalog_studio_capabilities(_settings(**base))["realtime"] == {
+        "configured": True,
+    }
+    assert catalog_studio_capabilities(
+        _settings(**{**base, "openai_api_key": None})
+    )["realtime"] == {
+        "configured": False,
+        "reason": "missing_api_key",
+    }
+    assert catalog_studio_capabilities(
+        _settings(**{**base, "catalog_studio_realtime_safety_identifier_secret": ""})
+    )["realtime"] == {
+        "configured": False,
+        "reason": "missing_safety_secret",
     }
 
 

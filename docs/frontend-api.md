@@ -82,6 +82,7 @@ Generated image files are served from:
 | Create a short-lived Realtime voice session | `POST` | `/api/admin/catalog/workflows/{workflow_id}/realtime/sessions` |
 | Execute an approved Realtime draft tool call | `POST` | `/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls` |
 | Generate or refine draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-commands` |
+| Create a product media variation | `POST` | `/api/admin/catalog/workflows/{workflow_id}/media-commands` |
 | Generate coherent remaining variants | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets` |
 | Poll a coordinated variant set | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}` |
 | Poll one draft image job | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}` |
@@ -242,12 +243,19 @@ custom claim:
 - `CATALOG_STUDIO_RESPONSES_MODEL` and `CATALOG_STUDIO_MODERATION_MODEL`
 - `CATALOG_STUDIO_RESPONSES_TIMEOUT_SECONDS` and
   `CATALOG_STUDIO_RESPONSES_MAX_OUTPUT_TOKENS`
+- `CATALOG_STUDIO_REALTIME_ENABLED`, `CATALOG_STUDIO_REALTIME_MODEL`, and
+  `CATALOG_STUDIO_REALTIME_TRANSCRIPTION_MODEL`
+- `CATALOG_STUDIO_REALTIME_CLIENT_SECRET_TTL_SECONDS` and
+  `CATALOG_STUDIO_REALTIME_TIMEOUT_SECONDS`
+- `CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET`
 
 Existing demo-observability allowlists and `CLERK_DEMO_CUSTOMER_EMAIL` remain
 valid administrator sources for backward compatibility. The response contains
-only booleans describing whether Responses, Moderation, Image Generation,
-Realtime, worker storage, and catalog dependencies are configured. It does not
-probe providers or return configuration values.
+booleans describing whether Responses, Moderation, Image Generation, Realtime,
+worker storage, and catalog dependencies are configured. An unavailable
+Realtime capability also includes one safe reason: `feature_disabled`,
+`missing_api_key`, or `missing_safety_secret`. It does not probe providers or
+return configuration values.
 
 ```http
 GET /api/admin/session
@@ -261,7 +269,7 @@ authorization: Bearer <Clerk token>
     "responses": {"configured": true},
     "moderation": {"configured": true},
     "image_generation": {"configured": true},
-    "realtime": {"configured": false},
+    "realtime": {"configured": false, "reason": "feature_disabled"},
     "worker_storage": {"configured": true},
     "catalog": {"configured": true}
   }
@@ -546,6 +554,39 @@ URL, approve each successful child with the normal approval endpoint, and wait
 for `complete` before publishing. A partial failure reports
 `partially_failed`; repeating the command queues only failed children and does
 not duplicate queued, successful, or approved siblings.
+
+### Product media variations
+
+Product media is independent of sellable variants and inventory. A draft may
+carry one approved `core` media asset plus ordered `variation` assets for
+color treatment, camera angle, scene, scale, people, or a bounded freeform
+instruction. Creating media never creates a SKU, price, size, or inventory row.
+`parameters` accepts at most eight primitive values; keys are limited to 64
+characters and string values to 500 characters. `instruction` is limited to
+2,000 characters.
+
+```http
+POST /api/admin/catalog/workflows/{workflow_id}/media-commands
+Authorization: Bearer <Clerk token>
+Idempotency-Key: media-scene-1
+Content-Type: application/json
+
+{
+  "draft_id": "draft_...",
+  "expected_draft_version": 1,
+  "source_media_id": "media_core",
+  "intent": "scene",
+  "parameters": {"scene": "bright living room"}
+}
+```
+
+The source must be the approved core asset and must still exist in worker
+storage. The worker uses a high-fidelity image edit, writes the result to a new
+draft media asset, and returns its `target_media_id`. Poll and approve the job
+through the existing image-job endpoints. Publication requires every retained
+media asset to be approved and exposes approved assets in `display_order` on
+the public product detail response. Products without product media retain the
+existing default-variant image fallback.
 
 ## Demo Observability Toggle
 

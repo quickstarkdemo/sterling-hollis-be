@@ -158,6 +158,9 @@ class CatalogProduct(Base):
     )
 
     variants: Mapped[list["ProductVariant"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+    media_assets: Mapped[list["ProductMediaAsset"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_catalog_products_category_brand", "category", "brand"),
@@ -193,6 +196,33 @@ class ProductVariant(Base):
         CheckConstraint("price_min >= 0", name="ck_product_variants_price_min_non_negative"),
         CheckConstraint("price_max >= price_min", name="ck_product_variants_price_range_valid"),
         Index("ix_product_variants_product_price", "catalog_product_id", "price_min", "price_max"),
+    )
+
+
+class ProductMediaAsset(Base):
+    __tablename__ = "product_media_assets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_product_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    intent: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_media_id: Mapped[str | None] = mapped_column(String(64))
+    image_set: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    product: Mapped[CatalogProduct] = relationship(back_populates="media_assets")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "catalog_product_id",
+            "display_order",
+            name="uq_product_media_assets_product_display_order",
+        ),
+        Index("ix_product_media_assets_product_role", "catalog_product_id", "role"),
     )
 
 
@@ -670,6 +700,9 @@ class ImageGenerationJob(Base):
     requested_action: Mapped[str | None] = mapped_column(String(32))
     requested_variant_index: Mapped[int | None] = mapped_column(Integer)
     image_variant_set_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_media_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    target_media_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    requested_intent: Mapped[str | None] = mapped_column(String(32))
     idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))
     request_hash: Mapped[str | None] = mapped_column(String(64))
     refinement_prompt: Mapped[str | None] = mapped_column(Text)

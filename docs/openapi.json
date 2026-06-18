@@ -367,6 +367,22 @@
           "configured": {
             "title": "Configured",
             "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "feature_disabled",
+                  "missing_api_key",
+                  "missing_safety_secret"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
           }
         },
         "required": [
@@ -587,6 +603,17 @@
             "title": "Job Id",
             "type": "string"
           },
+          "media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Id"
+          },
           "variant_index": {
             "title": "Variant Index",
             "type": "integer"
@@ -712,6 +739,17 @@
             ],
             "title": "Image Variant Set Id"
           },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
           "model": {
             "title": "Model",
             "type": "string"
@@ -728,6 +766,17 @@
             "title": "Size",
             "type": "string"
           },
+          "source_media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Media Id"
+          },
           "started_at": {
             "anyOf": [
               {
@@ -743,6 +792,17 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "target_media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Media Id"
           },
           "variant_index": {
             "title": "Variant Index",
@@ -883,6 +943,66 @@
           "offset"
         ],
         "title": "CatalogIndexResponse",
+        "type": "object"
+      },
+      "CatalogMediaCommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
+          },
+          "intent": {
+            "enum": [
+              "color",
+              "angle",
+              "scene",
+              "scale",
+              "people",
+              "freeform"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "source_media_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source Media Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_draft_version",
+          "source_media_id",
+          "intent"
+        ],
+        "title": "CatalogMediaCommandRequest",
         "type": "object"
       },
       "CatalogProduct": {
@@ -3222,6 +3342,13 @@
             ],
             "title": "Link"
           },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/ProductMedia"
+            },
+            "title": "Media",
+            "type": "array"
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
@@ -3295,6 +3422,14 @@
                 "type": "null"
               }
             ]
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/ProductMediaDraft"
+            },
+            "maxItems": 24,
+            "title": "Media",
+            "type": "array"
           },
           "metadata": {
             "additionalProperties": true,
@@ -3391,6 +3526,14 @@
                 "type": "null"
               }
             ]
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/ProductMediaDraft"
+            },
+            "maxItems": 24,
+            "title": "Media",
+            "type": "array"
           },
           "metadata": {
             "additionalProperties": true,
@@ -3643,6 +3786,131 @@
           "offset"
         ],
         "title": "ProductListResponse",
+        "type": "object"
+      },
+      "ProductMedia": {
+        "properties": {
+          "display_order": {
+            "title": "Display Order",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "images": {
+            "$ref": "#/components/schemas/ProductImages"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "source_media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Media Id"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "intent",
+          "images",
+          "display_order"
+        ],
+        "title": "ProductMedia",
+        "type": "object"
+      },
+      "ProductMediaDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_status": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected"
+            ],
+            "title": "Approval Status",
+            "type": "string"
+          },
+          "display_order": {
+            "minimum": 0.0,
+            "title": "Display Order",
+            "type": "integer"
+          },
+          "image_set": {
+            "additionalProperties": true,
+            "title": "Image Set",
+            "type": "object"
+          },
+          "intent": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "color",
+              "angle",
+              "scene",
+              "scale",
+              "people",
+              "freeform"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "media_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Media Id",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "title": "Provenance",
+            "type": "object"
+          },
+          "role": {
+            "enum": [
+              "core",
+              "variation"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "source_media_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Media Id"
+          }
+        },
+        "required": [
+          "media_id",
+          "role",
+          "display_order"
+        ],
+        "title": "ProductMediaDraft",
         "type": "object"
       },
       "ProductRecommendation": {
@@ -6602,6 +6870,74 @@
           }
         ],
         "summary": "Read aggregate and child status for a catalog image variant set",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/media-commands": {
+      "post": {
+        "operationId": "create_catalog_media_command_api_admin_catalog_workflows__workflow_id__media_commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogMediaCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogImageJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Create a product media variation from the approved core image",
         "tags": [
           "catalog-studio-admin"
         ]

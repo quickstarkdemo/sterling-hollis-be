@@ -168,7 +168,7 @@ def test_generate_approve_publish_and_index_catalog_image(monkeypatch, tmp_path)
     with _admin_catalog_client(monkeypatch) as (client, sessions):
         draft, workflow = _draft_and_workflow(client)
         queued = _enqueue(client, workflow["id"], draft["id"], "image-generate")
-        assert queued.status_code == 202
+        assert queued.status_code == 202, queued.text
         job = queued.json()
         replay = _enqueue(client, workflow["id"], draft["id"], "image-generate")
         assert replay.status_code == 202
@@ -227,6 +227,12 @@ def test_generate_approve_publish_and_index_catalog_image(monkeypatch, tmp_path)
         )
         assert approved.status_code == 200
         assert approved.json()["approval_status"] == "approved"
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, draft["id"])
+            snapshot = ProductDraft.model_validate(revision.snapshot_json)
+            assert len(snapshot.media) == 1
+            assert snapshot.media[0].role == "core"
+            assert snapshot.media[0].approval_status == "approved"
         approval_replay = client.post(
             f"/api/admin/catalog/workflows/{workflow['id']}/image-jobs/{job['id']}/approve",
             json={"draft_id": draft["id"], "expected_draft_version": 1},
@@ -283,6 +289,88 @@ def test_refine_uses_approved_source_and_preserves_history(monkeypatch, tmp_path
             assert image_set["approval_status"] == "review"
             assert image_set["history"][-1]["job_id"] == first["id"]
             assert image_set["history"][-1]["approval_status"] == "approved"
+
+
+def test_media_variation_edits_approved_core_without_creating_inventory(monkeypatch, tmp_path):
+    monkeypatch.setenv("PRODUCT_IMAGE_OUTPUT_DIR", str(tmp_path / "images"))
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://catalog.example")
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        draft, workflow = _draft_and_workflow(client)
+        core_job = _enqueue(client, workflow["id"], draft["id"], "media-core").json()
+        _process(sessions, FakeImages())
+        client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/image-jobs/{core_job['id']}/approve",
+            json={"draft_id": draft["id"], "expected_draft_version": 1},
+        )
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, draft["id"])
+            snapshot = ProductDraft.model_validate(revision.snapshot_json)
+            core_image = dict(snapshot.variants[0].image_set)
+            core_image.pop("file_path", None)
+            payload = snapshot.model_dump(mode="json")
+            payload["media"] = [
+                {
+                    "media_id": "media_core",
+                    "role": "core",
+                    "intent": "manual",
+                    "parameters": {},
+                    "image_set": core_image,
+                    "approval_status": "approved",
+                    "display_order": 0,
+                    "provenance": {"job_id": core_job["id"]},
+                }
+            ]
+            snapshot = ProductDraft.model_validate(payload)
+            revision.snapshot_json = snapshot.model_dump(mode="json")
+            db.commit()
+
+        invalid = client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/media-commands",
+            json={
+                "draft_id": draft["id"],
+                "expected_draft_version": 1,
+                "source_media_id": "media_core",
+                "intent": "scene",
+                "parameters": {"scene": "x" * 501},
+            },
+            headers=_headers("media-invalid-parameters"),
+        )
+        assert invalid.status_code == 422
+
+        queued = client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/media-commands",
+            json={
+                "draft_id": draft["id"],
+                "expected_draft_version": 1,
+                "source_media_id": "media_core",
+                "intent": "scene",
+                "parameters": {"scene": "bright living room"},
+            },
+            headers=_headers("media-room-scene"),
+        )
+        assert queued.status_code == 202, queued.text
+        assert queued.json()["source_media_id"] == "media_core"
+        assert queued.json()["target_media_id"].startswith("media_")
+
+        images = FakeImages()
+        result = _process(sessions, images)
+        assert result.status == "succeeded"
+        assert images.edit_calls[0]["input_fidelity"] == "high"
+        assert "bright living room" in images.edit_calls[0]["prompt"]
+
+        approved = client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/image-jobs/{queued.json()['id']}/approve",
+            json={"draft_id": draft["id"], "expected_draft_version": 1},
+        )
+        assert approved.status_code == 200
+        assert approved.json()["media_id"] == queued.json()["target_media_id"]
+        with sessions() as db:
+            revision = db.get(CatalogDraftRevision, draft["id"])
+            snapshot = ProductDraft.model_validate(revision.snapshot_json)
+            assert len(snapshot.variants) == 1
+            assert len(snapshot.variants[0].inventory) == 1
+            assert [asset.intent for asset in snapshot.media] == ["manual", "scene"]
+            assert snapshot.media[1].approval_status == "approved"
 
 
 def test_variant_set_requires_approved_primary_and_enqueues_edit_children(

@@ -50,6 +50,15 @@ class ProductImages(BaseModel):
     detail_urls: list[str] = Field(default_factory=list)
 
 
+class ProductMedia(BaseModel):
+    id: str
+    role: str
+    intent: str
+    source_media_id: str | None = None
+    images: ProductImages
+    display_order: int
+
+
 class ProductInventorySummary(BaseModel):
     total_units: int = 0
     in_stock_units: int = 0
@@ -111,6 +120,7 @@ class ProductListResponse(BaseModel):
 
 class ProductDetailResponse(CatalogProduct):
     metadata: dict = Field(default_factory=dict)
+    media: list[ProductMedia] = Field(default_factory=list)
     variants: list[CatalogVariant] = Field(default_factory=list)
 
 

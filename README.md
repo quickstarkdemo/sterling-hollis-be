@@ -103,6 +103,57 @@ Useful optional groups:
 `.env.example` is the detailed local reference. Keep secret values out of the
 repo.
 
+### Catalog Studio configuration
+
+Catalog Studio uses the standard `OPENAI_API_KEY` for provider calls. Realtime
+voice is available only when `CATALOG_STUDIO_REALTIME_ENABLED=true` and
+`CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET` is also set to a dedicated
+random secret. The safety secret is used only to HMAC the authenticated Clerk
+user ID before it is sent as an OpenAI safety identifier.
+
+| Setting | Default | Required when | Secret |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | empty | Any OpenAI-backed Catalog Studio capability is enabled | yes |
+| `CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS` | empty | Email allowlisting is used | no |
+| `CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS` | empty | Clerk subject allowlisting is used | no |
+| `CATALOG_STUDIO_ADMIN_CLAIM_PATH` | empty | A custom Clerk admin claim is used | no |
+| `CATALOG_STUDIO_ADMIN_CLAIM_VALUE` | `admin` | A custom Clerk admin claim is used | no |
+| `CATALOG_STUDIO_RESPONSES_MODEL` | `gpt-5.5` | Responses draft authoring is used | no |
+| `CATALOG_STUDIO_MODERATION_MODEL` | `omni-moderation-latest` | Moderated draft authoring is used | no |
+| `CATALOG_STUDIO_RESPONSES_TIMEOUT_SECONDS` | `60` | Optional override | no |
+| `CATALOG_STUDIO_RESPONSES_MAX_OUTPUT_TOKENS` | `2500` | Optional override | no |
+| `CATALOG_STUDIO_REALTIME_ENABLED` | `false` | Set to `true` to enable voice | no |
+| `CATALOG_STUDIO_REALTIME_MODEL` | `gpt-realtime-2` | Voice is enabled | no |
+| `CATALOG_STUDIO_REALTIME_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | Voice is enabled | no |
+| `CATALOG_STUDIO_REALTIME_CLIENT_SECRET_TTL_SECONDS` | `600` | Optional voice override | no |
+| `CATALOG_STUDIO_REALTIME_TIMEOUT_SECONDS` | `15` | Optional voice override | no |
+| `CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET` | empty | Voice is enabled | yes |
+| `CATALOG_STUDIO_SHARED_WORKFLOWS` | `false` | Set to `true` only for shared presenter workflows | no |
+| `CATALOG_STUDIO_TRACE_RETENTION_DAYS` | `7` | Optional trace override | no |
+| `CATALOG_STUDIO_TRACE_MAX_DEPTH` | `6` | Optional trace override | no |
+| `CATALOG_STUDIO_TRACE_MAX_STRING_LENGTH` | `1000` | Optional trace override | no |
+| `CATALOG_STUDIO_TRACE_MAX_ARRAY_LENGTH` | `25` | Optional trace override | no |
+| `CATALOG_STUDIO_TRACE_MAX_OBJECT_KEYS` | `50` | Optional trace override | no |
+| `CATALOG_STUDIO_TRACE_MAX_BYTES` | `16384` | Optional trace override | no |
+| `CATALOG_STUDIO_TRACE_REDACTED_KEYS` | empty | Add deployment-specific JSON keys to redact | no |
+| `PRODUCT_IMAGE_MODEL` | `gpt-image-2` | Product image generation is used | no |
+| `PRODUCT_IMAGE_SIZE` | `1024x1024` | Optional image override | no |
+| `PRODUCT_IMAGE_QUALITY` | `medium` | Optional image override | no |
+| `PRODUCT_IMAGE_OUTPUT_FORMAT` | `jpeg` | Optional image override | no |
+| `PRODUCT_IMAGE_OUTPUT_DIR` | `data/product-images` | Product image generation is used | no |
+| `PRODUCT_IMAGE_URL_PATH` | `/product-images` | Product image generation is used | no |
+| `PRODUCT_IMAGE_DETAIL_COUNT` | `3` | Optional legacy batch override | no |
+| `PRODUCT_IMAGE_THUMBNAIL_SIZE` | `320` | Optional image override | no |
+| `PRODUCT_IMAGE_REQUEST_TIMEOUT_SECONDS` | `300` | Optional image override | no |
+| `PRODUCT_IMAGE_JOB_STALE_SECONDS` | `900` | Optional worker recovery override | no |
+| `IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS` | `60` | Optional admin recovery override | no |
+
+`GET /api/admin/session` reports configuration readiness without contacting a
+provider or returning values. Realtime reports `feature_disabled`,
+`missing_api_key`, or `missing_safety_secret` when it is unavailable. A
+configured result means the required settings are present; it does not prove
+that the provider or browser media connection is currently healthy.
+
 Important environment notes:
 
 - `DOCKERHUB_IMAGE` must be lowercase and include a Docker Hub namespace, for
