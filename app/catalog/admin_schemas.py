@@ -55,11 +55,20 @@ class ProductMediaDraft(BaseModel):
     role: MediaRole
     intent: MediaIntent = "manual"
     source_media_id: str | None = Field(default=None, max_length=64)
+    predecessor_media_id: str | None = Field(default=None, max_length=64)
     parameters: dict = Field(default_factory=dict)
     image_set: dict = Field(default_factory=dict)
     approval_status: MediaApprovalStatus = "pending"
     display_order: int = Field(ge=0)
     provenance: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_lineage(self):
+        if self.source_media_id == self.media_id:
+            raise ValueError("media cannot reference itself as its source")
+        if self.predecessor_media_id == self.media_id:
+            raise ValueError("media cannot reference itself as its predecessor")
+        return self
 
 
 class VariantDraft(BaseModel):
@@ -97,7 +106,7 @@ class ProductDraft(BaseModel):
     design_specification: DesignSpecificationDraft | None = None
     variant_axes: list[VariantAxis] = Field(default_factory=list, max_length=2)
     primary_variant_index: int = Field(default=0, ge=0)
-    media: list[ProductMediaDraft] = Field(default_factory=list, max_length=24)
+    media: list[ProductMediaDraft] = Field(default_factory=list)
     variants: list[VariantDraft] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -150,11 +159,6 @@ class ProductDraft(BaseModel):
                 raise ValueError("product media requires exactly one core asset")
             if core_assets[0].display_order != 0:
                 raise ValueError("the core media asset must be first in display order")
-            known_ids = set(media_ids)
-            if any(asset.source_media_id and asset.source_media_id not in known_ids for asset in self.media):
-                raise ValueError("media source_media_id must reference product media")
-            if core_assets[0].source_media_id is not None:
-                raise ValueError("the core media asset cannot reference a source asset")
         return self
 
 
@@ -305,7 +309,7 @@ class ProductDraftV2(BaseModel):
     gender: str | None = Field(default=None, max_length=32)
     season: str | None = Field(default=None, max_length=32)
     metadata: dict = Field(default_factory=dict)
-    media: list[ProductMediaDraft] = Field(default_factory=list, max_length=24)
+    media: list[ProductMediaDraft] = Field(default_factory=list)
     inventory: list[ProductInventoryDraftV2] = Field(min_length=1)
 
     @field_serializer("price_min", "price_max", when_used="json")
@@ -337,14 +341,6 @@ class ProductDraftV2(BaseModel):
                 raise ValueError("product media requires exactly one core asset")
             if core_assets[0].display_order != 0:
                 raise ValueError("the core media asset must be first in display order")
-            known_ids = set(media_ids)
-            if any(
-                asset.source_media_id and asset.source_media_id not in known_ids
-                for asset in self.media
-            ):
-                raise ValueError("media source_media_id must reference product media")
-            if core_assets[0].source_media_id is not None:
-                raise ValueError("the core media asset cannot reference a source asset")
         return self
 
 

@@ -251,6 +251,7 @@ class ProductMediaAsset(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     intent: Mapped[str] = mapped_column(String(32), nullable=False)
     source_media_id: Mapped[str | None] = mapped_column(String(64))
+    predecessor_media_id: Mapped[str | None] = mapped_column(String(64), index=True)
     image_set: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     parameters: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     provenance: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

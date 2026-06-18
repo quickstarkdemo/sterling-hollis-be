@@ -872,6 +872,43 @@ def test_product_media_publishes_without_creating_inventory_variants(monkeypatch
         assert public["variants"][0]["inventory"][0]["inventory_qty"] == 8
 
 
+def test_catalog_studio_projects_every_legacy_image_with_stable_media_ids(monkeypatch):
+    image_urls = [f"https://cdn.example.com/product-{index}.jpg" for index in range(30)]
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            product = db.scalar(
+                select(CatalogProduct).where(CatalogProduct.title == "Published Dress")
+            )
+            variant = db.scalar(
+                select(ProductVariant).where(
+                    ProductVariant.catalog_product_id == product.id
+                )
+            )
+            variant.image_link = image_urls[0]
+            variant.image_set = {
+                "primary_url": image_urls[0],
+                "thumbnail_url": image_urls[0],
+                "detail_urls": image_urls[1:],
+            }
+            db.commit()
+            product_id = product.id
+
+        first = client.get(f"/api/admin/catalog/v2/products/{product_id}")
+        second = client.get(f"/api/admin/catalog/v2/products/{product_id}")
+
+        assert first.status_code == 200
+        first_media = first.json()["published_snapshot"]["media"]
+        second_media = second.json()["published_snapshot"]["media"]
+        assert len(first_media) == 30
+        assert len({item["media_id"] for item in first_media}) == 30
+        assert [item["media_id"] for item in first_media] == [
+            item["media_id"] for item in second_media
+        ]
+        assert [item["image_set"]["primary_url"] for item in first_media] == image_urls
+        assert first_media[0]["role"] == "core"
+        assert [item["display_order"] for item in first_media] == list(range(30))
+
+
 def test_product_media_rejects_unapproved_assets_before_publication(monkeypatch):
     payload = _snapshot(title="Pending Media Coat")
     payload["product"]["media"] = [
