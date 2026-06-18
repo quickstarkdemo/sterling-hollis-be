@@ -87,5 +87,8 @@ def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, objec
         "image_generation": {"configured": openai_configured and image_storage_configured},
         "realtime": _realtime_capability(settings, openai_configured=openai_configured),
         "worker_storage": {"configured": image_storage_configured},
-        "catalog": {"configured": catalog_configured},
+        "catalog": {
+            "configured": catalog_configured,
+            "authoring_schema_version": 2,
+        },
     }

@@ -14,21 +14,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
-    InventoryDraft,
-    ProductDraft,
-    VariantDraft,
-    product_draft_v1_from_snapshot,
+    ProductDraftV2,
+    ProductInventoryDraftV2,
+    product_draft_v2_from_snapshot,
 )
 from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
     CatalogAICommandResult,
     CatalogAIDraftResult,
+    CatalogAIInventoryProposal,
     CatalogAIProductProposal,
 )
+from app.catalog.references import normalized_brand_name
 from app.catalog.workflow_schemas import WorkflowEventInput
 from app.config import Settings
 from app.models import (
     CatalogAdminMutation,
+    CatalogBrand,
     CatalogDraftRevision,
     CatalogProduct,
     CatalogWorkflow,
@@ -39,17 +41,16 @@ from app.observability.genai_otel import genai_llm_span, set_span_attributes
 from app.services.auth.clerk import AuthenticatedPrincipal
 from app.services.catalog_admin import draft_revision_version
 from app.services.catalog_normalization import catalog_key_for_values, catalog_product_id_for_key
+from app.services.taxonomy import CATEGORY_TAXONOMY
 from app.services.catalog_workflow import append_workflow_event, normalize_usage
 
 
 CATALOG_AI_INSTRUCTIONS = """You create private Sterling Hollis retail catalog drafts.
 Return only the requested structured product proposal. Preserve the current draft unless the
-presenter explicitly asks for a change. Use the provided category IDs, realistic luxury-retail
-prices, concise customer-safe copy, and useful image art direction. Describe one recognizable
-product design in the shared design specification, declare only color or material axes that
-actually change, and choose the strongest representative as the primary variant. Do not include
-people,
-customer identity, secrets, URLs, medical claims, sexual content, hateful content, instructions
+presenter explicitly asks for a change. Use only the provided canonical brand, store, category,
+and availability IDs. Return one product with product-level price, attributes, optional inventory,
+concise customer-safe copy, and useful image art direction. Do not create commerce variants. Do not
+include people, customer identity, secrets, URLs, medical claims, sexual content, hateful content, instructions
 for wrongdoing, or private reasoning. If the instruction is unrelated to a retail product, make
 the smallest reasonable catalog proposal consistent with the current draft."""
 
@@ -265,10 +266,10 @@ def _resolve_client(settings: Settings, client: Any | None) -> Any:
 
 def _server_catalog_context(
     db: Session, revision: CatalogDraftRevision | None
-) -> tuple[str, str, ProductDraft | None]:
+) -> tuple[str, str, ProductDraftV2 | None]:
     if revision is not None:
-        current = product_draft_v1_from_snapshot(revision.snapshot_json)
-        store_id = current.variants[0].inventory[0].store_id
+        current = product_draft_v2_from_snapshot(revision.snapshot_json)
+        store_id = current.inventory[0].store_id
         return current.seed_run_id, store_id, current
 
     context = db.execute(
@@ -291,9 +292,14 @@ def _server_catalog_context(
 
 
 def _provider_input(
-    command: CatalogAICommandRequest, current: ProductDraft | None
+    command: CatalogAICommandRequest,
+    current: ProductDraftV2 | None,
+    references: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    payload: dict[str, Any] = {"presenter_instruction": command.instruction}
+    payload: dict[str, Any] = {
+        "presenter_instruction": command.instruction,
+        "catalog_references": references,
+    }
     if current is not None:
         payload["current_draft"] = current.model_dump(mode="json")
     return [
@@ -364,60 +370,113 @@ def _usage(response: Any) -> dict[str, int]:
     return normalize_usage(value if isinstance(value, Mapping) else {})
 
 
+def _catalog_reference_context(db: Session) -> dict[str, Any]:
+    brands = db.scalars(
+        select(CatalogBrand).where(CatalogBrand.active.is_(True)).order_by(CatalogBrand.name)
+    ).all()
+    stores = db.scalars(select(Store).order_by(Store.name, Store.id)).all()
+    return {
+        "brands": [{"id": brand.id, "name": brand.name} for brand in brands],
+        "stores": [
+            {
+                "id": store.id,
+                "name": store.name,
+                "city": store.city,
+                "state": store.state,
+            }
+            for store in stores
+        ],
+        "categories": sorted(CATEGORY_TAXONOMY),
+        "availability": ["in stock", "low stock", "preorder", "out of stock"],
+    }
+
+
 def _product_from_proposal(
+    db: Session,
     proposal: CatalogAIProductProposal,
     *,
     seed_run_id: str,
     store_id: str,
     product_id: str | None,
-) -> ProductDraft:
+    current: ProductDraftV2 | None,
+) -> ProductDraftV2:
+    brand = db.get(CatalogBrand, proposal.brand_id)
+    if (
+        brand is None
+        or not brand.active
+        or brand.normalized_name != normalized_brand_name(proposal.brand)
+    ):
+        raise CatalogAICommandError(
+            code="unknown_catalog_brand",
+            detail="Select an existing canonical brand or use Add Brand before saving this draft.",
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            retryable=False,
+        )
+    inventory = proposal.inventory or (
+        [
+            CatalogAIInventoryProposal(
+                store_id=store_id,
+                availability="out of stock",
+                inventory_qty=0,
+            )
+        ]
+        if current is None
+        else []
+    )
+    if inventory:
+        proposed_store_ids = {row.store_id for row in inventory}
+        known_store_ids = set(
+            db.scalars(select(Store.id).where(Store.id.in_(proposed_store_ids))).all()
+        )
+        if proposed_store_ids != known_store_ids:
+            raise CatalogAICommandError(
+                code="unknown_catalog_store",
+                detail="Select an existing catalog store before saving initial inventory.",
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
     if product_id is None:
         key = catalog_key_for_values(
-            brand=proposal.brand,
+            brand=brand.name,
             title=proposal.title,
             category=proposal.category,
         )
         product_id = catalog_product_id_for_key(key)
-    return ProductDraft(
+    return ProductDraftV2(
         product_id=product_id,
         seed_run_id=seed_run_id,
         title=proposal.title,
         description=proposal.description,
-        brand=proposal.brand,
+        brand_id=brand.id,
+        brand=brand.name,
         category=proposal.category,
+        price_min=Decimal(str(proposal.price_min)),
+        price_max=Decimal(str(proposal.price_max)),
+        link=proposal.link,
+        color=proposal.color,
+        material=proposal.material,
+        gender=proposal.gender,
+        season=proposal.season,
         metadata={
+            **(current.metadata if current else {}),
             "source": "catalog_studio_responses",
             "image_direction": proposal.image_direction,
+            "design_specification": proposal.design_specification.model_dump(mode="json"),
         },
-        design_specification=proposal.design_specification,
-        variant_axes=proposal.variant_axes,
-        primary_variant_index=proposal.primary_variant_index,
-        variants=[
-            VariantDraft(
-                color=variant.color,
-                material=variant.material,
-                gender=variant.gender,
-                season=variant.season,
-                price_min=Decimal(str(variant.price_min)),
-                price_max=Decimal(str(variant.price_max)),
-                link=None,
-                image_link=None,
-                image_set={},
-                metadata={},
-                inventory=[
-                    InventoryDraft(
-                        store_id=store_id,
-                        size=inventory.size,
-                        availability=inventory.availability,
-                        inventory_qty=inventory.inventory_qty,
-                        objective_weight=Decimal(str(inventory.objective_weight)),
-                        metadata={},
-                    )
-                    for inventory in variant.inventory
-                ],
-            )
-            for variant in proposal.variants
-        ],
+        media=list(current.media) if current else [],
+        inventory=(
+            [
+                ProductInventoryDraftV2(
+                    store_id=row.store_id,
+                    size=row.size,
+                    availability=row.availability,
+                    inventory_qty=row.inventory_qty,
+                )
+                for row in inventory
+            ]
+            if inventory
+            else list(current.inventory if current else [])
+        ),
     )
 
 
@@ -605,15 +664,17 @@ def _store_success(
     current_revision, current_version = _validate_command_state(
         db, workflow=workflow, command=command, principal=principal
     )
-    seed_run_id, store_id, _ = _server_catalog_context(db, current_revision)
+    seed_run_id, store_id, current = _server_catalog_context(db, current_revision)
     current_product_id = (
         current_revision.catalog_product_id if current_revision is not None else None
     )
     product = _product_from_proposal(
+        db,
         proposal,
         seed_run_id=seed_run_id,
         store_id=store_id,
         product_id=current_product_id,
+        current=current,
     )
     if current_revision is None and (
         db.get(CatalogProduct, product.product_id) is not None
@@ -765,6 +826,7 @@ def execute_catalog_ai_command(
     started = time.monotonic()
     try:
         _, _, current_product = _server_catalog_context(db, current_revision)
+        references = _catalog_reference_context(db)
         provider = _resolve_client(settings, client)
         with genai_llm_span(
             "catalog_studio_draft",
@@ -781,7 +843,7 @@ def execute_catalog_ai_command(
             response = provider.responses.parse(
                 model=settings.catalog_studio_responses_model,
                 instructions=CATALOG_AI_INSTRUCTIONS,
-                input=_provider_input(command, current_product),
+                input=_provider_input(command, current_product, references),
                 text_format=CatalogAIProductProposal,
                 moderation={"model": settings.catalog_studio_moderation_model},
                 max_output_tokens=settings.catalog_studio_responses_max_output_tokens,

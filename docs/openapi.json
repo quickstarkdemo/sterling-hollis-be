@@ -600,7 +600,7 @@
             "type": "string"
           },
           "product": {
-            "$ref": "#/components/schemas/ProductDraft-Output"
+            "$ref": "#/components/schemas/ProductDraftV2-Output"
           },
           "product_id": {
             "title": "Product Id",
@@ -662,6 +662,41 @@
           "workflow"
         ],
         "title": "CatalogAIWorkflowResponse",
+        "type": "object"
+      },
+      "CatalogCapabilityStatus": {
+        "properties": {
+          "authoring_schema_version": {
+            "const": 2,
+            "title": "Authoring Schema Version",
+            "type": "integer"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "feature_disabled",
+                  "missing_api_key",
+                  "missing_safety_secret"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "configured",
+          "authoring_schema_version"
+        ],
+        "title": "CatalogCapabilityStatus",
         "type": "object"
       },
       "CatalogCategory": {
@@ -733,7 +768,17 @@
         "type": "object"
       },
       "CatalogImageApprovalRequest": {
+        "additionalProperties": false,
         "properties": {
+          "approval_intent": {
+            "default": "add",
+            "enum": [
+              "add",
+              "replace"
+            ],
+            "title": "Approval Intent",
+            "type": "string"
+          },
           "draft_id": {
             "maxLength": 64,
             "minLength": 1,
@@ -744,6 +789,19 @@
             "minimum": 1.0,
             "title": "Expected Draft Version",
             "type": "integer"
+          },
+          "replace_media_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replace Media Id"
           }
         },
         "required": [
@@ -755,6 +813,15 @@
       },
       "CatalogImageApprovalResponse": {
         "properties": {
+          "approval_intent": {
+            "default": "add",
+            "enum": [
+              "add",
+              "replace"
+            ],
+            "title": "Approval Intent",
+            "type": "string"
+          },
           "approval_status": {
             "const": "approved",
             "default": "approved",
@@ -779,6 +846,17 @@
               }
             ],
             "title": "Media Id"
+          },
+          "predecessor_media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predecessor Media Id"
           },
           "variant_index": {
             "title": "Variant Index",
@@ -1171,6 +1249,59 @@
         "title": "CatalogMediaCommandRequest",
         "type": "object"
       },
+      "CatalogMediaMutationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "set_main",
+              "reorder",
+              "remove",
+              "restore"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "draft_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "media_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Id"
+          },
+          "ordered_media_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Ordered Media Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_draft_version",
+          "action"
+        ],
+        "title": "CatalogMediaMutationRequest",
+        "type": "object"
+      },
       "CatalogProduct": {
         "properties": {
           "attributes": {
@@ -1205,6 +1336,7 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
             "title": "Default Variant Id"
           },
           "description": {
@@ -1433,7 +1565,7 @@
       "CatalogStudioCapabilities": {
         "properties": {
           "catalog": {
-            "$ref": "#/components/schemas/CapabilityStatus"
+            "$ref": "#/components/schemas/CatalogCapabilityStatus"
           },
           "image_generation": {
             "$ref": "#/components/schemas/CapabilityStatus"
@@ -3555,6 +3687,7 @@
                 "type": "null"
               }
             ],
+            "deprecated": true,
             "title": "Default Variant Id"
           },
           "description": {
@@ -3585,6 +3718,13 @@
                 "type": "null"
               }
             ]
+          },
+          "inventory": {
+            "items": {
+              "$ref": "#/components/schemas/ProductInventory"
+            },
+            "title": "Inventory",
+            "type": "array"
           },
           "inventory_summary": {
             "$ref": "#/components/schemas/ProductInventorySummary"
@@ -3629,6 +3769,7 @@
             "type": "string"
           },
           "variants": {
+            "deprecated": true,
             "items": {
               "$ref": "#/components/schemas/CatalogVariant"
             },
@@ -3685,7 +3826,6 @@
             "items": {
               "$ref": "#/components/schemas/ProductMediaDraft"
             },
-            "maxItems": 24,
             "title": "Media",
             "type": "array"
           },
@@ -3789,7 +3929,6 @@
             "items": {
               "$ref": "#/components/schemas/ProductMediaDraft"
             },
-            "maxItems": 24,
             "title": "Media",
             "type": "array"
           },
@@ -3946,7 +4085,6 @@
             "items": {
               "$ref": "#/components/schemas/ProductMediaDraft"
             },
-            "maxItems": 24,
             "title": "Media",
             "type": "array"
           },
@@ -4124,7 +4262,6 @@
             "items": {
               "$ref": "#/components/schemas/ProductMediaDraft"
             },
-            "maxItems": 24,
             "title": "Media",
             "type": "array"
           },
@@ -4447,6 +4584,17 @@
             "title": "Intent",
             "type": "string"
           },
+          "predecessor_media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predecessor Media Id"
+          },
           "role": {
             "title": "Role",
             "type": "string"
@@ -4520,6 +4668,18 @@
             "additionalProperties": true,
             "title": "Parameters",
             "type": "object"
+          },
+          "predecessor_media_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predecessor Media Id"
           },
           "provenance": {
             "additionalProperties": true,
@@ -8209,6 +8369,74 @@
           }
         ],
         "summary": "Create a product media variation from the approved core image",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/media-mutations": {
+      "post": {
+        "operationId": "create_catalog_media_mutation_api_admin_catalog_workflows__workflow_id__media_mutations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogMediaMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Set main, reorder, remove, or restore product media",
         "tags": [
           "catalog-studio-admin"
         ]

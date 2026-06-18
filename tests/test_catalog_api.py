@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -214,18 +215,39 @@ def test_product_list_filters_facets_and_inventory_shape(monkeypatch):
     assert {facet["name"] for facet in payload["facets"]} == {"brand", "category", "size", "color"}
 
 
-def test_product_detail_and_related(monkeypatch):
+def test_product_detail_and_related(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="app.catalog.legacy_projection")
     with _catalog_client(monkeypatch) as client:
         detail = client.get("/api/products/prod_1")
         related = client.get("/api/products/prod_1/related", params={"limit": 5})
 
     assert detail.status_code == 200
     assert detail.json()["attributes"]["material"] == "silk"
+    assert detail.json()["inventory"][0]["store_id"] == "1001"
+    assert detail.json()["inventory"][0]["inventory_qty"] == 12
+    assert detail.json()["variants"][0]["id"].startswith("var_compat_")
     assert detail.json()["variants"][0]["inventory"][0]["store_id"] == "1001"
+    assert detail.json()["variants"][0]["price_min"] == detail.json()["price_min"]
+    assert detail.json()["variants"][0]["images"] == detail.json()["images"]
+    assert "catalog_legacy_variant_projection" in caplog.messages
     assert related.status_code == 200
     related_ids = {item["id"] for item in related.json()["items"]}
     assert detail.json()["id"] not in related_ids
     assert len(related_ids) >= 1
+
+
+def test_openai_feed_uses_canonical_published_products(monkeypatch):
+    with _catalog_client(monkeypatch) as client:
+        response = client.get("/feeds/products/openai", params={"store_id": "1001"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 4
+    assert all(item["id"].startswith("cat_") for item in payload["items"])
+    dress = next(item for item in payload["items"] if item["title"] == "Valentino Rose Dress")
+    assert dress["price"] == "750.00 USD"
+    assert dress["availability"] == "in_stock"
+    assert dress["image_link"] == "https://cdn.example/products/prod_1-detail-1.jpg"
 
 
 def test_product_search_and_recommendations_do_not_require_embeddings(monkeypatch):

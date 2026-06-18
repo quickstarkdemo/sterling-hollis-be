@@ -22,13 +22,16 @@ the retail chat surface.
 ## Identity Model
 
 - Catalog products use `cat_...` IDs.
-- Display variants use `var_...` IDs.
+- `default_variant_id` and `variants[]` are deprecated compatibility fields.
+  New clients must use the canonical product, `media[]`, and `inventory[]`
+  fields instead.
 - Stores are inventory context only. Use `store_id` as a filter or inventory
   dimension, not as product identity.
-- Product cards are parent catalog products with `default_variant_id`, price
-  range, images, attributes, and inventory summary.
-- Product detail expands the parent product into `variants[]`, variant galleries,
-  sizes, and per-store inventory rows.
+- Product cards are canonical products with a product-level price range, images,
+  attributes, and inventory summary.
+- Product detail adds canonical `media[]` and per-store `inventory[]`. Its single
+  `variants[]` entry is a read-only projection for legacy consumers and must not
+  be used for writes or new UI state.
 
 ## Runtime Base URLs
 
@@ -119,8 +122,9 @@ Studio administrator policy used by `/api/admin/*`.
 2. Use `/api/categories` to build category navigation.
 3. Use `/api/products` or `/api/categories/{category}/products` for collection
    pages with filters and pagination.
-4. Use `/api/products/{product_id}` for PDP data. Expect `variants[]`, image
-   galleries, sizes, and store inventory here.
+4. Use `/api/products/{product_id}` for PDP data. Read product-level facts,
+   `media[]`, and `inventory[]`; ignore deprecated `variants[]` and
+   `default_variant_id` in new code.
 5. Use `/api/products/{product_id}/related` for related-product rails.
 6. Use `/api/recommendations/products` for AI/rules-assisted rails.
 7. Use `/api/recommendations/image` when a shopper uploads an inspiration image.
@@ -274,7 +278,7 @@ authorization: Bearer <Clerk token>
     "image_generation": {"configured": true},
     "realtime": {"configured": false, "reason": "feature_disabled"},
     "worker_storage": {"configured": true},
-    "catalog": {"configured": true}
+    "catalog": {"configured": true, "authoring_schema_version": 2}
   }
 }
 ```
@@ -546,9 +550,17 @@ For a follow-up refinement:
 }
 ```
 
-The success response contains the validated private draft and the current
-business timeline. The timeline records distinct Moderation and Responses
-events. The owner-only `developer=true` workflow projection adds bounded model,
+The success response contains a canonical `schema_version: 2` private product
+draft and the current business timeline. The Responses schema uses a canonical
+`brand_id`/`brand` pair, product-level price and attributes, optional initial
+inventory, and image intent. It does not generate variant families,
+`variant_axes`, or `primary_variant_index`. The model may select only brands and
+stores supplied by the backend. If the requested brand is absent, create it
+through **Add Brand** and retry; the command returns `unknown_catalog_brand`
+without persisting a draft.
+
+The timeline records distinct Moderation and Responses events. The owner-only
+`developer=true` workflow projection adds bounded model,
 request ID, latency, usage, policy, and structured-output metadata without the
 presenter instruction, system instructions, private reasoning, or raw provider
 objects. Provider timeouts and invalid structured output leave the prior draft
@@ -931,6 +943,16 @@ Recommended sorts:
 - `inventory_desc`
 
 ## Product Card Shape
+
+Public catalog lists, detail, search, recommendations, chat, MCP discovery, and
+the deprecated OpenAI product feed all derive price, attributes, inventory, and
+managed media from the same canonical product records. Draft, archived,
+unapproved, and removed media remain private.
+
+For compatibility, product cards still include `default_variant_id`, and detail
+still includes one synthetic `variants[]` entry derived from the same canonical
+facts. Both fields are deprecated, read-only, and instrumented on the backend so
+remaining legacy reads can be removed safely.
 
 ```json
 {

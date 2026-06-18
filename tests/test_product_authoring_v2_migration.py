@@ -134,8 +134,12 @@ def test_legacy_multi_variant_backfill_characterizes_public_price_and_inventory(
         ]
         assert public.price_min == 495.0
         assert public.price_max == 550.0
-        assert len(public.variants) == 2
-        assert sum(row.inventory_qty for variant in public.variants for row in variant.inventory) == 9
+        assert len(public.variants) == 1
+        assert public.variants[0].price_min == public.price_min
+        assert public.variants[0].price_max == public.price_max
+        assert public.variants[0].attributes == public.attributes
+        assert public.variants[0].inventory == public.inventory
+        assert sum(row.inventory_qty for row in public.inventory) == 9
         assert product.price_min == Decimal("495.00")
         assert product.price_max == Decimal("550.00")
         assert product.color == "Ivory"

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.catalog.schemas import ProductSort
+from app.catalog.service import ProductFilters, list_products
 from app.database import get_db
-from app.models import Product
 from app.schemas import (
     CustomerRecommendationRequest,
     CustomerRecommendationResponse,
@@ -42,29 +42,38 @@ def openai_product_feed(store_id: str | None = None, limit: int = 2000, db: Sess
 
     Retail frontend product discovery should use the declarative `/api/*` catalog endpoints.
     """
-    query = select(Product)
-    if store_id:
-        query = query.where(Product.store_id == store_id)
-
-    products = db.scalars(query.limit(limit)).all()
+    products = list_products(
+        db,
+        ProductFilters(
+            store_id=store_id,
+            include_preorder=True,
+            sort=ProductSort.relevance,
+            limit=max(1, min(limit, 2000)),
+        ),
+        include_facets=False,
+    ).items
 
     feed_rows = []
-    for p in products:
+    for product in products:
         feed_rows.append(
             {
-                "id": p.id,
-                "title": p.title,
-                "description": p.description,
-                "link": p.link,
-                "image_link": p.image_link,
-                "price": f"{p.price:.2f} USD",
-                "availability": p.availability,
-                "brand": p.brand,
-                "category": p.category,
-                "color": p.color,
-                "size": p.size,
-                "material": p.material,
-                "gender": p.gender,
+                "id": product.id,
+                "title": product.title,
+                "description": product.description,
+                "link": product.link,
+                "image_link": (
+                    product.images.primary_url
+                    if product.images and product.images.primary_url
+                    else product.image_url
+                ),
+                "price": f"{product.price:.2f} USD",
+                "availability": product.inventory_summary.availability,
+                "brand": product.brand,
+                "category": product.category,
+                "color": product.attributes.get("color"),
+                "size": None,
+                "material": product.attributes.get("material"),
+                "gender": product.attributes.get("gender"),
             }
         )
 
