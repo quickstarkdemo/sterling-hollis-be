@@ -67,7 +67,17 @@ def require_catalog_admin(
     )
 
 
-def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, bool]]:
+def _realtime_capability(settings: Settings, *, openai_configured: bool) -> dict[str, object]:
+    if not settings.catalog_studio_realtime_enabled:
+        return {"configured": False, "reason": "feature_disabled"}
+    if not openai_configured:
+        return {"configured": False, "reason": "missing_api_key"}
+    if not settings.catalog_studio_realtime_safety_identifier_secret.strip():
+        return {"configured": False, "reason": "missing_safety_secret"}
+    return {"configured": True}
+
+
+def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, object]]:
     openai_configured = bool((settings.openai_api_key or "").strip())
     image_storage_configured = bool((settings.product_image_output_dir or "").strip())
     catalog_configured = bool((settings.database_url or "").strip())
@@ -75,13 +85,7 @@ def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, bool]
         "responses": {"configured": openai_configured},
         "moderation": {"configured": openai_configured},
         "image_generation": {"configured": openai_configured and image_storage_configured},
-        "realtime": {
-            "configured": (
-                openai_configured
-                and settings.catalog_studio_realtime_enabled
-                and bool(settings.catalog_studio_realtime_safety_identifier_secret.strip())
-            )
-        },
+        "realtime": _realtime_capability(settings, openai_configured=openai_configured),
         "worker_storage": {"configured": image_storage_configured},
         "catalog": {"configured": catalog_configured},
     }

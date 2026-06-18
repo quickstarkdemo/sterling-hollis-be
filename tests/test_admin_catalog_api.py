@@ -764,6 +764,88 @@ def test_publication_preserves_private_authoring_metadata_for_later_revisions(mo
         )
 
 
+def test_product_media_publishes_without_creating_inventory_variants(monkeypatch):
+    payload = _snapshot(title="Media Gallery Coat")
+    payload["product"]["media"] = [
+        {
+            "media_id": "media_core",
+            "role": "core",
+            "intent": "manual",
+            "source_media_id": None,
+            "parameters": {},
+            "image_set": {
+                "primary_url": "https://example.com/core.jpg",
+                "thumbnail_url": "https://example.com/core-thumb.jpg",
+            },
+            "approval_status": "approved",
+            "display_order": 0,
+            "provenance": {"source": "manual"},
+        },
+        {
+            "media_id": "media_room",
+            "role": "variation",
+            "intent": "scene",
+            "source_media_id": "media_core",
+            "parameters": {"scene": "living room"},
+            "image_set": {"primary_url": "https://example.com/room.jpg"},
+            "approval_status": "approved",
+            "display_order": 1,
+            "provenance": {"model": "gpt-image"},
+        },
+    ]
+
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        draft = client.post(
+            "/api/admin/catalog/products/drafts",
+            headers=_headers("media-gallery-draft"),
+            json=payload,
+        ).json()
+        published = client.post(
+            f"/api/admin/catalog/products/{draft['product_id']}/publish",
+            headers=_headers("media-gallery-publish"),
+            json={"draft_id": draft["id"], "expected_version": 0},
+        )
+        public = client.get(f"/api/products/{draft['product_id']}").json()
+
+        assert published.status_code == 200
+        assert public["images"]["primary_url"] == "https://example.com/core.jpg"
+        assert [asset["id"] for asset in public["media"]] == ["media_core", "media_room"]
+        assert public["media"][1]["intent"] == "scene"
+        assert len(public["variants"]) == 1
+        assert public["variants"][0]["inventory"][0]["inventory_qty"] == 8
+
+
+def test_product_media_rejects_unapproved_assets_before_publication(monkeypatch):
+    payload = _snapshot(title="Pending Media Coat")
+    payload["product"]["media"] = [
+        {
+            "media_id": "media_core_pending",
+            "role": "core",
+            "intent": "manual",
+            "parameters": {},
+            "image_set": {"primary_url": "https://example.com/pending.jpg"},
+            "approval_status": "pending",
+            "display_order": 0,
+            "provenance": {},
+        }
+    ]
+
+    with _admin_catalog_client(monkeypatch) as (client, _):
+        draft = client.post(
+            "/api/admin/catalog/products/drafts",
+            headers=_headers("pending-media-draft"),
+            json=payload,
+        ).json()
+        published = client.post(
+            f"/api/admin/catalog/products/{draft['product_id']}/publish",
+            headers=_headers("pending-media-publish"),
+            json={"draft_id": draft["id"], "expected_version": 0},
+        )
+
+        assert published.status_code == 409
+        assert "approved core image" in published.json()["detail"]
+
+
 def test_safe_draft_round_trip_preserves_server_image_state_and_detects_conflicts(monkeypatch):
     with _admin_catalog_client(monkeypatch) as (client, sessions):
         with sessions() as db:

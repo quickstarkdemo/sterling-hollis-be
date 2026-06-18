@@ -32,6 +32,9 @@ class CatalogImageJobResponse(BaseModel):
     action: Literal["generate", "refine"]
     variant_index: int
     image_variant_set_id: str | None = None
+    source_media_id: str | None = None
+    target_media_id: str | None = None
+    intent: str | None = None
     model: str
     size: str
     quality: str
@@ -52,7 +55,34 @@ class CatalogImageApprovalResponse(BaseModel):
     job_id: str
     draft_id: str
     variant_index: int
+    media_id: str | None = None
     approval_status: Literal["approved"] = "approved"
+
+
+class CatalogMediaCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    draft_id: str = Field(min_length=1, max_length=64)
+    expected_draft_version: int = Field(ge=1)
+    source_media_id: str = Field(min_length=1, max_length=64)
+    intent: Literal["color", "angle", "scene", "scale", "people", "freeform"]
+    parameters: dict = Field(default_factory=dict)
+    instruction: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_instruction(self):
+        if self.intent == "freeform" and not self.instruction:
+            raise ValueError("instruction is required for a freeform media variation")
+        if len(self.parameters) > 8:
+            raise ValueError("parameters supports at most 8 entries")
+        for key, value in self.parameters.items():
+            if not key or len(key) > 64:
+                raise ValueError("parameter names must contain 1 to 64 characters")
+            if not isinstance(value, (str, int, float, bool)) or (
+                isinstance(value, str) and len(value) > 500
+            ):
+                raise ValueError("parameter values must be primitives no longer than 500 characters")
+        return self
 
 
 class CatalogImageVariantSetRequest(BaseModel):

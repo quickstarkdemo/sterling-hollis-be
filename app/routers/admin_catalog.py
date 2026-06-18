@@ -28,6 +28,7 @@ from app.catalog.image_schemas import (
     CatalogImageJobResponse,
     CatalogImageVariantSetRequest,
     CatalogImageVariantSetResponse,
+    CatalogMediaCommandRequest,
 )
 from app.catalog.workflow_schemas import (
     CatalogWorkflowResponse,
@@ -50,6 +51,7 @@ from app.services.catalog_images import (
     approve_catalog_image,
     enqueue_catalog_image_job,
     enqueue_catalog_image_variant_set,
+    enqueue_catalog_media_job,
     get_catalog_image_job,
     get_catalog_image_variant_set,
 )
@@ -87,6 +89,11 @@ def get_catalog_realtime_service(
 
 class CapabilityStatus(BaseModel):
     configured: bool
+    reason: Literal[
+        "feature_disabled",
+        "missing_api_key",
+        "missing_safety_secret",
+    ] | None = None
 
 
 class CatalogStudioCapabilities(BaseModel):
@@ -103,7 +110,11 @@ class CatalogStudioSessionResponse(BaseModel):
     capabilities: CatalogStudioCapabilities
 
 
-@router.get("/session", response_model=CatalogStudioSessionResponse)
+@router.get(
+    "/session",
+    response_model=CatalogStudioSessionResponse,
+    response_model_exclude_none=True,
+)
 def catalog_studio_session(
     response: Response,
     _: AuthenticatedPrincipal = Depends(require_catalog_admin),
@@ -502,6 +513,30 @@ def create_catalog_image_command(
     settings: Settings = Depends(get_settings),
 ) -> CatalogImageJobResponse:
     return enqueue_catalog_image_job(
+        db,
+        workflow_id=workflow_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        settings=settings,
+    )
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/media-commands",
+    response_model=CatalogImageJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Create a product media variation from the approved core image",
+)
+def create_catalog_media_command(
+    workflow_id: str,
+    request: CatalogMediaCommandRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> CatalogImageJobResponse:
+    return enqueue_catalog_media_job(
         db,
         workflow_id=workflow_id,
         request=request,

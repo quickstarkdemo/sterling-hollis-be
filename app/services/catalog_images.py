@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -14,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.catalog.admin_schemas import ProductDraft
+from app.catalog.admin_schemas import ProductDraft, ProductMediaDraft
 from app.catalog.image_schemas import (
     CatalogImageApprovalRequest,
     CatalogImageApprovalResponse,
@@ -22,6 +23,7 @@ from app.catalog.image_schemas import (
     CatalogImageJobResponse,
     CatalogImageVariantSetRequest,
     CatalogImageVariantSetResponse,
+    CatalogMediaCommandRequest,
 )
 from app.catalog.workflow_schemas import WorkflowEventInput
 from app.config import Settings
@@ -112,6 +114,9 @@ def _job_response(job: ImageGenerationJob) -> CatalogImageJobResponse:
         action=job.requested_action or "generate",  # type: ignore[arg-type]
         variant_index=job.requested_variant_index or 0,
         image_variant_set_id=job.image_variant_set_id,
+        source_media_id=job.source_media_id,
+        target_media_id=job.target_media_id,
+        intent=job.requested_intent,
         model=job.model,
         size=job.size,
         quality=job.quality,
@@ -122,6 +127,32 @@ def _job_response(job: ImageGenerationJob) -> CatalogImageJobResponse:
         started_at=job.started_at,
         finished_at=job.finished_at,
     )
+
+
+def _editable_source_path(image_set: dict[str, Any], settings: Settings) -> Path | None:
+    stored_path = str(image_set.get("file_path") or "").strip()
+    if stored_path:
+        candidate = Path(stored_path)
+        if candidate.is_file():
+            return candidate
+
+    primary_url = str(image_set.get("primary_url") or "").strip()
+    if not primary_url:
+        return None
+    request_path = urlparse(primary_url).path
+    url_prefix = f"/{settings.product_image_url_path.strip('/')}".rstrip("/")
+    expected_prefix = f"{url_prefix}/"
+    if not request_path.startswith(expected_prefix):
+        return None
+
+    filename = Path(request_path).name
+    if not filename or request_path != f"{expected_prefix}{filename}":
+        return None
+    output_dir = Path(settings.product_image_output_dir).resolve()
+    candidate = (output_dir / filename).resolve()
+    if candidate.parent != output_dir or not candidate.is_file():
+        return None
+    return candidate
 
 
 def enqueue_catalog_image_job(
@@ -242,6 +273,152 @@ def enqueue_catalog_image_job(
         raise _conflict("Catalog image state changed; retry with fresh state.") from exc
     db.refresh(job)
     return _job_response(job)
+
+
+def enqueue_catalog_media_job(
+    db: Session,
+    *,
+    workflow_id: str,
+    request: CatalogMediaCommandRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    settings: Settings,
+) -> CatalogImageJobResponse:
+    if not idempotency_key.strip():
+        raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
+    workflow = _owned_workflow(db, workflow_id, principal)
+    key_hash = _hash(idempotency_key.strip())
+    fingerprint = _request_hash(workflow_id, request)
+    existing = db.scalar(
+        select(ImageGenerationJob).where(
+            ImageGenerationJob.workflow_id == workflow_id,
+            ImageGenerationJob.idempotency_key_hash == key_hash,
+        )
+    )
+    if existing:
+        if existing.request_hash != fingerprint:
+            raise _conflict("Idempotency-Key was already used for a different media command.")
+        return _job_response(existing)
+
+    revision, draft = _current_draft(
+        db,
+        workflow=workflow,
+        draft_id=request.draft_id,
+        expected_version=request.expected_draft_version,
+        principal=principal,
+    )
+    source = next(
+        (asset for asset in draft.media if asset.media_id == request.source_media_id),
+        None,
+    )
+    if source is None or source.role != "core" or source.approval_status != "approved":
+        raise _conflict("Media variations require an approved core image.")
+    source_file = _editable_source_path(source.image_set, settings)
+    if source_file is None:
+        raise _conflict("The approved core image is no longer available for editing.")
+    source_path = str(source_file)
+
+    target_media_id = f"media_{uuid4().hex[:20]}"
+    display_order = max((asset.display_order for asset in draft.media), default=-1) + 1
+    draft.media.append(
+        ProductMediaDraft(
+            media_id=target_media_id,
+            role="variation",
+            intent=request.intent,
+            source_media_id=source.media_id,
+            parameters=request.parameters,
+            image_set={},
+            approval_status="pending",
+            display_order=display_order,
+            provenance={},
+        )
+    )
+    revision.snapshot_json = draft.model_dump(mode="json")
+    options = product_image_options(detail_count=1, settings=settings)
+    job = ImageGenerationJob(
+        id=f"imgjob_{uuid4().hex[:12]}",
+        workflow_id=workflow.id,
+        draft_revision_id=revision.id,
+        expected_draft_version=request.expected_draft_version,
+        requested_action="refine",
+        requested_variant_index=0,
+        source_media_id=source.media_id,
+        target_media_id=target_media_id,
+        requested_intent=request.intent,
+        idempotency_key_hash=key_hash,
+        request_hash=fingerprint,
+        refinement_prompt=_media_refinement_prompt(request),
+        source_image_path=source_path,
+        limit=1,
+        detail_count=1,
+        thumbnail_size=options.thumbnail_size,
+        overwrite=True,
+        missing_images_only=False,
+        model=options.model,
+        size=options.size,
+        quality=options.quality,
+        output_format=options.output_format,
+        status=IndexJobStatus.queued.value,
+        attempted=0,
+        generated=0,
+        skipped=0,
+        failed_count=0,
+        status_breakdown={},
+        result_sample=[],
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(job)
+    db.flush()
+    append_workflow_event(
+        db,
+        workflow_id=workflow.id,
+        principal=principal,
+        settings=settings,
+        commit=False,
+        event=WorkflowEventInput(
+            client_event_id=f"media-{job.id}-queued",
+            stage="image",
+            capability="image_generation",
+            status="queued",
+            business_summary=f"Queued a {request.intent} product media variation.",
+            model=job.model,
+            request_payload={
+                "draft_id": revision.id,
+                "source_media_id": source.media_id,
+                "target_media_id": target_media_id,
+                "intent": request.intent,
+            },
+            draft_id=revision.id,
+            image_job_id=job.id,
+        ),
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        concurrent = db.scalar(
+            select(ImageGenerationJob).where(
+                ImageGenerationJob.workflow_id == workflow_id,
+                ImageGenerationJob.idempotency_key_hash == key_hash,
+            )
+        )
+        if concurrent and concurrent.request_hash == fingerprint:
+            return _job_response(concurrent)
+        raise _conflict("Catalog media state changed; retry with fresh state.") from exc
+    db.refresh(job)
+    return _job_response(job)
+
+
+def _media_refinement_prompt(request: CatalogMediaCommandRequest) -> str:
+    parameter_text = "; ".join(
+        f"{key}: {value}" for key, value in sorted(request.parameters.items())
+    )
+    instruction = request.instruction or parameter_text or request.intent
+    return (
+        "Preserve the exact product identity, materials, construction, logos, and proportions "
+        f"from the approved core image. Create a {request.intent} presentation change only. "
+        f"Requested change: {instruction}. Do not add readable text, prices, or unrelated products."
+    )
 
 
 def _variant_set_id(
@@ -753,6 +930,8 @@ def _process_catalog_image_job(
             "n": 1,
         }
         if job.requested_action == "refine":
+            if job.target_media_id:
+                params["input_fidelity"] = "high"
             with Path(job.source_image_path or "").open("rb") as source:
                 response = client.images.edit(image=source, **params)
         else:
@@ -799,13 +978,7 @@ def _process_catalog_image_job(
             )
 
         current = ProductDraft.model_validate(revision.snapshot_json)
-        variant = current.variants[variant_index]
-        previous = dict(variant.image_set) if variant.image_set else None
-        history = list((previous or {}).get("history") or [])
-        if previous:
-            history.append({key: value for key, value in previous.items() if key != "history"})
-        variant.image_link = detail_url
-        variant.image_set = {
+        generated_image_set = {
             "thumbnail_url": thumb_url,
             "primary_url": detail_url,
             "detail_urls": [detail_url],
@@ -817,8 +990,31 @@ def _process_catalog_image_job(
             "approval_status": "review",
             "job_id": job.id,
             "file_path": str(detail_path),
-            "history": history,
         }
+        if job.target_media_id:
+            media_asset = next(
+                (asset for asset in current.media if asset.media_id == job.target_media_id),
+                None,
+            )
+            if media_asset is None or media_asset.source_media_id != job.source_media_id:
+                raise RuntimeError("The target product media asset is no longer current.")
+            generated_image_set["history"] = []
+            media_asset.image_set = generated_image_set
+            media_asset.provenance = {
+                "model": job.model,
+                "job_id": job.id,
+                "source_media_id": job.source_media_id,
+                "intent": job.requested_intent,
+            }
+        else:
+            variant = current.variants[variant_index]
+            previous = dict(variant.image_set) if variant.image_set else None
+            history = list((previous or {}).get("history") or [])
+            if previous:
+                history.append({key: value for key, value in previous.items() if key != "history"})
+            generated_image_set["history"] = history
+            variant.image_link = detail_url
+            variant.image_set = generated_image_set
         revision.snapshot_json = current.model_dump(mode="json")
         job.status = IndexJobStatus.succeeded.value
         job.attempted = 1
@@ -850,6 +1046,8 @@ def _process_catalog_image_job(
                     "approval_status": "review",
                     "image_variant_set_id": job.image_variant_set_id,
                     "variant_index": variant_index,
+                    "target_media_id": job.target_media_id,
+                    "intent": job.requested_intent,
                 },
                 draft_id=revision.id,
                 image_job_id=job.id,
@@ -976,16 +1174,36 @@ def approve_catalog_image(
     if job.status != IndexJobStatus.succeeded.value:
         raise _conflict("Only a successfully generated image can be approved.")
     variant_index = job.requested_variant_index or 0
-    image_set = draft.variants[variant_index].image_set
+    media_asset = next(
+        (asset for asset in draft.media if asset.media_id == job.target_media_id),
+        None,
+    ) if job.target_media_id else None
+    image_set = media_asset.image_set if media_asset else draft.variants[variant_index].image_set
     if image_set.get("job_id") != job.id:
-        raise _conflict("This image is no longer the current result for the draft variant.")
+        raise _conflict("This image is no longer the current result for the catalog draft.")
     if image_set.get("approval_status") == "approved":
         return CatalogImageApprovalResponse(
             job_id=job.id,
             draft_id=revision.id,
             variant_index=variant_index,
+            media_id=job.target_media_id,
         )
     image_set["approval_status"] = "approved"
+    if media_asset:
+        media_asset.approval_status = "approved"
+    elif not draft.media and variant_index == draft.primary_variant_index:
+        draft.media.append(
+            ProductMediaDraft(
+                media_id=f"media_{uuid4().hex[:20]}",
+                role="core",
+                intent="manual",
+                parameters={},
+                image_set=dict(image_set),
+                approval_status="approved",
+                display_order=0,
+                provenance={"model": job.model, "job_id": job.id},
+            )
+        )
     revision.snapshot_json = draft.model_dump(mode="json")
     append_workflow_event(
         db,
@@ -1004,6 +1222,7 @@ def approve_catalog_image(
                 "approval_status": "approved",
                 "variant_index": variant_index,
                 "image_variant_set_id": job.image_variant_set_id,
+                "media_id": job.target_media_id,
             },
             draft_id=revision.id,
             image_job_id=job.id,
@@ -1015,4 +1234,5 @@ def approve_catalog_image(
         job_id=job.id,
         draft_id=revision.id,
         variant_index=variant_index,
+        media_id=job.target_media_id,
     )

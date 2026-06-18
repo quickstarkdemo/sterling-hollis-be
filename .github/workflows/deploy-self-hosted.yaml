@@ -293,6 +293,21 @@ jobs:
           UVICORN_RELOAD=false
           EOF
 
+      - name: Validate Catalog Studio Realtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REALTIME_ENABLED="$(grep '^CATALOG_STUDIO_REALTIME_ENABLED=' deploy/runtime.env | cut -d= -f2-)"
+          if [[ "${REALTIME_ENABLED}" == "true" ]]; then
+            OPENAI_KEY="$(grep '^OPENAI_API_KEY=' deploy/runtime.env | cut -d= -f2-)"
+            SAFETY_SECRET="$(grep '^CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET=' deploy/runtime.env | cut -d= -f2-)"
+            if [[ -z "${OPENAI_KEY}" || -z "${SAFETY_SECRET}" ]]; then
+              echo "Realtime is enabled but OPENAI_API_KEY or CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET is missing."
+              exit 1
+            fi
+          fi
+
       - name: Preserve product image volume
         run: |
           set -euo pipefail
