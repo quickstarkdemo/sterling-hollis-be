@@ -35,6 +35,7 @@ from app.catalog.image_schemas import (
     CatalogImageVariantSetRequest,
     CatalogImageVariantSetResponse,
     CatalogMediaCommandRequest,
+    CatalogMediaMutationRequest,
 )
 from app.catalog.workflow_schemas import (
     CatalogWorkflowResponse,
@@ -65,6 +66,7 @@ from app.services.catalog_images import (
     enqueue_catalog_media_job,
     get_catalog_image_job,
     get_catalog_image_variant_set,
+    mutate_catalog_media,
 )
 from app.services.catalog_realtime import (
     CatalogRealtimeError,
@@ -744,6 +746,28 @@ def create_catalog_media_command(
         idempotency_key=idempotency_key,
         principal=principal,
         settings=settings,
+    )
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/media-mutations",
+    response_model=DraftRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Set main, reorder, remove, or restore product media",
+)
+def create_catalog_media_mutation(
+    workflow_id: str,
+    request: CatalogMediaMutationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> DraftRevisionResponse:
+    return mutate_catalog_media(
+        db,
+        workflow_id=workflow_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
     )
 
 

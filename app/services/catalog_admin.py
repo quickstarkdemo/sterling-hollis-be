@@ -78,6 +78,112 @@ def _conflict(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
+def _managed_image_urls(image_set: dict, image_link: str | None = None) -> list[str]:
+    """Return authored image URLs in presentation order without thumbnail duplicates."""
+    candidates = [image_set.get("primary_url")]
+    candidates.extend(image_set.get("detail_urls") or [])
+    if not any(candidates):
+        candidates.extend([image_set.get("thumbnail_url"), image_link])
+    elif image_link:
+        candidates.append(image_link)
+    urls: list[str] = []
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value and value not in urls:
+            urls.append(value)
+    return urls
+
+
+def _legacy_media_id(product_id: str, image_url: str) -> str:
+    digest = hashlib.sha256(f"{product_id}\0{image_url}".encode("utf-8")).hexdigest()[:24]
+    return f"media_legacy_{digest}"
+
+
+def _complete_media_payload(
+    *,
+    product_id: str,
+    persisted_assets: list[ProductMediaAsset],
+    variants: list[ProductVariant],
+) -> list[dict]:
+    """Project every published image as one stable, approved media item."""
+    payload: list[dict] = []
+    represented_urls: dict[str, dict] = {}
+    known_ids = {asset.id for asset in persisted_assets}
+
+    for asset in persisted_assets:
+        image_set = _safe_image_value(dict(asset.image_set or {}))
+        item = {
+            "media_id": asset.id,
+            "role": asset.role,
+            "intent": asset.intent,
+            "source_media_id": asset.source_media_id,
+            "predecessor_media_id": asset.predecessor_media_id,
+            "parameters": dict(asset.parameters or {}),
+            "image_set": image_set,
+            "approval_status": "approved",
+            "display_order": asset.display_order,
+            "provenance": dict(asset.provenance or {}),
+        }
+        payload.append(item)
+        primary_urls = _managed_image_urls(image_set)
+        if primary_urls:
+            represented_urls[primary_urls[0]] = item
+
+    candidates: list[tuple[str, str, str | None]] = []
+    for asset in persisted_assets:
+        urls = _managed_image_urls(_safe_image_value(dict(asset.image_set or {})))
+        candidates.extend((url, "managed_detail", asset.id) for url in urls[1:])
+    for variant in variants:
+        image_set = _safe_image_value(dict(variant.image_set or {}))
+        candidates.extend(
+            (url, "legacy_variant", variant.id)
+            for url in _managed_image_urls(image_set, variant.image_link)
+        )
+
+    for image_url, source_kind, source_id in candidates:
+        existing = represented_urls.get(image_url)
+        if existing is not None:
+            source_ids = existing["provenance"].setdefault("source_ids", [])
+            if source_id and source_id not in source_ids:
+                source_ids.append(source_id)
+            continue
+        media_id = _legacy_media_id(product_id, image_url)
+        if media_id in known_ids:
+            media_id = _legacy_media_id(product_id, f"{source_kind}:{source_id}:{image_url}")
+        known_ids.add(media_id)
+        item = {
+            "media_id": media_id,
+            "role": "variation",
+            "intent": "manual",
+            "source_media_id": None,
+            "predecessor_media_id": None,
+            "parameters": {},
+            "image_set": {
+                "thumbnail_url": image_url,
+                "primary_url": image_url,
+                "detail_urls": [image_url],
+            },
+            "approval_status": "approved",
+            "display_order": len(payload),
+            "provenance": {
+                "source": source_kind,
+                "source_ids": [source_id] if source_id else [],
+                "source_url": image_url,
+            },
+        }
+        payload.append(item)
+        represented_urls[image_url] = item
+
+    if not payload:
+        return []
+    core = next((item for item in payload if item["role"] == "core"), payload[0])
+    ordered = [core, *(item for item in payload if item is not core)]
+    for display_order, item in enumerate(ordered):
+        item["role"] = "core" if item is core else "variation"
+        item["display_order"] = display_order
+    return ordered
+
+
 def _request_hash(payload: dict) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -402,11 +508,19 @@ def _preserve_server_image_fields(
     payload = incoming.model_dump(mode="json")
     for index, asset in enumerate(incoming.media):
         previous_asset = current_media.get(asset.media_id)
-        if previous_asset is None or not asset.image_set:
+        if previous_asset is None:
             continue
-        payload["media"][index]["image_set"] = _restore_server_image_fields(
-            asset.image_set, previous_asset.image_set
-        )
+        for field in (
+            "approval_status",
+            "source_media_id",
+            "predecessor_media_id",
+            "provenance",
+        ):
+            payload["media"][index][field] = getattr(previous_asset, field)
+        if asset.image_set:
+            payload["media"][index]["image_set"] = _restore_server_image_fields(
+                asset.image_set, previous_asset.image_set
+            )
     for index, variant in enumerate(incoming.variants):
         previous = current_variants.get(_variant_identity(variant))
         if previous is None or not variant.image_set:
@@ -424,11 +538,19 @@ def _preserve_server_image_fields_v2(
     payload = incoming.model_dump(mode="json")
     for index, asset in enumerate(incoming.media):
         previous = current_media.get(asset.media_id)
-        if previous is None or not asset.image_set:
+        if previous is None:
             continue
-        payload["media"][index]["image_set"] = _restore_server_image_fields(
-            asset.image_set, previous.image_set
-        )
+        for field in (
+            "approval_status",
+            "source_media_id",
+            "predecessor_media_id",
+            "provenance",
+        ):
+            payload["media"][index][field] = getattr(previous, field)
+        if asset.image_set:
+            payload["media"][index]["image_set"] = _restore_server_image_fields(
+                asset.image_set, previous.image_set
+            )
     return ProductDraftV2.model_validate(payload)
 
 
@@ -507,24 +629,16 @@ def _published_snapshot(db: Session, row: CatalogProduct) -> ProductDraft:
         ),
         0,
     )
-    media_payload = [
-        {
-            "media_id": asset.id,
-            "role": asset.role,
-            "intent": asset.intent,
-            "source_media_id": asset.source_media_id,
-            "parameters": dict(asset.parameters or {}),
-            "image_set": _safe_image_value(dict(asset.image_set or {})),
-            "approval_status": "approved",
-            "display_order": asset.display_order,
-            "provenance": dict(asset.provenance or {}),
-        }
-        for asset in db.scalars(
-            select(ProductMediaAsset)
-            .where(ProductMediaAsset.catalog_product_id == row.id)
-            .order_by(ProductMediaAsset.display_order.asc())
-        ).all()
-    ]
+    persisted_assets = db.scalars(
+        select(ProductMediaAsset)
+        .where(ProductMediaAsset.catalog_product_id == row.id)
+        .order_by(ProductMediaAsset.display_order.asc(), ProductMediaAsset.id.asc())
+    ).all()
+    media_payload = _complete_media_payload(
+        product_id=row.id,
+        persisted_assets=list(persisted_assets),
+        variants=list(variants),
+    )
     return ProductDraft.model_validate(
         {
             "product_id": row.id,
@@ -1004,6 +1118,7 @@ def _apply_snapshot(
                 role=asset.role,
                 intent=asset.intent,
                 source_media_id=asset.source_media_id,
+                predecessor_media_id=asset.predecessor_media_id,
                 image_set={
                     key: value
                     for key, value in asset.image_set.items()

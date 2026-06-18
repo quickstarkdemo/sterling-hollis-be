@@ -136,6 +136,10 @@ user ID before it is sent as an OpenAI safety identifier.
 | `CATALOG_STUDIO_TRACE_MAX_OBJECT_KEYS` | `50` | Optional trace override | no |
 | `CATALOG_STUDIO_TRACE_MAX_BYTES` | `16384` | Optional trace override | no |
 | `CATALOG_STUDIO_TRACE_REDACTED_KEYS` | empty | Add deployment-specific JSON keys to redact | no |
+| `CATALOG_STUDIO_MEDIA_ALLOWED_HOSTS` | empty | Published remote images are used as edit sources | no |
+| `CATALOG_STUDIO_MEDIA_FETCH_MAX_BYTES` | `8388608` | Optional remote image safety override | no |
+| `CATALOG_STUDIO_MEDIA_FETCH_TIMEOUT_SECONDS` | `15` | Optional remote image safety override | no |
+| `CATALOG_STUDIO_MEDIA_FETCH_MAX_REDIRECTS` | `3` | Optional remote image safety override | no |
 | `PRODUCT_IMAGE_MODEL` | `gpt-image-2` | Product image generation is used | no |
 | `PRODUCT_IMAGE_SIZE` | `1024x1024` | Optional image override | no |
 | `PRODUCT_IMAGE_QUALITY` | `medium` | Optional image override | no |

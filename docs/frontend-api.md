@@ -85,6 +85,7 @@ Generated image files are served from:
 | Execute an approved Realtime draft tool call | `POST` | `/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls` |
 | Generate or refine draft imagery | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-commands` |
 | Create a product media variation | `POST` | `/api/admin/catalog/workflows/{workflow_id}/media-commands` |
+| Set main, reorder, remove, or restore product media | `POST` | `/api/admin/catalog/workflows/{workflow_id}/media-mutations` |
 | Generate coherent remaining variants | `POST` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets` |
 | Poll a coordinated variant set | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-variant-sets/{image_variant_set_id}` |
 | Poll one draft image job | `GET` | `/api/admin/catalog/workflows/{workflow_id}/image-jobs/{job_id}` |
@@ -664,8 +665,10 @@ not duplicate queued, successful, or approved siblings.
 
 ### Product media variations
 
-Product media is independent of sellable variants and inventory. A draft may
-carry one approved `core` media asset plus ordered `variation` assets for
+Product media is independent of sellable variants and inventory. Catalog Studio
+projects every distinct published product and legacy variant image into a stable
+media item without truncating large galleries. A draft carries one approved
+`core` media asset plus ordered `variation` assets for
 color treatment, camera angle, scene, scale, people, or a bounded freeform
 instruction. Creating media never creates a SKU, price, size, or inventory row.
 `parameters` accepts at most eight primitive values; keys are limited to 64
@@ -687,10 +690,38 @@ Content-Type: application/json
 }
 ```
 
-The source must be the approved core asset and must still exist in worker
-storage. The worker uses a high-fidelity image edit, writes the result to a new
+The source may be any approved media asset. Edit instructions are moderated
+before a job is created. Locally managed images are read from worker storage;
+published HTTPS sources are materialized only when their origin is allowlisted,
+every resolved and redirected address is public, and content type, byte limit,
+redirect count, and timeout checks pass. The worker uses a high-fidelity image
+edit, writes the result to a new
 draft media asset, and returns its `target_media_id`. Poll and approve the job
-through the existing image-job endpoints. Publication requires every retained
+through the existing image-job endpoints. Approval accepts
+`approval_intent: "add"` or `approval_intent: "replace"`; replacement also
+requires `replace_media_id` and preserves source and predecessor lineage.
+
+Gallery-only changes use a new versioned draft revision and the same optimistic
+concurrency contract as other edits:
+
+```http
+POST /api/admin/catalog/workflows/{workflow_id}/media-mutations
+Authorization: Bearer <Clerk token>
+Idempotency-Key: media-set-main-1
+Content-Type: application/json
+
+{
+  "draft_id": "draft_...",
+  "expected_draft_version": 2,
+  "action": "set_main",
+  "media_id": "media_..."
+}
+```
+
+Use `action: "reorder"` with `ordered_media_ids`; the current main image must
+remain first. `remove` rejects the last image, the current main image, and media
+used by an active image job. `restore` recovers an approved media item from
+earlier owned draft history. Publication requires every retained
 media asset to be approved and exposes approved assets in `display_order` on
 the public product detail response. Products without product media retain the
 existing default-variant image fallback.

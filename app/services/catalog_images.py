@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
@@ -11,15 +13,19 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
+    DraftMutationRequestV2,
+    DraftRevisionResponse,
     ProductDraft,
     ProductMediaDraft,
     product_draft_snapshot_from_v1,
     product_draft_v1_from_snapshot,
+    product_draft_v2_from_snapshot,
 )
 from app.catalog.image_schemas import (
     CatalogImageApprovalRequest,
@@ -29,14 +35,16 @@ from app.catalog.image_schemas import (
     CatalogImageVariantSetRequest,
     CatalogImageVariantSetResponse,
     CatalogMediaCommandRequest,
+    CatalogMediaMutationRequest,
 )
 from app.catalog.workflow_schemas import WorkflowEventInput
 from app.config import Settings
 from app.models import CatalogDraftRevision, CatalogWorkflow, ImageGenerationJob
 from app.schemas import IndexJobStatus
 from app.services.auth.clerk import AuthenticatedPrincipal
-from app.services.catalog_admin import draft_revision_version
+from app.services.catalog_admin import create_draft_v2, draft_revision_version
 from app.services.catalog_workflow import append_workflow_event
+from app.services.image_analysis import ImageUploadError, validate_image_bytes
 from app.services.product_images import _write_thumbnail, product_image_options
 
 try:
@@ -134,26 +142,139 @@ def _job_response(job: ImageGenerationJob) -> CatalogImageJobResponse:
     )
 
 
+def _allowed_media_host(hostname: str, settings: Settings) -> bool:
+    configured = {
+        value.strip().lower()
+        for value in settings.catalog_studio_media_allowed_hosts.split(",")
+        if value.strip()
+    }
+    public_host = (urlparse(settings.public_base_url).hostname or "").lower()
+    if public_host:
+        configured.add(public_host)
+    hostname = hostname.lower().rstrip(".")
+    return any(
+        hostname == allowed
+        or (allowed.startswith("*.") and hostname.endswith(allowed[1:]))
+        for allowed in configured
+    )
+
+
+def _validate_public_media_url(value: str, settings: Settings) -> str:
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not hostname or parsed.username or parsed.password:
+        raise _conflict("Remote media sources must use an approved HTTPS origin.")
+    if parsed.port not in (None, 443) or not _allowed_media_host(hostname, settings):
+        raise _conflict("Remote media source origin is not approved.")
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+        }
+    except OSError as exc:
+        raise _conflict("Remote media source address could not be verified.") from exc
+    if not addresses:
+        raise _conflict("Remote media source address could not be verified.")
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise _conflict("Remote media source resolved to a blocked network address.")
+    return value
+
+
+def _materialize_remote_source(primary_url: str, settings: Settings) -> Path:
+    current_url = primary_url
+    max_redirects = settings.catalog_studio_media_fetch_max_redirects
+    _validate_public_media_url(current_url, settings)
+    with httpx.Client(
+        follow_redirects=False,
+        timeout=settings.catalog_studio_media_fetch_timeout_seconds,
+        trust_env=False,
+    ) as client:
+        for redirect_count in range(max_redirects + 1):
+            _validate_public_media_url(current_url, settings)
+            try:
+                with client.stream("GET", current_url) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        if redirect_count == max_redirects:
+                            raise _conflict("Remote media source exceeded the redirect limit.")
+                        location = response.headers.get("location")
+                        if not location:
+                            raise _conflict("Remote media source returned an invalid redirect.")
+                        next_url = str(httpx.URL(current_url).join(location))
+                        current_url = next_url
+                        continue
+                    if response.status_code != 200:
+                        raise _conflict("Remote media source could not be downloaded.")
+                    content_length = response.headers.get("content-length")
+                    limit = settings.catalog_studio_media_fetch_max_bytes
+                    if content_length and int(content_length) > limit:
+                        raise _conflict("Remote media source exceeds the allowed byte limit.")
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in response.iter_bytes():
+                        total += len(chunk)
+                        if total > limit:
+                            raise _conflict("Remote media source exceeds the allowed byte limit.")
+                        chunks.append(chunk)
+                    content = b"".join(chunks)
+                    content_type = response.headers.get("content-type")
+            except (httpx.HTTPError, ValueError) as exc:
+                raise _conflict("Remote media source could not be downloaded safely.") from exc
+            break
+        else:  # pragma: no cover - loop always exits or raises
+            raise _conflict("Remote media source could not be downloaded.")
+
+    try:
+        mime_type = validate_image_bytes(content, content_type, max_bytes=limit)
+    except ImageUploadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime_type]
+    output_dir = Path(settings.product_image_output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"media-source-{_hash(primary_url)[:24]}.{extension}"
+    destination = (output_dir / filename).resolve()
+    if destination.parent != output_dir:
+        raise _conflict("Remote media source could not be stored safely.")
+    if not destination.exists():
+        destination.write_bytes(content)
+    return destination
+
+
 def _editable_source_path(image_set: dict[str, Any], settings: Settings) -> Path | None:
+    output_dir = Path(settings.product_image_output_dir).resolve()
     stored_path = str(image_set.get("file_path") or "").strip()
     if stored_path:
-        candidate = Path(stored_path)
-        if candidate.is_file():
+        candidate = Path(stored_path).resolve()
+        if candidate.parent == output_dir and candidate.is_file():
             return candidate
 
     primary_url = str(image_set.get("primary_url") or "").strip()
     if not primary_url:
         return None
-    request_path = urlparse(primary_url).path
+    parsed_url = urlparse(primary_url)
+    request_path = parsed_url.path
     url_prefix = f"/{settings.product_image_url_path.strip('/')}".rstrip("/")
     expected_prefix = f"{url_prefix}/"
-    if not request_path.startswith(expected_prefix):
+    public_origin = urlparse(settings.public_base_url)
+    same_public_origin = (
+        not parsed_url.scheme
+        and not parsed_url.netloc
+        or (
+            parsed_url.scheme == public_origin.scheme
+            and parsed_url.hostname == public_origin.hostname
+            and (parsed_url.port or (443 if parsed_url.scheme == "https" else 80))
+            == (public_origin.port or (443 if public_origin.scheme == "https" else 80))
+        )
+    )
+    if not request_path.startswith(expected_prefix) or not same_public_origin:
+        if urlparse(primary_url).scheme == "https":
+            return _materialize_remote_source(primary_url, settings)
         return None
 
     filename = Path(request_path).name
     if not filename or request_path != f"{expected_prefix}{filename}":
         return None
-    output_dir = Path(settings.product_image_output_dir).resolve()
     candidate = (output_dir / filename).resolve()
     if candidate.parent != output_dir or not candidate.is_file():
         return None
@@ -288,6 +409,7 @@ def enqueue_catalog_media_job(
     idempotency_key: str,
     principal: AuthenticatedPrincipal,
     settings: Settings,
+    moderation_client: Any | None = None,
 ) -> CatalogImageJobResponse:
     if not idempotency_key.strip():
         raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
@@ -312,15 +434,16 @@ def enqueue_catalog_media_job(
         expected_version=request.expected_draft_version,
         principal=principal,
     )
+    _moderate_media_instruction(request, settings=settings, client=moderation_client)
     source = next(
         (asset for asset in draft.media if asset.media_id == request.source_media_id),
         None,
     )
-    if source is None or source.role != "core" or source.approval_status != "approved":
-        raise _conflict("Media variations require an approved core image.")
+    if source is None or source.approval_status != "approved":
+        raise _conflict("Media variations require an approved source image.")
     source_file = _editable_source_path(source.image_set, settings)
     if source_file is None:
-        raise _conflict("The approved core image is no longer available for editing.")
+        raise _conflict("The approved source image is no longer available for editing.")
     source_path = str(source_file)
 
     target_media_id = f"media_{uuid4().hex[:20]}"
@@ -417,15 +540,169 @@ def enqueue_catalog_media_job(
 
 
 def _media_refinement_prompt(request: CatalogMediaCommandRequest) -> str:
-    parameter_text = "; ".join(
-        f"{key}: {value}" for key, value in sorted(request.parameters.items())
+    parameter_name = {
+        "color": "color",
+        "angle": "angle",
+        "scene": "scene",
+        "scale": "scale",
+        "people": "people",
+    }.get(request.intent)
+    parameter_value = request.parameters.get(parameter_name) if parameter_name else None
+    instruction = request.instruction or (
+        f"Use this {request.intent}: {parameter_value}"
+        if parameter_value is not None
+        else f"Create a new {request.intent} presentation"
     )
-    instruction = request.instruction or parameter_text or request.intent
     return (
         "Preserve the exact product identity, materials, construction, logos, and proportions "
-        f"from the approved core image. Create a {request.intent} presentation change only. "
+        f"from the approved source image. Create a {request.intent} presentation change only. "
         f"Requested change: {instruction}. Do not add readable text, prices, or unrelated products."
     )
+
+
+def mutate_catalog_media(
+    db: Session,
+    *,
+    workflow_id: str,
+    request: CatalogMediaMutationRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+) -> DraftRevisionResponse:
+    if not idempotency_key.strip():
+        raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
+    workflow = _owned_workflow(db, workflow_id, principal)
+    if workflow.draft_revision_id == request.draft_id:
+        revision, _ = _current_draft(
+            db,
+            workflow=workflow,
+            draft_id=request.draft_id,
+            expected_version=request.expected_draft_version,
+            principal=principal,
+        )
+    else:
+        revision = db.get(CatalogDraftRevision, request.draft_id)
+        if revision is None or revision.created_by != principal.provider_user_id:
+            raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
+    product = product_draft_v2_from_snapshot(revision.snapshot_json)
+    media_by_id = {asset.media_id: asset for asset in product.media}
+
+    if request.action == "set_main":
+        selected = media_by_id.get(request.media_id or "")
+        if selected is None or selected.approval_status != "approved":
+            raise _conflict("The main image must be a current approved media asset.")
+        product.media = [selected, *(asset for asset in product.media if asset is not selected)]
+        for display_order, asset in enumerate(product.media):
+            asset.role = "core" if asset is selected else "variation"
+            asset.display_order = display_order
+    elif request.action == "reorder":
+        if set(request.ordered_media_ids) != set(media_by_id):
+            raise _conflict("Reorder must include every current media asset exactly once.")
+        current_core = next(asset for asset in product.media if asset.role == "core")
+        if request.ordered_media_ids[0] != current_core.media_id:
+            raise _conflict("Reorder must keep the current main image first.")
+        product.media = [media_by_id[media_id] for media_id in request.ordered_media_ids]
+        for display_order, asset in enumerate(product.media):
+            asset.display_order = display_order
+    elif request.action == "remove":
+        selected = media_by_id.get(request.media_id or "")
+        if selected is None:
+            raise _conflict("The media asset is no longer in the current draft.")
+        if len(product.media) == 1:
+            raise _conflict("The last media asset cannot be removed.")
+        if selected.role == "core":
+            raise _conflict("Set another main image before removing the current main image.")
+        active_job = db.scalar(
+            select(ImageGenerationJob.id).where(
+                ImageGenerationJob.draft_revision_id == revision.id,
+                ImageGenerationJob.source_media_id == selected.media_id,
+                ImageGenerationJob.status.in_([
+                    IndexJobStatus.queued.value,
+                    IndexJobStatus.running.value,
+                ]),
+            )
+        )
+        if active_job:
+            raise _conflict("Media used by an active image job cannot be removed.")
+        product.media = [asset for asset in product.media if asset is not selected]
+        for display_order, asset in enumerate(product.media):
+            asset.display_order = display_order
+    else:
+        if request.media_id in media_by_id:
+            raise _conflict("The media asset is already present in the current draft.")
+        historical = None
+        older_revisions = db.scalars(
+            select(CatalogDraftRevision)
+            .where(
+                CatalogDraftRevision.catalog_product_id == revision.catalog_product_id,
+                CatalogDraftRevision.created_by == principal.provider_user_id,
+                CatalogDraftRevision.id != revision.id,
+            )
+            .order_by(CatalogDraftRevision.created_at.desc(), CatalogDraftRevision.id.desc())
+        ).all()
+        for older_revision in older_revisions:
+            older_product = product_draft_v2_from_snapshot(older_revision.snapshot_json)
+            historical = next(
+                (
+                    asset
+                    for asset in older_product.media
+                    if asset.media_id == request.media_id
+                    and asset.approval_status == "approved"
+                ),
+                None,
+            )
+            if historical is not None:
+                break
+        if historical is None:
+            raise HTTPException(status_code=404, detail="Removed media history was not found.")
+        restored = historical.model_copy(deep=True)
+        restored.role = "variation"
+        restored.display_order = len(product.media)
+        product.media.append(restored)
+
+    response, _ = create_draft_v2(
+        db,
+        DraftMutationRequestV2(
+            expected_version=revision.base_version,
+            current_draft_id=revision.id,
+            expected_draft_version=request.expected_draft_version,
+            moderation_state=revision.moderation_state,
+            product=product,
+        ),
+        idempotency_key=idempotency_key,
+        principal=principal,
+        path_product_id=revision.catalog_product_id,
+    )
+    return response
+
+
+def _moderate_media_instruction(
+    request: CatalogMediaCommandRequest,
+    *,
+    settings: Settings,
+    client: Any | None = None,
+) -> None:
+    instruction = request.instruction
+    if not instruction:
+        return
+    if client is None:
+        if not settings.openai_api_key:
+            raise HTTPException(status_code=503, detail="Media instruction moderation is unavailable.")
+        if OpenAI is None:
+            raise HTTPException(status_code=503, detail="Media instruction moderation is unavailable.")
+        client = OpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.catalog_studio_responses_timeout_seconds,
+        )
+    try:
+        response = client.moderations.create(
+            model=settings.catalog_studio_moderation_model,
+            input=instruction,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Media instruction moderation failed.") from exc
+    results = list(getattr(response, "results", []) or [])
+    if not results or bool(getattr(results[0], "flagged", False)):
+        raise HTTPException(status_code=422, detail="Media instruction was blocked by safety policy.")
 
 
 def _variant_set_id(
@@ -1191,15 +1468,62 @@ def approve_catalog_image(
     if image_set.get("job_id") != job.id:
         raise _conflict("This image is no longer the current result for the catalog draft.")
     if image_set.get("approval_status") == "approved":
+        recorded_intent = (
+            str(media_asset.provenance.get("approval_intent") or "add")
+            if media_asset
+            else "add"
+        )
+        recorded_predecessor = (
+            media_asset.predecessor_media_id if media_asset else None
+        )
+        if (
+            recorded_intent != request.approval_intent
+            or recorded_predecessor != request.replace_media_id
+        ):
+            raise _conflict("This image was already approved with a different intent.")
         return CatalogImageApprovalResponse(
             job_id=job.id,
             draft_id=revision.id,
             variant_index=variant_index,
             media_id=job.target_media_id,
+            approval_intent=recorded_intent,  # type: ignore[arg-type]
+            predecessor_media_id=recorded_predecessor,
         )
+    predecessor = None
+    if request.approval_intent == "replace":
+        predecessor = next(
+            (
+                asset
+                for asset in draft.media
+                if asset.media_id == request.replace_media_id
+                and asset.approval_status == "approved"
+            ),
+            None,
+        )
+        if predecessor is None or predecessor is media_asset:
+            raise _conflict("Replacement approval requires a current approved media asset.")
     image_set["approval_status"] = "approved"
     if media_asset:
         media_asset.approval_status = "approved"
+        media_asset.provenance = {
+            **media_asset.provenance,
+            "approval_intent": request.approval_intent,
+        }
+        if predecessor is not None:
+            media_asset.role = predecessor.role
+            media_asset.display_order = predecessor.display_order
+            media_asset.predecessor_media_id = predecessor.media_id
+            media_asset.provenance = {
+                **media_asset.provenance,
+                "predecessor_media_id": predecessor.media_id,
+            }
+            draft.media = [asset for asset in draft.media if asset is not predecessor]
+            draft.media.sort(key=lambda asset: (asset.display_order, asset.media_id))
+            core = next((asset for asset in draft.media if asset.role == "core"), None)
+            if core is not None:
+                draft.media = [core, *(asset for asset in draft.media if asset is not core)]
+            for display_order, asset in enumerate(draft.media):
+                asset.display_order = display_order
     elif not draft.media and variant_index == draft.primary_variant_index:
         draft.media.append(
             ProductMediaDraft(
@@ -1231,6 +1555,8 @@ def approve_catalog_image(
             model=job.model,
             response_payload={
                 "approval_status": "approved",
+                "approval_intent": request.approval_intent,
+                "predecessor_media_id": predecessor.media_id if predecessor else None,
                 "variant_index": variant_index,
                 "image_variant_set_id": job.image_variant_set_id,
                 "media_id": job.target_media_id,
@@ -1246,4 +1572,6 @@ def approve_catalog_image(
         draft_id=revision.id,
         variant_index=variant_index,
         media_id=job.target_media_id,
+        approval_intent=request.approval_intent,
+        predecessor_media_id=predecessor.media_id if predecessor else None,
     )

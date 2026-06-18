@@ -364,6 +364,7 @@ def product_to_catalog(
                 role=asset.role,
                 intent=asset.intent,
                 source_media_id=asset.source_media_id,
+                predecessor_media_id=asset.predecessor_media_id,
                 images=_media_images(asset),
                 display_order=asset.display_order,
             )

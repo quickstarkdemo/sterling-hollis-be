@@ -55,6 +55,7 @@ class ProductMedia(BaseModel):
     role: str
     intent: str
     source_media_id: str | None = None
+    predecessor_media_id: str | None = None
     images: ProductImages
     display_order: int
 

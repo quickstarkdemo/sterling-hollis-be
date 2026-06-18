@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     catalog_studio_trace_max_object_keys: int = 50
     catalog_studio_trace_max_bytes: int = 16384
     catalog_studio_trace_redacted_keys: str = ""
+    catalog_studio_media_allowed_hosts: str = ""
+    catalog_studio_media_fetch_max_bytes: int = 8 * 1024 * 1024
+    catalog_studio_media_fetch_timeout_seconds: float = 15.0
+    catalog_studio_media_fetch_max_redirects: int = 3
     enable_legacy_admin_routes: bool = True
     dd_site: str = "datadoghq.com"
     dd_api_key: str | None = None
