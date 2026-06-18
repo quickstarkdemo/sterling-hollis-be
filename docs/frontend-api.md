@@ -333,6 +333,67 @@ header copied from another user into Swagger.
 
 ## Catalog Studio Product Lifecycle
 
+### Canonical product-level v2 contract
+
+New merchandising clients use `/api/admin/catalog/v2/products`. The v2 draft
+contains product-level price, link, color, material, gender, season, media, and
+store inventory. It never returns `variants`, `variant_axes`,
+`primary_variant_index`, objective weights, or variant-owned inventory.
+
+The v2 lifecycle mirrors the existing optimistic, idempotent workflow:
+
+- `GET /api/admin/catalog/v2/products` lists lifecycle state.
+- `POST /api/admin/catalog/v2/products/drafts` creates a private product draft.
+- `GET /api/admin/catalog/v2/products/{product_id}` returns separate published
+  and current product-level snapshots.
+- `PUT /api/admin/catalog/v2/products/{product_id}/draft` saves a complete
+  private product snapshot with both published and draft version guards.
+- `POST /api/admin/catalog/v2/products/{product_id}/revisions` starts from the
+  current canonical published state.
+- `POST /api/admin/catalog/v2/products/{product_id}/publish` atomically promotes
+  product fields, media, and inventory.
+- `POST /api/admin/catalog/v2/products/{product_id}/archive` retains history
+  while removing the product from public reads.
+
+Inventory identity is `product_id + store_id + normalized optional size`.
+Omitting size and sending a blank size are the same identity; duplicate rows,
+negative quantities, unknown stores, stale versions, and invalid price ranges
+fail without partial writes.
+
+```json
+{
+  "expected_version": 0,
+  "moderation_state": "approved",
+  "product": {
+    "schema_version": 2,
+    "seed_run_id": "run_catalog",
+    "title": "Studio Coat",
+    "description": "A structured wool coat.",
+    "brand": "Sterling Hollis",
+    "category": "womens_apparel",
+    "price_min": 250,
+    "price_max": 300,
+    "link": "https://example.com/studio-coat",
+    "color": "Black",
+    "material": "wool",
+    "gender": "women",
+    "season": "fall",
+    "media": [],
+    "inventory": [{
+      "store_id": "1001",
+      "size": null,
+      "availability": "in stock",
+      "inventory_qty": 8
+    }]
+  }
+}
+```
+
+The unversioned routes below remain a bounded compatibility adapter for the
+currently deployed editor. Their variant-shaped reads and writes translate to
+canonical product fields and inventory, while legacy variant tables remain only
+as a temporary public/read compatibility projection.
+
 All Catalog Studio product routes require the same Clerk administrator policy
 as `/api/admin/session`. Drafts are private: they never appear in catalog lists,
 detail, search, related products, or recommendations. Editing an existing

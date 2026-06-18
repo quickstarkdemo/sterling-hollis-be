@@ -13,14 +13,22 @@ from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
     AdminDraftSnapshot,
+    AdminDraftSnapshotV2,
     AdminProductListItem,
     AdminProductListResponse,
     AdminProductResponse,
+    AdminProductResponseV2,
     DraftMutationRequest,
+    DraftMutationRequestV2,
     DraftRevisionResponse,
     LifecycleMutationResponse,
     ProductDraft,
+    ProductDraftV2,
     StartRevisionRequest,
+    product_draft_v1_from_snapshot,
+    product_draft_v1_from_v2,
+    product_draft_v2_from_snapshot,
+    product_draft_v2_from_v1,
 )
 from app.catalog.authoring import (
     authoring_metadata,
@@ -33,6 +41,7 @@ from app.models import (
     CatalogProduct,
     CatalogWorkflow,
     ProductMediaAsset,
+    ProductInventory,
     ProductVariant,
     Store,
     StoreInventory,
@@ -43,6 +52,8 @@ from app.services.catalog_normalization import (
     catalog_key_for_values,
     catalog_product_id_for_key,
     product_variant_id_for_key,
+    product_inventory_id_for_values,
+    normalized_size,
     store_inventory_id_for_values,
     variant_key_for_values,
 )
@@ -259,6 +270,21 @@ def _preserve_server_image_fields(
     return ProductDraft.model_validate(payload)
 
 
+def _preserve_server_image_fields_v2(
+    incoming: ProductDraftV2, current: ProductDraftV2
+) -> ProductDraftV2:
+    current_media = {row.media_id: row for row in current.media}
+    payload = incoming.model_dump(mode="json")
+    for index, asset in enumerate(incoming.media):
+        previous = current_media.get(asset.media_id)
+        if previous is None or not asset.image_set:
+            continue
+        payload["media"][index]["image_set"] = _restore_server_image_fields(
+            asset.image_set, previous.image_set
+        )
+    return ProductDraftV2.model_validate(payload)
+
+
 def _published_snapshot(db: Session, row: CatalogProduct) -> ProductDraft:
     variants = db.scalars(
         select(ProductVariant)
@@ -370,6 +396,45 @@ def _published_snapshot(db: Session, row: CatalogProduct) -> ProductDraft:
     )
 
 
+def _published_snapshot_v2(db: Session, row: CatalogProduct) -> ProductDraftV2:
+    compatibility = _published_snapshot(db, row)
+    inventory = db.scalars(
+        select(ProductInventory)
+        .where(ProductInventory.catalog_product_id == row.id)
+        .order_by(
+            ProductInventory.store_id.asc(),
+            ProductInventory.size_key.asc(),
+        )
+    ).all()
+    return ProductDraftV2(
+        product_id=row.id,
+        seed_run_id=row.seed_run_id,
+        title=row.title,
+        description=row.description,
+        brand=row.brand,
+        category=row.category,
+        price_min=row.price_min,
+        price_max=row.price_max,
+        link=row.link,
+        color=row.color,
+        material=row.material,
+        gender=row.gender,
+        season=row.season,
+        metadata=public_product_metadata(row.metadata_json),
+        media=compatibility.media,
+        inventory=[
+            {
+                "store_id": item.store_id,
+                "size": item.size,
+                "availability": item.availability,
+                "inventory_qty": item.inventory_qty,
+                "metadata": dict(item.metadata_json or {}),
+            }
+            for item in inventory
+        ],
+    )
+
+
 def _admin_draft_snapshot(
     db: Session,
     revision: CatalogDraftRevision,
@@ -381,8 +446,26 @@ def _admin_draft_snapshot(
         draft_version=draft_revision_version(db, revision),
         workflow_id=workflow.id if workflow else None,
         product=_safe_product_snapshot(
-            ProductDraft.model_validate(revision.snapshot_json)
+            product_draft_v1_from_snapshot(revision.snapshot_json)
         ),
+    )
+
+
+def _admin_draft_snapshot_v2(
+    db: Session,
+    revision: CatalogDraftRevision,
+    principal: AuthenticatedPrincipal,
+) -> AdminDraftSnapshotV2:
+    workflow = _workflow_for_draft(db, revision.id, principal)
+    product = product_draft_v2_from_snapshot(revision.snapshot_json)
+    payload = product.model_dump(mode="json")
+    for asset in payload.get("media", []):
+        asset["image_set"] = _safe_image_value(asset.get("image_set") or {})
+    return AdminDraftSnapshotV2(
+        revision=_draft_response(revision),
+        draft_version=draft_revision_version(db, revision),
+        workflow_id=workflow.id if workflow else None,
+        product=ProductDraftV2.model_validate(payload),
     )
 
 
@@ -432,7 +515,7 @@ def create_draft(
                     "The current draft no longer targets the expected published version."
                 )
             product = _preserve_server_image_fields(
-                product, ProductDraft.model_validate(current.snapshot_json)
+                product, product_draft_v1_from_snapshot(current.snapshot_json)
             )
         payload["product"] = product.model_dump(mode="json")
         revision = CatalogDraftRevision(
@@ -453,6 +536,94 @@ def create_draft(
                     CatalogWorkflow.owner_provider == principal.provider,
                     CatalogWorkflow.owner_provider_user_id
                     == principal.provider_user_id,
+                )
+            ).all()
+            for workflow in workflows:
+                workflow.draft_revision_id = revision.id
+                workflow.updated_at = datetime.now(timezone.utc)
+        return _draft_response(revision).model_dump(mode="json")
+
+    response, replayed = _idempotent(
+        db,
+        key=idempotency_key,
+        operation=operation,
+        payload=payload,
+        principal=principal,
+        action=action,
+    )
+    return DraftRevisionResponse.model_validate(response), replayed
+
+
+def create_draft_v2(
+    db: Session,
+    request: DraftMutationRequestV2,
+    *,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    path_product_id: str | None = None,
+) -> tuple[DraftRevisionResponse, bool]:
+    if path_product_id is None and request.expected_version != 0:
+        raise HTTPException(
+            status_code=422,
+            detail="New catalog product drafts require expected_version 0.",
+        )
+    if path_product_id is None and request.product.product_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="New catalog product IDs are assigned by the server.",
+        )
+    product_id = path_product_id or catalog_product_id_for_key(
+        catalog_key_for_values(
+            brand=request.product.brand,
+            title=request.product.title,
+            category=request.product.category,
+        )
+    )
+    if path_product_id and request.product.product_id not in (None, path_product_id):
+        raise HTTPException(status_code=422, detail="Body product_id must match the path product_id.")
+
+    product = request.product.model_copy(update={"product_id": product_id})
+    payload = request.model_dump(mode="json")
+    payload["product"] = product.model_dump(mode="json")
+    operation = f"catalog.v2.draft:{product_id}"
+
+    def action() -> dict:
+        _assert_expected_version(db, product_id, request.expected_version)
+        product_to_save = product
+        if request.current_draft_id:
+            current = _latest_owned_draft(db, product_id, principal)
+            if current is None or current.id != request.current_draft_id:
+                raise _conflict("The requested catalog draft is no longer current.")
+            actual_draft_version = draft_revision_version(db, current)
+            if actual_draft_version != request.expected_draft_version:
+                raise _conflict(
+                    f"Expected catalog draft version {request.expected_draft_version}, "
+                    f"but current version is {actual_draft_version}."
+                )
+            if current.base_version != request.expected_version:
+                raise _conflict(
+                    "The current draft no longer targets the expected published version."
+                )
+            product_to_save = _preserve_server_image_fields_v2(
+                product, product_draft_v2_from_snapshot(current.snapshot_json)
+            )
+        revision = CatalogDraftRevision(
+            id=f"draft_{uuid4().hex[:24]}",
+            catalog_product_id=product_id,
+            base_version=request.expected_version,
+            status="draft",
+            moderation_state=request.moderation_state,
+            snapshot_json=product_to_save.model_dump(mode="json"),
+            created_by=principal.provider_user_id,
+        )
+        db.add(revision)
+        db.flush()
+        if request.current_draft_id:
+            workflows = db.scalars(
+                select(CatalogWorkflow).where(
+                    CatalogWorkflow.draft_revision_id == request.current_draft_id,
+                    CatalogWorkflow.owner_provider == principal.provider,
+                    CatalogWorkflow.owner_provider_user_id == principal.provider_user_id,
                 )
             ).all()
             for workflow in workflows:
@@ -519,6 +690,7 @@ def _variant_id(product: ProductDraft, variant) -> str:
 def _apply_snapshot(
     db: Session, product_id: str, product: ProductDraft, version: int
 ) -> CatalogProduct:
+    canonical = product_draft_v2_from_v1(product)
     catalog_key = catalog_key_for_values(
         brand=product.brand, title=product.title, category=product.category
     )
@@ -564,6 +736,13 @@ def _apply_snapshot(
             description=product.description,
             brand=product.brand,
             category=product.category,
+            price_min=canonical.price_min,
+            price_max=canonical.price_max,
+            link=canonical.link,
+            color=canonical.color,
+            material=canonical.material,
+            gender=canonical.gender,
+            season=canonical.season,
             metadata_json=metadata,
             lifecycle_status="published",
             version=version,
@@ -577,6 +756,13 @@ def _apply_snapshot(
         row.description = product.description
         row.brand = product.brand
         row.category = product.category
+        row.price_min = canonical.price_min
+        row.price_max = canonical.price_max
+        row.link = canonical.link
+        row.color = canonical.color
+        row.material = canonical.material
+        row.gender = canonical.gender
+        row.season = canonical.season
         row.metadata_json = metadata
         row.lifecycle_status = "published"
         row.version = version
@@ -598,6 +784,11 @@ def _apply_snapshot(
         db.execute(
             delete(ProductMediaAsset).where(
                 ProductMediaAsset.catalog_product_id == product_id
+            )
+        )
+        db.execute(
+            delete(ProductInventory).where(
+                ProductInventory.catalog_product_id == product_id
             )
         )
         db.flush()
@@ -671,6 +862,25 @@ def _apply_snapshot(
                 display_order=asset.display_order,
             )
         )
+    for inventory in canonical.inventory:
+        display_size, size_key = normalized_size(inventory.size)
+        db.add(
+            ProductInventory(
+                id=product_inventory_id_for_values(
+                    product_id=product_id,
+                    store_id=inventory.store_id,
+                    size_key=size_key,
+                ),
+                seed_run_id=product.seed_run_id,
+                catalog_product_id=product_id,
+                store_id=inventory.store_id,
+                size=display_size,
+                size_key=size_key,
+                availability=inventory.availability,
+                inventory_qty=inventory.inventory_qty,
+                metadata_json=inventory.metadata,
+            )
+        )
     db.flush()
     return row
 
@@ -694,7 +904,7 @@ def publish_draft(
             raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
         if revision.base_version != expected_version:
             raise _conflict("Draft base version does not match the expected catalog version.")
-        product = ProductDraft.model_validate(revision.snapshot_json)
+        product = product_draft_v1_from_snapshot(revision.snapshot_json)
         _validate_publishable(db, revision, product)
         row = _apply_snapshot(db, product_id, product, expected_version + 1)
         enqueue_index_job(db, product.seed_run_id, commit=False, deduplicate=False)
@@ -827,6 +1037,78 @@ def start_product_revision(
     return AdminDraftSnapshot.model_validate(response), replayed
 
 
+def start_product_revision_v2(
+    db: Session,
+    *,
+    product_id: str,
+    request: StartRevisionRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+) -> tuple[AdminDraftSnapshotV2, bool]:
+    payload = request.model_dump(mode="json")
+    operation = f"catalog.v2.start-revision:{product_id}"
+
+    def action() -> dict:
+        row = _assert_expected_version(db, product_id, request.expected_version)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Catalog product not found.")
+        current = _latest_owned_draft(db, product_id, principal)
+        if current and current.base_version == row.version:
+            raise _conflict("This catalog product already has a current private draft.")
+        workflow = None
+        if request.workflow_id:
+            workflow = db.scalar(
+                select(CatalogWorkflow)
+                .where(CatalogWorkflow.id == request.workflow_id)
+                .with_for_update()
+            )
+            if (
+                workflow is None
+                or workflow.owner_provider != principal.provider
+                or workflow.owner_provider_user_id != principal.provider_user_id
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail="Catalog Studio catalog workflow not found.",
+                )
+            if workflow.draft_revision_id:
+                raise _conflict("This catalog workflow already has a current draft.")
+            if (
+                workflow.published_product_id
+                and workflow.published_product_id != product_id
+            ):
+                raise _conflict(
+                    "This catalog workflow is already linked to another product."
+                )
+        revision = CatalogDraftRevision(
+            id=f"draft_{uuid4().hex[:24]}",
+            catalog_product_id=product_id,
+            base_version=row.version,
+            status="draft",
+            moderation_state="approved",
+            snapshot_json=_published_snapshot_v2(db, row).model_dump(mode="json"),
+            created_by=principal.provider_user_id,
+        )
+        db.add(revision)
+        db.flush()
+        if workflow:
+            workflow.draft_revision_id = revision.id
+            workflow.published_product_id = product_id
+            workflow.updated_at = datetime.now(timezone.utc)
+            db.flush()
+        return _admin_draft_snapshot_v2(db, revision, principal).model_dump(mode="json")
+
+    response, replayed = _idempotent(
+        db,
+        key=idempotency_key,
+        operation=operation,
+        payload=payload,
+        principal=principal,
+        action=action,
+    )
+    return AdminDraftSnapshotV2.model_validate(response), replayed
+
+
 def list_admin_products(
     db: Session,
     *,
@@ -875,7 +1157,7 @@ def list_admin_products(
         draft = current_drafts.get(product_id)
         if draft:
             effective = _safe_product_snapshot(
-                ProductDraft.model_validate(draft.snapshot_json)
+                product_draft_v1_from_snapshot(draft.snapshot_json)
             )
             title = effective.title
             description = effective.description
@@ -971,8 +1253,60 @@ def get_admin_product(
         )
     if not drafts:
         return None
-    snapshot = ProductDraft.model_validate(drafts[0].snapshot_json)
+    snapshot = product_draft_v1_from_snapshot(drafts[0].snapshot_json)
     return AdminProductResponse(
+        product_id=product_id,
+        lifecycle_status="draft",
+        version=0,
+        title=snapshot.title,
+        description=snapshot.description,
+        brand=snapshot.brand,
+        category=snapshot.category,
+        metadata=snapshot.metadata,
+        current_draft=current_snapshot,
+        drafts=[_draft_response(draft) for draft in drafts],
+    )
+
+
+def get_admin_product_v2(
+    db: Session,
+    product_id: str,
+    *,
+    principal: AuthenticatedPrincipal,
+) -> AdminProductResponseV2 | None:
+    row = db.get(CatalogProduct, product_id)
+    drafts = db.scalars(
+        select(CatalogDraftRevision)
+        .where(CatalogDraftRevision.catalog_product_id == product_id)
+        .order_by(CatalogDraftRevision.created_at.desc())
+    ).all()
+    current = _latest_owned_draft(db, product_id, principal)
+    if row and current and current.base_version != row.version:
+        current = None
+    current_snapshot = (
+        _admin_draft_snapshot_v2(db, current, principal) if current else None
+    )
+    published_snapshot = _published_snapshot_v2(db, row) if row else None
+    if row:
+        effective = current_snapshot.product if current_snapshot else published_snapshot
+        assert effective is not None
+        return AdminProductResponseV2(
+            product_id=row.id,
+            lifecycle_status=row.lifecycle_status,  # type: ignore[arg-type]
+            version=row.version,
+            title=effective.title,
+            description=effective.description,
+            brand=effective.brand,
+            category=effective.category,
+            metadata=effective.metadata,
+            published_snapshot=published_snapshot,
+            current_draft=current_snapshot,
+            drafts=[_draft_response(draft) for draft in drafts],
+        )
+    if not drafts:
+        return None
+    snapshot = product_draft_v2_from_snapshot(drafts[0].snapshot_json)
+    return AdminProductResponseV2(
         product_id=product_id,
         lifecycle_status="draft",
         version=0,

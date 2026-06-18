@@ -144,6 +144,17 @@ class CatalogProduct(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     brand: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     category: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    price_min: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0"), server_default="0", nullable=False
+    )
+    price_max: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0"), server_default="0", nullable=False
+    )
+    link: Mapped[str | None] = mapped_column(String(500))
+    color: Mapped[str | None] = mapped_column(String(64))
+    material: Mapped[str | None] = mapped_column(String(64))
+    gender: Mapped[str | None] = mapped_column(String(32))
+    season: Mapped[str | None] = mapped_column(String(32))
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     lifecycle_status: Mapped[str] = mapped_column(
         String(32), default="published", server_default="published", nullable=False, index=True
@@ -161,9 +172,15 @@ class CatalogProduct(Base):
     media_assets: Mapped[list["ProductMediaAsset"]] = relationship(
         back_populates="product", cascade="all, delete-orphan"
     )
+    inventory: Mapped[list["ProductInventory"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
+        CheckConstraint("price_min >= 0", name="ck_catalog_products_price_min_non_negative"),
+        CheckConstraint("price_max >= price_min", name="ck_catalog_products_price_range_valid"),
         Index("ix_catalog_products_category_brand", "category", "brand"),
+        Index("ix_catalog_products_price", "price_min", "price_max"),
     )
 
 
@@ -250,6 +267,36 @@ class StoreInventory(Base):
         UniqueConstraint("store_id", "variant_id", "size", name="uq_store_inventory_store_variant_size"),
         Index("ix_store_inventory_store_availability", "store_id", "availability"),
         Index("ix_store_inventory_variant_size", "variant_id", "size"),
+    )
+
+
+class ProductInventory(Base):
+    __tablename__ = "product_inventory"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seed_run_id: Mapped[str] = mapped_column(ForeignKey("synthetic_runs.id"), nullable=False, index=True)
+    catalog_product_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), nullable=False, index=True)
+    size: Mapped[str | None] = mapped_column(String(64))
+    size_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    availability: Mapped[str] = mapped_column(String(32), nullable=False)
+    inventory_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    product: Mapped[CatalogProduct] = relationship(back_populates="inventory")
+
+    __table_args__ = (
+        CheckConstraint("inventory_qty >= 0", name="ck_product_inventory_qty_non_negative"),
+        UniqueConstraint(
+            "catalog_product_id",
+            "store_id",
+            "size_key",
+            name="uq_product_inventory_product_store_size_key",
+        ),
+        Index("ix_product_inventory_store_availability", "store_id", "availability"),
+        Index("ix_product_inventory_product_size", "catalog_product_id", "size_key"),
     )
 
 

@@ -8,10 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
     AdminDraftSnapshot,
+    AdminDraftSnapshotV2,
     AdminProductListResponse,
     AdminProductResponse,
+    AdminProductResponseV2,
     ArchiveRequest,
     DraftMutationRequest,
+    DraftMutationRequestV2,
     DraftRevisionResponse,
     LifecycleMutationResponse,
     PublishRequest,
@@ -41,10 +44,13 @@ from app.database import get_db
 from app.services.catalog_admin import (
     archive_product,
     create_draft,
+    create_draft_v2,
     get_admin_product,
+    get_admin_product_v2,
     list_admin_products,
     publish_draft,
     start_product_revision,
+    start_product_revision_v2,
 )
 from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
 from app.services.catalog_images import (
@@ -281,6 +287,163 @@ def admin_catalog_product(
     if product is None:
         raise HTTPException(status_code=404, detail="Catalog product not found.")
     return product
+
+
+@router.post(
+    "/catalog/v2/products/drafts",
+    response_model=DraftRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a canonical product-level catalog draft",
+)
+def create_product_draft_v2(
+    request: DraftMutationRequestV2,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> DraftRevisionResponse:
+    result, _ = create_draft_v2(
+        db,
+        request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.get(
+    "/catalog/v2/products",
+    response_model=AdminProductListResponse,
+    summary="Search canonical products across lifecycle states",
+)
+def admin_catalog_products_v2(
+    q: str | None = Query(default=None, max_length=255),
+    lifecycle_status: Literal["draft", "published", "archived"] | None = Query(
+        default=None
+    ),
+    category: str | None = Query(default=None, max_length=128),
+    brand: str | None = Query(default=None, max_length=128),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=24, ge=1, le=100),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminProductListResponse:
+    return list_admin_products(
+        db,
+        principal=principal,
+        q=q,
+        lifecycle_status=lifecycle_status,
+        category=category,
+        brand=brand,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.put(
+    "/catalog/v2/products/{product_id}/draft",
+    response_model=DraftRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Stage a canonical product-level revision",
+)
+def revise_catalog_product_v2(
+    product_id: str,
+    request: DraftMutationRequestV2,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> DraftRevisionResponse:
+    result, _ = create_draft_v2(
+        db,
+        request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        path_product_id=product_id,
+    )
+    return result
+
+
+@router.post(
+    "/catalog/v2/products/{product_id}/revisions",
+    response_model=AdminDraftSnapshotV2,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a canonical product-level revision",
+)
+def start_catalog_product_revision_v2(
+    product_id: str,
+    request: StartRevisionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminDraftSnapshotV2:
+    result, _ = start_product_revision_v2(
+        db,
+        product_id=product_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.get(
+    "/catalog/v2/products/{product_id}",
+    response_model=AdminProductResponseV2,
+    summary="Inspect canonical product-level authoring state",
+)
+def admin_catalog_product_v2(
+    product_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminProductResponseV2:
+    product = get_admin_product_v2(db, product_id, principal=principal)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Catalog product not found.")
+    return product
+
+
+@router.post(
+    "/catalog/v2/products/{product_id}/publish",
+    response_model=LifecycleMutationResponse,
+    summary="Publish a canonical product-level draft",
+)
+def publish_catalog_product_v2(
+    product_id: str,
+    request: PublishRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> LifecycleMutationResponse:
+    result, _ = publish_draft(
+        db,
+        product_id=product_id,
+        draft_id=request.draft_id,
+        expected_version=request.expected_version,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.post(
+    "/catalog/v2/products/{product_id}/archive",
+    response_model=LifecycleMutationResponse,
+    summary="Archive a canonical product",
+)
+def archive_catalog_product_v2(
+    product_id: str,
+    request: ArchiveRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> LifecycleMutationResponse:
+    result, _ = archive_product(
+        db,
+        product_id=product_id,
+        expected_version=request.expected_version,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
 
 
 @router.post(
