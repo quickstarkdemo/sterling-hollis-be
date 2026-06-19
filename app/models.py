@@ -456,6 +456,108 @@ class CatalogWorkflowEvent(Base):
     )
 
 
+class CatalogSourceBundle(Base):
+    __tablename__ = "catalog_source_bundles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_provider_user_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    catalog_product_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    draft_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    assets: Mapped[list["CatalogSourceAsset"]] = relationship(
+        back_populates="bundle",
+        cascade="all, delete-orphan",
+        order_by="CatalogSourceAsset.display_order",
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_catalog_source_bundles_owner_created",
+            "owner_provider",
+            "owner_provider_user_id",
+            "created_at",
+        ),
+    )
+
+
+class CatalogSourceAsset(Base):
+    __tablename__ = "catalog_source_assets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    bundle_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_source_bundles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    storage_provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="local_private", server_default="local_private"
+    )
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    preview_storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ready", server_default="ready", index=True
+    )
+    promoted_media_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    promoted_draft_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    bundle: Mapped[CatalogSourceBundle] = relationship(back_populates="assets")
+
+    __table_args__ = (
+        CheckConstraint("byte_size > 0", name="ck_catalog_source_assets_byte_size_positive"),
+        CheckConstraint("width > 0", name="ck_catalog_source_assets_width_positive"),
+        CheckConstraint("height > 0", name="ck_catalog_source_assets_height_positive"),
+        UniqueConstraint(
+            "bundle_id",
+            "display_order",
+            name="uq_catalog_source_assets_bundle_display_order",
+        ),
+    )
+
+
 class SupplierProductOffer(Base):
     __tablename__ = "supplier_product_offers"
 

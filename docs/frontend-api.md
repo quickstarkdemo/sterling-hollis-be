@@ -81,6 +81,12 @@ Generated image files are served from:
 | Publish an approved draft | `POST` | `/api/admin/catalog/products/{product_id}/publish` |
 | Archive a published product | `POST` | `/api/admin/catalog/products/{product_id}/archive` |
 | Inspect product lifecycle and draft history | `GET` | `/api/admin/catalog/products/{product_id}` |
+| Upload private supplier source bundle | `POST` | `/api/admin/catalog/source-bundles` |
+| List private supplier source bundles | `GET` | `/api/admin/catalog/source-bundles` |
+| Read private supplier source bundle | `GET` | `/api/admin/catalog/source-bundles/{bundle_id}` |
+| Read bounded supplier image preview | `GET` | `/api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/preview` |
+| Remove unattached supplier source | `DELETE` | `/api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}` |
+| Promote supplier source to approved draft media | `POST` | `/api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/promote` |
 | Start sanitized OpenAI catalog workflow | `POST` | `/api/admin/catalog/workflows` |
 | Append ordered workflow event | `POST` | `/api/admin/catalog/workflows/{workflow_id}/events` |
 | Generate or refine moderated product draft | `POST` | `/api/admin/catalog/workflows/{workflow_id}/draft-commands` |
@@ -337,6 +343,80 @@ The generated FastAPI docs are available at `/docs`. Public endpoints can use
 
 Never paste the standard OpenAI API key, Clerk secret key, or an authorization
 header copied from another user into Swagger.
+
+## Catalog Studio Supplier Sources
+
+Supplier handoff images are private authoring evidence, not public product
+media. Upload one ordered bundle with `multipart/form-data`:
+
+```http
+POST /api/admin/catalog/source-bundles
+Authorization: Bearer <Clerk token>
+Content-Type: multipart/form-data
+
+title=Fall supplier handoff
+draft_revision_id=draft_...
+files=<front.jpg>
+files=<detail.png>
+```
+
+JPEG, PNG, and WebP inputs are validated from their bytes and declared MIME
+type before persistence. The backend also enforces per-file byte, dimension,
+pixel-count, and per-bundle file-count limits. Client filenames may not contain
+paths. Originals are stored below `CATALOG_SOURCE_OUTPUT_DIR`, which is not
+mounted as a public static directory. Responses expose stable IDs, checksums,
+dimensions, lifecycle state, and an authenticated bounded `preview_url`; they
+never expose storage keys or filesystem paths.
+
+Use `GET /api/admin/catalog/source-bundles` to restore the owner's bundles and
+`GET /api/admin/catalog/source-bundles/{bundle_id}` for one bundle. Preview
+responses use `Cache-Control: private, no-store`. Other administrators receive
+`404` for bundle, preview, removal, and promotion requests so ownership is not
+disclosed.
+
+Upload and promotion responses use the same private, no-store policy. Preview
+responses also set `X-Content-Type-Options: nosniff`.
+
+Delete only unattached assets:
+
+```http
+DELETE /api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}
+Authorization: Bearer <Clerk token>
+```
+
+Removal is blocked while an image job uses the source and after promotion, when
+the source is retained for lineage. Explicit promotion copies a metadata-stripped
+public derivative into managed product-image storage and creates a new versioned
+draft with one approved media item. It does not change price or inventory:
+
+```http
+POST /api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/promote
+Authorization: Bearer <Clerk token>
+Idempotency-Key: promote-supplier-front-1
+Content-Type: application/json
+
+{
+  "draft_id": "draft_...",
+  "expected_draft_version": 1
+}
+```
+
+A bundle remains reusable as its product moves through later draft revisions.
+Promoted media IDs and public derivative filenames are opaque and do not embed
+the private bundle ID, source asset ID, or supplier filename. Storage failures
+return `503`; removal does not delete the database record until both managed
+private files have been removed.
+
+Relevant settings and defaults are:
+
+| Setting | Default |
+| --- | --- |
+| `CATALOG_SOURCE_OUTPUT_DIR` | `data/catalog-sources` |
+| `CATALOG_SOURCE_UPLOAD_MAX_BYTES` | `8388608` |
+| `CATALOG_SOURCE_MAX_ASSETS_PER_BUNDLE` | `20` |
+| `CATALOG_SOURCE_MAX_DIMENSION` | `12000` |
+| `CATALOG_SOURCE_MAX_PIXELS` | `40000000` |
+| `CATALOG_SOURCE_THUMBNAIL_SIZE` | `320` |
 
 ## Catalog Studio Product Lifecycle
 
