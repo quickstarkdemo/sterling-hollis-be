@@ -21,19 +21,29 @@ from sqlalchemy.orm import Session
 from app.catalog.admin_schemas import (
     AdminDraftSnapshot,
     AdminDraftSnapshotV2,
+    AdminDraftSnapshotV3,
     AdminProductListResponse,
     AdminProductResponse,
     AdminProductResponseV2,
+    AdminProductResponseV3,
     ArchiveRequest,
     BrandCreateRequest,
     BrandReference,
     CatalogReferenceData,
     DraftMutationRequest,
     DraftMutationRequestV2,
+    DraftMutationRequestV3,
     DraftRevisionResponse,
     LifecycleMutationResponse,
     PublishRequest,
+    ProductDraftPreviewV3,
+    ProductReadinessResponse,
     StartRevisionRequest,
+    CatalogSuggestionDecisionRequest,
+    CatalogSuggestionDecisionResponse,
+    CatalogSuggestionSetCreateRequest,
+    CatalogSuggestionSetListResponse,
+    CatalogSuggestionSetResponse,
 )
 from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
@@ -68,13 +78,23 @@ from app.services.catalog_admin import (
     archive_product,
     create_draft,
     create_draft_v2,
+    create_draft_v3,
     get_admin_product,
     get_admin_product_v2,
+    get_admin_product_v3,
+    get_product_preview_v3,
+    get_product_readiness_v3,
     list_admin_products,
     list_catalog_references,
     publish_draft,
     start_product_revision,
     start_product_revision_v2,
+    start_product_revision_v3,
+)
+from app.services.catalog_suggestions import (
+    create_suggestion_set,
+    decide_suggestion_set,
+    list_suggestion_sets,
 )
 from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
 from app.services.catalog_images import (
@@ -137,7 +157,7 @@ class CapabilityStatus(BaseModel):
 
 
 class CatalogCapabilityStatus(CapabilityStatus):
-    authoring_schema_version: Literal[2]
+    authoring_schema_version: Literal[3]
 
 
 class CatalogStudioCapabilities(BaseModel):
@@ -649,6 +669,210 @@ def archive_catalog_product_v2(
     result, _ = archive_product(
         db,
         product_id=product_id,
+        expected_version=request.expected_version,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.post(
+    "/catalog/v3/products/drafts",
+    response_model=DraftRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a structured catalog authoring draft",
+)
+def create_product_draft_v3(
+    request: DraftMutationRequestV3,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> DraftRevisionResponse:
+    result, _ = create_draft_v3(
+        db,
+        request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.put(
+    "/catalog/v3/products/{product_id}/draft",
+    response_model=DraftRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Stage a structured catalog authoring revision",
+)
+def revise_catalog_product_v3(
+    product_id: str,
+    request: DraftMutationRequestV3,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> DraftRevisionResponse:
+    result, _ = create_draft_v3(
+        db,
+        request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        path_product_id=product_id,
+    )
+    return result
+
+
+@router.post(
+    "/catalog/v3/products/{product_id}/revisions",
+    response_model=AdminDraftSnapshotV3,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a structured catalog product revision",
+)
+def start_catalog_product_revision_v3(
+    product_id: str,
+    request: StartRevisionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminDraftSnapshotV3:
+    result, _ = start_product_revision_v3(
+        db,
+        product_id=product_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.get(
+    "/catalog/v3/products/{product_id}",
+    response_model=AdminProductResponseV3,
+    summary="Inspect structured product authoring state",
+)
+def admin_catalog_product_v3(
+    product_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminProductResponseV3:
+    product = get_admin_product_v3(db, product_id, principal=principal)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Catalog product not found.")
+    return product
+
+
+@router.get(
+    "/catalog/v3/products/{product_id}/drafts/{draft_id}/readiness",
+    response_model=ProductReadinessResponse,
+    summary="Evaluate blocking and recommended catalog readiness checks",
+)
+def catalog_product_readiness_v3(
+    product_id: str,
+    draft_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> ProductReadinessResponse:
+    return get_product_readiness_v3(
+        db,
+        product_id=product_id,
+        draft_id=draft_id,
+        principal=principal,
+    )
+
+
+@router.get(
+    "/catalog/v3/products/{product_id}/drafts/{draft_id}/preview",
+    response_model=ProductDraftPreviewV3,
+    summary="Preview a structured product without private source references",
+)
+def catalog_product_preview_v3(
+    product_id: str,
+    draft_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> ProductDraftPreviewV3:
+    return get_product_preview_v3(
+        db,
+        product_id=product_id,
+        draft_id=draft_id,
+        principal=principal,
+    )
+
+
+@router.post(
+    "/catalog/v3/products/{product_id}/suggestion-sets",
+    response_model=CatalogSuggestionSetResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create reviewable product field suggestions",
+)
+def create_catalog_suggestion_set_v3(
+    product_id: str,
+    request: CatalogSuggestionSetCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogSuggestionSetResponse:
+    result, _ = create_suggestion_set(
+        db,
+        product_id=product_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.get(
+    "/catalog/v3/products/{product_id}/suggestion-sets",
+    response_model=CatalogSuggestionSetListResponse,
+    summary="List private reviewable product suggestions",
+)
+def list_catalog_suggestion_sets_v3(
+    product_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogSuggestionSetListResponse:
+    return list_suggestion_sets(db, product_id=product_id, principal=principal)
+
+
+@router.post(
+    "/catalog/v3/products/{product_id}/suggestion-sets/{suggestion_set_id}/decisions",
+    response_model=CatalogSuggestionDecisionResponse,
+    summary="Accept, reject, or supersede product field suggestions",
+)
+def decide_catalog_suggestion_set_v3(
+    product_id: str,
+    suggestion_set_id: str,
+    request: CatalogSuggestionDecisionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogSuggestionDecisionResponse:
+    result, _ = decide_suggestion_set(
+        db,
+        product_id=product_id,
+        suggestion_set_id=suggestion_set_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    return result
+
+
+@router.post(
+    "/catalog/v3/products/{product_id}/publish",
+    response_model=LifecycleMutationResponse,
+    summary="Publish a ready structured catalog draft",
+)
+def publish_catalog_product_v3(
+    product_id: str,
+    request: PublishRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> LifecycleMutationResponse:
+    result, _ = publish_draft(
+        db,
+        product_id=product_id,
+        draft_id=request.draft_id,
         expected_version=request.expected_version,
         idempotency_key=idempotency_key,
         principal=principal,

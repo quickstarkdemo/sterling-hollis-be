@@ -67,6 +67,43 @@
         "title": "AdminDraftSnapshotV2",
         "type": "object"
       },
+      "AdminDraftSnapshotV3": {
+        "properties": {
+          "draft_version": {
+            "minimum": 1.0,
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductDraftV3-Output"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/ProductReadinessResponse"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/DraftRevisionResponse"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "revision",
+          "draft_version",
+          "product",
+          "readiness"
+        ],
+        "title": "AdminDraftSnapshotV3",
+        "type": "object"
+      },
       "AdminProductListItem": {
         "properties": {
           "brand": {
@@ -339,6 +376,87 @@
         "title": "AdminProductResponseV2",
         "type": "object"
       },
+      "AdminProductResponseV3": {
+        "properties": {
+          "brand": {
+            "title": "Brand",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "current_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminDraftSnapshotV3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/DraftRevisionResponse"
+            },
+            "title": "Drafts",
+            "type": "array"
+          },
+          "lifecycle_status": {
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "Lifecycle Status",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "published_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductDraftV3-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "product_id",
+          "lifecycle_status",
+          "version",
+          "title",
+          "description",
+          "brand",
+          "category",
+          "metadata"
+        ],
+        "title": "AdminProductResponseV3",
+        "type": "object"
+      },
       "ArchiveRequest": {
         "properties": {
           "expected_version": {
@@ -474,6 +592,54 @@
           "image"
         ],
         "title": "Body_image_recommendations_api_recommendations_image_post",
+        "type": "object"
+      },
+      "Body_upload_catalog_source_bundle_api_admin_catalog_source_bundles_post": {
+        "properties": {
+          "catalog_product_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Product Id"
+          },
+          "draft_revision_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Revision Id"
+          },
+          "files": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "title": {
+            "default": "Supplier source bundle",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_catalog_source_bundle_api_admin_catalog_source_bundles_post",
         "type": "object"
       },
       "BrandCreateRequest": {
@@ -667,7 +833,7 @@
       "CatalogCapabilityStatus": {
         "properties": {
           "authoring_schema_version": {
-            "const": 2,
+            "const": 3,
             "title": "Authoring Schema Version",
             "type": "integer"
           },
@@ -765,6 +931,186 @@
           "label"
         ],
         "title": "CatalogChoice",
+        "type": "object"
+      },
+      "CatalogFieldSuggestionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "certainty_class": {
+            "enum": [
+              "observed",
+              "derived",
+              "unknown"
+            ],
+            "title": "Certainty Class",
+            "type": "string"
+          },
+          "evidence_asset_ids": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Evidence Asset Ids",
+            "type": "array"
+          },
+          "input_origin": {
+            "enum": [
+              "supplier_analysis",
+              "typed_action",
+              "voice"
+            ],
+            "title": "Input Origin",
+            "type": "string"
+          },
+          "proposed_value": {
+            "title": "Proposed Value"
+          },
+          "target_path": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Target Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_path",
+          "proposed_value",
+          "certainty_class",
+          "input_origin"
+        ],
+        "title": "CatalogFieldSuggestionCreate",
+        "type": "object"
+      },
+      "CatalogFieldSuggestionResponse": {
+        "properties": {
+          "applied_draft_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Draft Revision Id"
+          },
+          "baseline_value": {
+            "title": "Baseline Value"
+          },
+          "certainty_class": {
+            "enum": [
+              "observed",
+              "derived",
+              "unknown"
+            ],
+            "title": "Certainty Class",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evidence_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Asset Ids",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_origin": {
+            "enum": [
+              "supplier_analysis",
+              "typed_action",
+              "voice"
+            ],
+            "title": "Input Origin",
+            "type": "string"
+          },
+          "prior_value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Value"
+          },
+          "proposed_value": {
+            "title": "Proposed Value"
+          },
+          "review_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Reason"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "accepted",
+              "rejected",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target_path": {
+            "title": "Target Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "section",
+          "target_path",
+          "proposed_value",
+          "baseline_value",
+          "evidence_asset_ids",
+          "certainty_class",
+          "input_origin",
+          "status",
+          "created_at"
+        ],
+        "title": "CatalogFieldSuggestionResponse",
         "type": "object"
       },
       "CatalogImageApprovalRequest": {
@@ -1562,6 +1908,232 @@
         "title": "CatalogReferenceData",
         "type": "object"
       },
+      "CatalogSourceAssetResponse": {
+        "properties": {
+          "byte_size": {
+            "exclusiveMinimum": 0.0,
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "checksum_sha256": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Checksum Sha256",
+            "type": "string"
+          },
+          "content_type": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ],
+            "title": "Content Type",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_order": {
+            "minimum": 0.0,
+            "title": "Display Order",
+            "type": "integer"
+          },
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "preview_url": {
+            "title": "Preview Url",
+            "type": "string"
+          },
+          "promoted_media_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Promoted Media Id"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "promoted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "storage_provider": {
+            "const": "local_private",
+            "default": "local_private",
+            "title": "Storage Provider",
+            "type": "string"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "display_order",
+          "original_filename",
+          "content_type",
+          "byte_size",
+          "width",
+          "height",
+          "checksum_sha256",
+          "status",
+          "preview_url",
+          "created_at"
+        ],
+        "title": "CatalogSourceAssetResponse",
+        "type": "object"
+      },
+      "CatalogSourceBundleListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogSourceBundleResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CatalogSourceBundleListResponse",
+        "type": "object"
+      },
+      "CatalogSourceBundleResponse": {
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogSourceAssetResponse"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
+          "catalog_product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Product Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "draft_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Revision Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "active",
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "assets",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CatalogSourceBundleResponse",
+        "type": "object"
+      },
+      "CatalogSourcePromotionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_draft_version"
+        ],
+        "title": "CatalogSourcePromotionRequest",
+        "type": "object"
+      },
+      "CatalogSourcePromotionResponse": {
+        "properties": {
+          "asset": {
+            "$ref": "#/components/schemas/CatalogSourceAssetResponse"
+          },
+          "bundle_id": {
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/DraftRevisionResponse"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "media_id",
+          "asset",
+          "draft"
+        ],
+        "title": "CatalogSourcePromotionResponse",
+        "type": "object"
+      },
       "CatalogStudioCapabilities": {
         "properties": {
           "catalog": {
@@ -1610,6 +2182,345 @@
           "capabilities"
         ],
         "title": "CatalogStudioSessionResponse",
+        "type": "object"
+      },
+      "CatalogSuggestionDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "accept",
+              "reject",
+              "supersede"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "scope": {
+            "enum": [
+              "suggestion",
+              "section",
+              "remaining"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "enum": [
+                  "identity",
+                  "content",
+                  "seo",
+                  "media"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
+          "suggestion_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Id"
+          }
+        },
+        "required": [
+          "action",
+          "scope",
+          "expected_draft_version"
+        ],
+        "title": "CatalogSuggestionDecisionRequest",
+        "type": "object"
+      },
+      "CatalogSuggestionDecisionResponse": {
+        "properties": {
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminDraftSnapshotV3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suggestion_set": {
+            "$ref": "#/components/schemas/CatalogSuggestionSetResponse"
+          }
+        },
+        "required": [
+          "suggestion_set"
+        ],
+        "title": "CatalogSuggestionDecisionResponse",
+        "type": "object"
+      },
+      "CatalogSuggestionReviewResponse": {
+        "properties": {
+          "action": {
+            "enum": [
+              "accept",
+              "reject",
+              "supersede"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_provider_user_id": {
+            "title": "Actor Provider User Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "resulting_draft_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resulting Draft Revision Id"
+          },
+          "scope": {
+            "enum": [
+              "suggestion",
+              "section",
+              "remaining"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "section": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Section"
+          },
+          "suggestion_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggestion Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "scope",
+          "suggestion_ids",
+          "expected_draft_version",
+          "actor_provider_user_id",
+          "created_at"
+        ],
+        "title": "CatalogSuggestionReviewResponse",
+        "type": "object"
+      },
+      "CatalogSuggestionSetCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogFieldSuggestionCreate"
+            },
+            "maxItems": 80,
+            "minItems": 1,
+            "title": "Suggestions",
+            "type": "array"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_draft_version",
+          "suggestions"
+        ],
+        "title": "CatalogSuggestionSetCreateRequest",
+        "type": "object"
+      },
+      "CatalogSuggestionSetListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogSuggestionSetResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CatalogSuggestionSetListResponse",
+        "type": "object"
+      },
+      "CatalogSuggestionSetResponse": {
+        "properties": {
+          "base_draft_id": {
+            "title": "Base Draft Id",
+            "type": "string"
+          },
+          "base_draft_version": {
+            "minimum": 1.0,
+            "title": "Base Draft Version",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_draft_id": {
+            "title": "Current Draft Id",
+            "type": "string"
+          },
+          "current_draft_version": {
+            "minimum": 1.0,
+            "title": "Current Draft Version",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogSuggestionReviewResponse"
+            },
+            "title": "Reviews",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "partially_reviewed",
+              "reviewed",
+              "superseded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogFieldSuggestionResponse"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "base_draft_id",
+          "base_draft_version",
+          "current_draft_id",
+          "current_draft_version",
+          "status",
+          "suggestions",
+          "reviews",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CatalogSuggestionSetResponse",
         "type": "object"
       },
       "CatalogVariant": {
@@ -1764,6 +2675,13 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "suggestion_set_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggestion Set Ids",
+            "type": "array"
           },
           "title": {
             "title": "Title",
@@ -2776,6 +3694,58 @@
           "product"
         ],
         "title": "DraftMutationRequestV2",
+        "type": "object"
+      },
+      "DraftMutationRequestV3": {
+        "properties": {
+          "current_draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Draft Id"
+          },
+          "expected_draft_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Draft Version"
+          },
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "moderation_state": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "approved",
+              "blocked"
+            ],
+            "title": "Moderation State",
+            "type": "string"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductDraftV3-Input"
+          }
+        },
+        "required": [
+          "expected_version",
+          "product"
+        ],
+        "title": "DraftMutationRequestV3",
         "type": "object"
       },
       "DraftRevisionResponse": {
@@ -3999,6 +4969,40 @@
         "title": "ProductDraft",
         "type": "object"
       },
+      "ProductDraftPreviewV3": {
+        "properties": {
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "minimum": 1.0,
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "preview": {
+            "additionalProperties": true,
+            "title": "Preview",
+            "type": "object"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/ProductReadinessResponse"
+          }
+        },
+        "required": [
+          "product_id",
+          "draft_id",
+          "draft_version",
+          "preview",
+          "readiness"
+        ],
+        "title": "ProductDraftPreviewV3",
+        "type": "object"
+      },
       "ProductDraftV2-Input": {
         "additionalProperties": false,
         "properties": {
@@ -4333,6 +5337,446 @@
           "inventory"
         ],
         "title": "ProductDraftV2",
+        "type": "object"
+      },
+      "ProductDraftV3-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "benefits": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Benefits",
+            "type": "array"
+          },
+          "brand": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Brand",
+            "type": "string"
+          },
+          "brand_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "care_instructions": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Care Instructions",
+            "type": "array"
+          },
+          "category": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "content_details": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 40,
+            "title": "Content Details",
+            "type": "array"
+          },
+          "description": {
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "inventory": {
+            "items": {
+              "$ref": "#/components/schemas/ProductInventoryDraftV2"
+            },
+            "minItems": 1,
+            "title": "Inventory",
+            "type": "array"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "material": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material"
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/ProductMediaDraftV3"
+            },
+            "title": "Media",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "price_max": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Price Max"
+          },
+          "price_min": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Price Min"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "readiness_inputs": {
+            "$ref": "#/components/schemas/ProductReadinessInputsDraft"
+          },
+          "schema_version": {
+            "const": 3,
+            "default": 3,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "season": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season"
+          },
+          "seed_run_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Seed Run Id",
+            "type": "string"
+          },
+          "seo": {
+            "$ref": "#/components/schemas/ProductSeoDraft"
+          },
+          "source_references": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSourceReferenceDraft"
+            },
+            "maxItems": 20,
+            "title": "Source References",
+            "type": "array"
+          },
+          "specifications": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSpecificationDraft"
+            },
+            "maxItems": 80,
+            "title": "Specifications",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed_run_id",
+          "title",
+          "description",
+          "brand_id",
+          "brand",
+          "category",
+          "price_min",
+          "price_max",
+          "inventory"
+        ],
+        "title": "ProductDraftV3",
+        "type": "object"
+      },
+      "ProductDraftV3-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "benefits": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Benefits",
+            "type": "array"
+          },
+          "brand": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Brand",
+            "type": "string"
+          },
+          "brand_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Brand Id",
+            "type": "string"
+          },
+          "care_instructions": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Care Instructions",
+            "type": "array"
+          },
+          "category": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "content_details": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 40,
+            "title": "Content Details",
+            "type": "array"
+          },
+          "description": {
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "gender": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gender"
+          },
+          "inventory": {
+            "items": {
+              "$ref": "#/components/schemas/ProductInventoryDraftV2"
+            },
+            "minItems": 1,
+            "title": "Inventory",
+            "type": "array"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "material": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material"
+          },
+          "media": {
+            "items": {
+              "$ref": "#/components/schemas/ProductMediaDraftV3"
+            },
+            "title": "Media",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "price_max": {
+            "title": "Price Max",
+            "type": "number"
+          },
+          "price_min": {
+            "title": "Price Min",
+            "type": "number"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "readiness_inputs": {
+            "$ref": "#/components/schemas/ProductReadinessInputsDraft"
+          },
+          "schema_version": {
+            "const": 3,
+            "default": 3,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "season": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season"
+          },
+          "seed_run_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Seed Run Id",
+            "type": "string"
+          },
+          "seo": {
+            "$ref": "#/components/schemas/ProductSeoDraft"
+          },
+          "source_references": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSourceReferenceDraft"
+            },
+            "maxItems": 20,
+            "title": "Source References",
+            "type": "array"
+          },
+          "specifications": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSpecificationDraft"
+            },
+            "maxItems": 80,
+            "title": "Specifications",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seed_run_id",
+          "title",
+          "description",
+          "brand_id",
+          "brand",
+          "category",
+          "price_min",
+          "price_max",
+          "inventory"
+        ],
+        "title": "ProductDraftV3",
         "type": "object"
       },
       "ProductFacetGroup": {
@@ -4715,6 +6159,174 @@
         "title": "ProductMediaDraft",
         "type": "object"
       },
+      "ProductMediaDraftV3": {
+        "additionalProperties": false,
+        "properties": {
+          "alt_text": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alt Text"
+          },
+          "approval_status": {
+            "default": "pending",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected"
+            ],
+            "title": "Approval Status",
+            "type": "string"
+          },
+          "display_order": {
+            "minimum": 0.0,
+            "title": "Display Order",
+            "type": "integer"
+          },
+          "image_set": {
+            "additionalProperties": true,
+            "title": "Image Set",
+            "type": "object"
+          },
+          "intent": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "color",
+              "angle",
+              "scene",
+              "scale",
+              "people",
+              "freeform"
+            ],
+            "title": "Intent",
+            "type": "string"
+          },
+          "media_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Media Id",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "predecessor_media_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predecessor Media Id"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "title": "Provenance",
+            "type": "object"
+          },
+          "role": {
+            "enum": [
+              "core",
+              "variation"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "source_media_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Media Id"
+          }
+        },
+        "required": [
+          "media_id",
+          "role",
+          "display_order"
+        ],
+        "title": "ProductMediaDraftV3",
+        "type": "object"
+      },
+      "ProductReadinessInputsDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "required_specifications": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 40,
+            "title": "Required Specifications",
+            "type": "array"
+          }
+        },
+        "title": "ProductReadinessInputsDraft",
+        "type": "object"
+      },
+      "ProductReadinessResponse": {
+        "properties": {
+          "blocking_errors": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessIssue"
+            },
+            "title": "Blocking Errors",
+            "type": "array"
+          },
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_version": {
+            "minimum": 1.0,
+            "title": "Draft Version",
+            "type": "integer"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessIssue"
+            },
+            "title": "Recommendations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "product_id",
+          "draft_id",
+          "draft_version",
+          "ready",
+          "blocking_errors",
+          "recommendations"
+        ],
+        "title": "ProductReadinessResponse",
+        "type": "object"
+      },
       "ProductRecommendation": {
         "properties": {
           "availability": {
@@ -4911,6 +6523,47 @@
         "title": "ProductRecommendationResponse",
         "type": "object"
       },
+      "ProductSeoDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "keywords": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Keywords",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "ProductSeoDraft",
+        "type": "object"
+      },
       "ProductSort": {
         "enum": [
           "relevance",
@@ -4921,6 +6574,57 @@
         ],
         "title": "ProductSort",
         "type": "string"
+      },
+      "ProductSourceReferenceDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_ids": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Asset Ids",
+            "type": "array"
+          },
+          "bundle_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Bundle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "asset_ids"
+        ],
+        "title": "ProductSourceReferenceDraft",
+        "type": "object"
+      },
+      "ProductSpecificationDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "ProductSpecificationDraft",
+        "type": "object"
       },
       "PublishRequest": {
         "properties": {
@@ -4941,6 +6645,29 @@
           "expected_version"
         ],
         "title": "PublishRequest",
+        "type": "object"
+      },
+      "ReadinessIssue": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "field_path": {
+            "title": "Field Path",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "field_path",
+          "message"
+        ],
+        "title": "ReadinessIssue",
         "type": "object"
       },
       "RecommendedProduct": {
@@ -7153,6 +8880,298 @@
         ]
       }
     },
+    "/api/admin/catalog/source-bundles": {
+      "get": {
+        "operationId": "catalog_source_bundles_api_admin_catalog_source_bundles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSourceBundleListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "List owned private supplier source bundles",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      },
+      "post": {
+        "operationId": "upload_catalog_source_bundle_api_admin_catalog_source_bundles_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_catalog_source_bundle_api_admin_catalog_source_bundles_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSourceBundleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Upload private supplier images for catalog authoring",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/source-bundles/{bundle_id}": {
+      "get": {
+        "operationId": "catalog_source_bundle_detail_api_admin_catalog_source_bundles__bundle_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSourceBundleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Read an owned private supplier source bundle",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}": {
+      "delete": {
+        "operationId": "delete_catalog_source_asset_api_admin_catalog_source_bundles__bundle_id__assets__asset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Remove an unattached private supplier source image",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/preview": {
+      "get": {
+        "operationId": "catalog_source_asset_preview_api_admin_catalog_source_bundles__bundle_id__assets__asset_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Read an authorized bounded supplier image preview",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/promote": {
+      "post": {
+        "operationId": "promote_catalog_source_asset_api_admin_catalog_source_bundles__bundle_id__assets__asset_id__promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogSourcePromotionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSourcePromotionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Promote a private supplier source into approved draft media",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
     "/api/admin/catalog/v2/brands": {
       "post": {
         "operationId": "add_catalog_brand_v2_api_admin_catalog_v2_brands_post",
@@ -7744,6 +9763,618 @@
           }
         ],
         "summary": "List canonical catalog authoring references",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/drafts": {
+      "post": {
+        "operationId": "create_product_draft_v3_api_admin_catalog_v3_products_drafts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftMutationRequestV3"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Create a structured catalog authoring draft",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}": {
+      "get": {
+        "operationId": "admin_catalog_product_v3_api_admin_catalog_v3_products__product_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProductResponseV3"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Inspect structured product authoring state",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/draft": {
+      "put": {
+        "operationId": "revise_catalog_product_v3_api_admin_catalog_v3_products__product_id__draft_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftMutationRequestV3"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Stage a structured catalog authoring revision",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/drafts/{draft_id}/preview": {
+      "get": {
+        "operationId": "catalog_product_preview_v3_api_admin_catalog_v3_products__product_id__drafts__draft_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftPreviewV3"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Preview a structured product without private source references",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/drafts/{draft_id}/readiness": {
+      "get": {
+        "operationId": "catalog_product_readiness_v3_api_admin_catalog_v3_products__product_id__drafts__draft_id__readiness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true,
+            "schema": {
+              "title": "Draft Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Evaluate blocking and recommended catalog readiness checks",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/publish": {
+      "post": {
+        "operationId": "publish_catalog_product_v3_api_admin_catalog_v3_products__product_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecycleMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Publish a ready structured catalog draft",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/revisions": {
+      "post": {
+        "operationId": "start_catalog_product_revision_v3_api_admin_catalog_v3_products__product_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDraftSnapshotV3"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Start a structured catalog product revision",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/suggestion-sets": {
+      "get": {
+        "operationId": "list_catalog_suggestion_sets_v3_api_admin_catalog_v3_products__product_id__suggestion_sets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSuggestionSetListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "List private reviewable product suggestions",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      },
+      "post": {
+        "operationId": "create_catalog_suggestion_set_v3_api_admin_catalog_v3_products__product_id__suggestion_sets_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogSuggestionSetCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSuggestionSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Create reviewable product field suggestions",
+        "tags": [
+          "catalog-studio-admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/suggestion-sets/{suggestion_set_id}/decisions": {
+      "post": {
+        "operationId": "decide_catalog_suggestion_set_v3_api_admin_catalog_v3_products__product_id__suggestion_sets__suggestion_set_id__decisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "suggestion_set_id",
+            "required": true,
+            "schema": {
+              "title": "Suggestion Set Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogSuggestionDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogSuggestionDecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Accept, reject, or supersede product field suggestions",
         "tags": [
           "catalog-studio-admin"
         ]

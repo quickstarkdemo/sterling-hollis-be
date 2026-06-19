@@ -284,7 +284,7 @@ authorization: Bearer <Clerk token>
     "image_generation": {"configured": true},
     "realtime": {"configured": false, "reason": "feature_disabled"},
     "worker_storage": {"configured": true},
-    "catalog": {"configured": true, "authoring_schema_version": 2}
+    "catalog": {"configured": true, "authoring_schema_version": 3}
   }
 }
 ```
@@ -419,6 +419,50 @@ Relevant settings and defaults are:
 | `CATALOG_SOURCE_THUMBNAIL_SIZE` | `320` |
 
 ## Catalog Studio Product Lifecycle
+
+### Structured authoring and reviewable suggestions (v3)
+
+The session capability `catalog.authoring_schema_version: 3` enables the v3
+authoring contract. V3 preserves the canonical v2 product, media, and inventory
+shape while adding benefits, specifications, care instructions, content
+details, SEO, private supplier-source references, media alt text, and explicit
+readiness inputs. V2 reads remain available as a deterministic projection of a
+v3 draft. V1 or v2 replacement writes against a current v3 draft return `409`
+so an older client cannot erase v3-only content.
+
+Use these v3 routes for structured authoring:
+
+- `POST /api/admin/catalog/v3/products/drafts` creates a v3 draft.
+- `GET /api/admin/catalog/v3/products/{product_id}` returns published and
+  private v3 state, including calculated readiness for the current draft.
+- `PUT /api/admin/catalog/v3/products/{product_id}/draft` replaces a current v3
+  snapshot with published and draft version guards.
+- `POST /api/admin/catalog/v3/products/{product_id}/revisions` starts a v3
+  revision from the published product.
+- `GET .../drafts/{draft_id}/readiness` separates publication blockers from
+  non-blocking recommendations.
+- `GET .../drafts/{draft_id}/preview` omits private source references,
+  readiness inputs, and server-only storage fields.
+- `POST /api/admin/catalog/v3/products/{product_id}/publish` applies readiness
+  blockers before publication and persists structured copy privately. Supplier
+  source references remain draft-only and are not copied into published product
+  metadata.
+
+AI output is stored as suggestions, never as an implicit product overwrite.
+Create a set with `POST .../suggestion-sets`, list private sets with `GET
+.../suggestion-sets`, and apply an idempotent decision with `POST
+.../suggestion-sets/{suggestion_set_id}/decisions`. A decision may target one
+suggestion, one section, or every remaining suggestion. Section acceptance is
+atomic: either the complete resulting product validates and creates one new
+draft revision, or no suggestion or draft changes. Each accepted field records
+its prior value, evidence asset IDs, certainty, input origin, reviewer, reason,
+and resulting draft revision.
+
+`input_origin` is one of `supplier_analysis`, `typed_action`, or `voice`.
+Voice therefore remains a first-class authoring input while using the same
+review, optimistic concurrency, idempotency, and audit rules as typed actions.
+Actual Responses and Realtime generation remain capability-gated; the v3
+suggestion review endpoints themselves do not require an OpenAI API key.
 
 ### Canonical product-level v2 contract
 

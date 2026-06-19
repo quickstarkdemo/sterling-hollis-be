@@ -36,7 +36,10 @@ from app.models import (
 )
 from app.schemas import IndexJobStatus
 from app.services.auth.clerk import AuthenticatedPrincipal
-from app.services.catalog_admin import create_draft_v2, draft_revision_version
+from app.services.catalog_admin import (
+    create_draft_from_v2_compatibility,
+    draft_revision_version,
+)
 from app.services.image_analysis import ImageUploadError, validate_image_bytes
 from app.services.product_images import _write_thumbnail
 
@@ -597,7 +600,7 @@ def promote_source_asset(
     )
     draft_committed = False
     try:
-        draft_response, _ = create_draft_v2(
+        draft_response, _ = create_draft_from_v2_compatibility(
             db,
             DraftMutationRequestV2(
                 expected_version=revision.base_version,

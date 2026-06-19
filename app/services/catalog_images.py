@@ -42,7 +42,10 @@ from app.config import Settings
 from app.models import CatalogDraftRevision, CatalogWorkflow, ImageGenerationJob
 from app.schemas import IndexJobStatus
 from app.services.auth.clerk import AuthenticatedPrincipal
-from app.services.catalog_admin import create_draft_v2, draft_revision_version
+from app.services.catalog_admin import (
+    create_draft_from_v2_compatibility,
+    draft_revision_version,
+)
 from app.services.catalog_workflow import append_workflow_event
 from app.services.image_analysis import ImageUploadError, validate_image_bytes
 from app.services.product_images import _write_thumbnail, product_image_options
@@ -659,7 +662,7 @@ def mutate_catalog_media(
         restored.display_order = len(product.media)
         product.media.append(restored)
 
-    response, _ = create_draft_v2(
+    response, _ = create_draft_from_v2_compatibility(
         db,
         DraftMutationRequestV2(
             expected_version=revision.base_version,

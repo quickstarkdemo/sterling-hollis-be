@@ -158,7 +158,7 @@ def test_catalog_admin_session_reports_capabilities_without_secrets_or_probes():
             "image_generation": {"configured": True},
             "realtime": {"configured": False, "reason": "feature_disabled"},
             "worker_storage": {"configured": True},
-            "catalog": {"configured": True, "authoring_schema_version": 2},
+                "catalog": {"configured": True, "authoring_schema_version": 3},
         },
     }
     assert "sk-secret-value" not in response.text
@@ -174,7 +174,7 @@ def test_capability_status_reports_unconfigured_openai_without_probing():
         "image_generation": {"configured": False},
         "realtime": {"configured": False, "reason": "feature_disabled"},
         "worker_storage": {"configured": False},
-        "catalog": {"configured": True, "authoring_schema_version": 2},
+        "catalog": {"configured": True, "authoring_schema_version": 3},
     }
 
 

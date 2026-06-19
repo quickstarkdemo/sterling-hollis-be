@@ -23,6 +23,7 @@ def persisted_product_metadata(
     design_specification: dict | None,
     variant_axes: list[str],
     primary_variant_id: str,
+    authoring_v3: dict | None = None,
 ) -> dict:
     return {
         **public_product_metadata(metadata),
@@ -30,5 +31,6 @@ def persisted_product_metadata(
             "design_specification": design_specification,
             "variant_axes": variant_axes,
             "primary_variant_id": primary_variant_id,
+            "v3": authoring_v3,
         },
     }

@@ -89,6 +89,6 @@ def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, objec
         "worker_storage": {"configured": image_storage_configured},
         "catalog": {
             "configured": catalog_configured,
-            "authoring_schema_version": 2,
+            "authoring_schema_version": 3,
         },
     }
