@@ -690,6 +690,64 @@ paths:
         "404": {description: Private suggestion set not found for this administrator.}
         "409": {description: Stale, reviewed, superseded, or idempotency conflict.}
         "422": {description: Accepted values do not form a valid product.}
+  /api/admin/catalog/products/{product_id}/reviews:
+    get:
+      tags: [catalog-studio-admin]
+      summary: List private product review moderation state
+      security: [{bearerAuth: []}]
+      parameters: [{$ref: "#/components/parameters/ProductId"}]
+      responses:
+        "200":
+          description: Immutable review content, private moderation state, and action history.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminProductReviewListResponse"}
+        "404": {description: Product not found.}
+  /api/admin/catalog/products/{product_id}/reviews/{review_id}/assist:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Generate a reviewable moderation and response proposal
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ProductId"}
+        - {name: review_id, in: path, required: true, schema: {type: string}}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReviewAssistRequest"}
+      responses:
+        "200":
+          description: AI proposal staged without publishing a merchant decision.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminProductReviewResponse"}
+        "409": {description: Stale moderation version or idempotency conflict.}
+        "422": {description: Moderation blocked the request.}
+        "502": {description: Provider failure left review state unchanged.}
+  /api/admin/catalog/products/{product_id}/reviews/{review_id}/decisions:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Record a versioned product review moderation decision
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/ProductId"}
+        - {name: review_id, in: path, required: true, schema: {type: string}}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReviewDecisionRequest"}
+      responses:
+        "200":
+          description: Audited decision with the next moderation version.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminProductReviewResponse"}
+        "409": {description: Stale moderation version or idempotency conflict.}
+        "422": {description: Invalid action or response publication state.}
   /api/admin/catalog/v3/products/{product_id}/publish:
     post:
       tags: [catalog-studio-admin]
@@ -3128,7 +3186,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/CatalogProduct"
         - type: object
-          required: [metadata, media, inventory, variants]
+          required: [metadata, media, inventory, variants, reviews]
           properties:
             metadata:
               type: object
@@ -3146,6 +3204,86 @@ components:
               deprecated: true
               items:
                 $ref: "#/components/schemas/CatalogVariant"
+            reviews:
+              type: array
+              items:
+                $ref: "#/components/schemas/PublicProductReview"
+    PublicProductReview:
+      type: object
+      required: [id, author_display_name, body, rating, submitted_at]
+      properties:
+        id: {type: string}
+        author_display_name: {type: string}
+        body: {type: string}
+        rating: {type: integer, minimum: 1, maximum: 5}
+        submitted_at: {type: string, format: date-time}
+        merchant_response: {type: string, nullable: true}
+        merchant_responded_at: {type: string, format: date-time, nullable: true}
+    ReviewAssistRequest:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version: {type: integer, minimum: 1}
+    ReviewDecisionRequest:
+      type: object
+      required: [action, expected_version, reason]
+      properties:
+        action:
+          type: string
+          enum: [approve, flag, reject, save_response, publish_response]
+        expected_version: {type: integer, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 1000}
+        response_text: {type: string, nullable: true, maxLength: 2000}
+    ReviewActionResponse:
+      type: object
+      required: [id, action, expected_version, resulting_version, actor_provider_user_id, created_at]
+      properties:
+        id: {type: string}
+        action: {type: string}
+        expected_version: {type: integer}
+        resulting_version: {type: integer}
+        actor_provider_user_id: {type: string}
+        reason: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+    ReviewModerationResponse:
+      type: object
+      required: [version, state, ai_categories, ai_provider_metadata]
+      properties:
+        version: {type: integer, minimum: 1}
+        state: {type: string, enum: [pending, approved, flagged, rejected]}
+        ai_categories: {type: array, items: {type: string}}
+        ai_theme_summary: {type: string, nullable: true}
+        ai_suggested_action: {type: string, enum: [approve, flag, reject], nullable: true}
+        ai_provider_metadata: {type: object, additionalProperties: true}
+        response_draft: {type: string, nullable: true}
+        response_published: {type: string, nullable: true}
+        response_published_at: {type: string, format: date-time, nullable: true}
+        decided_by: {type: string, nullable: true}
+        decided_at: {type: string, format: date-time, nullable: true}
+        decision_reason: {type: string, nullable: true}
+    AdminProductReviewResponse:
+      type: object
+      required: [id, product_id, source, external_review_id, author_display_name, body, rating, submitted_at, moderation, actions]
+      properties:
+        id: {type: string}
+        product_id: {type: string}
+        source: {type: string}
+        external_review_id: {type: string}
+        author_display_name: {type: string}
+        body: {type: string}
+        rating: {type: integer, minimum: 1, maximum: 5}
+        submitted_at: {type: string, format: date-time}
+        moderation: {$ref: "#/components/schemas/ReviewModerationResponse"}
+        actions:
+          type: array
+          items: {$ref: "#/components/schemas/ReviewActionResponse"}
+    AdminProductReviewListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/AdminProductReviewResponse"}
     CatalogVariant:
       type: object
       required: [id, product_id, price_min, price_max]

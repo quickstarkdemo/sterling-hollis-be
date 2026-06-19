@@ -67,6 +67,12 @@ from app.catalog.source_schemas import (
     CatalogSourcePromotionRequest,
     CatalogSourcePromotionResponse,
 )
+from app.catalog.review_schemas import (
+    AdminProductReviewListResponse,
+    AdminProductReviewResponse,
+    ReviewAssistRequest,
+    ReviewDecisionRequest,
+)
 from app.catalog.workflow_schemas import (
     CatalogWorkflowResponse,
     CatalogWorkflowStartRequest,
@@ -97,6 +103,12 @@ from app.services.catalog_suggestions import (
     create_suggestion_set,
     decide_suggestion_set,
     list_suggestion_sets,
+)
+from app.services.product_reviews import (
+    ProductReviewAIService,
+    assist_product_review,
+    decide_product_review,
+    list_admin_product_reviews,
 )
 from app.services.catalog_ai import (
     CatalogAICommandError,
@@ -164,6 +176,12 @@ def get_catalog_realtime_service(
     settings: Settings = Depends(get_settings),
 ) -> CatalogRealtimeService:
     return CatalogRealtimeService(settings)
+
+
+def get_product_review_ai_service(
+    settings: Settings = Depends(get_settings),
+) -> ProductReviewAIService:
+    return ProductReviewAIService(settings)
 
 
 class CapabilityStatus(BaseModel):
@@ -884,6 +902,75 @@ def list_catalog_suggestion_sets_v3(
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
 ) -> CatalogSuggestionSetListResponse:
     return list_suggestion_sets(db, product_id=product_id, principal=principal)
+
+
+@router.get(
+    "/catalog/products/{product_id}/reviews",
+    response_model=AdminProductReviewListResponse,
+    summary="List private product review moderation state",
+)
+def list_catalog_product_reviews(
+    product_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    _: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminProductReviewListResponse:
+    response.headers["Cache-Control"] = "private, no-store"
+    return list_admin_product_reviews(db, product_id=product_id)
+
+
+@router.post(
+    "/catalog/products/{product_id}/reviews/{review_id}/assist",
+    response_model=AdminProductReviewResponse,
+    summary="Generate a reviewable moderation and response proposal",
+)
+def assist_catalog_product_review(
+    product_id: str,
+    review_id: str,
+    request: ReviewAssistRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    service: ProductReviewAIService = Depends(get_product_review_ai_service),
+) -> AdminProductReviewResponse:
+    try:
+        return assist_product_review(
+            db,
+            product_id=product_id,
+            review_id=review_id,
+            request=request,
+            idempotency_key=idempotency_key,
+            principal=principal,
+            service=service,
+        )
+    except CatalogAICommandError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.detail, "retryable": exc.retryable},
+        ) from exc
+
+
+@router.post(
+    "/catalog/products/{product_id}/reviews/{review_id}/decisions",
+    response_model=AdminProductReviewResponse,
+    summary="Record a versioned product review moderation decision",
+)
+def decide_catalog_product_review(
+    product_id: str,
+    review_id: str,
+    request: ReviewDecisionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> AdminProductReviewResponse:
+    return decide_product_review(
+        db,
+        product_id=product_id,
+        review_id=review_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
 
 
 @router.post(

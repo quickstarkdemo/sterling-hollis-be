@@ -229,6 +229,9 @@ def test_product_detail_and_related(monkeypatch, caplog):
     assert detail.json()["variants"][0]["inventory"][0]["store_id"] == "1001"
     assert detail.json()["variants"][0]["price_min"] == detail.json()["price_min"]
     assert detail.json()["variants"][0]["images"] == detail.json()["images"]
+    assert detail.json()["reviews"] == []
+    assert "moderation" not in detail.text
+    assert "external_review_id" not in detail.text
     assert "catalog_legacy_variant_projection" in caplog.messages
     assert related.status_code == 200
     related_ids = {item["id"] for item in related.json()["items"]}

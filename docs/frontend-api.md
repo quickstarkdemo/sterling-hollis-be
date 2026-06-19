@@ -464,6 +464,37 @@ review, optimistic concurrency, idempotency, and audit rules as typed actions.
 Actual Responses and Realtime generation remain capability-gated; the v3
 suggestion review endpoints themselves do not require an OpenAI API key.
 
+### Assisted customer-review moderation
+
+Product reviews are imported only from trusted fixtures or operator tooling;
+public submission and provider ingestion are not exposed. Customer display
+name, text, rating, and submission time are immutable and stored separately
+from merchant moderation state.
+
+Use these protected routes in Catalog Studio:
+
+- `GET /api/admin/catalog/products/{product_id}/reviews` lists original review
+  content, versioned moderation state, bounded AI themes, response drafts, and
+  the append-only merchant action history.
+- `POST .../reviews/{review_id}/assist` runs Responses with structured output
+  and moderation. It may stage categories, a theme summary, a suggested action,
+  and a response draft, but it never publishes a moderation decision.
+- `POST .../reviews/{review_id}/decisions` requires an `Idempotency-Key`, the
+  current moderation version, a reason, and one of `approve`, `flag`, `reject`,
+  `save_response`, or `publish_response`.
+
+Only approved reviews appear in public product detail responses. Merchant
+responses remain private until separately published. Public responses omit AI
+analysis, external source IDs, decision reasons, actor IDs, provider metadata,
+and unpublished response drafts. Provider failure, policy blocking, and stale
+versions leave the prior public state unchanged.
+
+Trusted fixtures can be imported with:
+
+```bash
+python scripts/seed_product_reviews.py --product-id <catalog-product-id>
+```
+
 ### Canonical product-level v2 contract
 
 New merchandising clients use `/api/admin/catalog/v2/products`. The v2 draft

@@ -200,6 +200,9 @@ class CatalogProduct(Base):
         back_populates="product", cascade="all, delete-orphan"
     )
     brand_reference: Mapped[CatalogBrand | None] = relationship(back_populates="products")
+    reviews: Mapped[list["CatalogProductReview"]] = relationship(
+        back_populates="product", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint("price_min >= 0", name="ck_catalog_products_price_min_non_negative"),
@@ -717,6 +720,130 @@ class CatalogSuggestionReview(Base):
             "expected_draft_version > 0",
             name="ck_catalog_suggestion_reviews_version_positive",
         ),
+    )
+
+
+class CatalogProductReview(Base):
+    __tablename__ = "catalog_product_reviews"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    catalog_product_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_review_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    author_display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    product: Mapped[CatalogProduct] = relationship(back_populates="reviews")
+    moderation: Mapped["CatalogReviewModeration"] = relationship(
+        back_populates="review", cascade="all, delete-orphan", uselist=False
+    )
+    actions: Mapped[list["CatalogReviewAction"]] = relationship(
+        back_populates="review",
+        cascade="all, delete-orphan",
+        order_by="CatalogReviewAction.created_at",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source",
+            "external_review_id",
+            name="uq_catalog_product_reviews_source_external",
+        ),
+        CheckConstraint(
+            "rating >= 1 AND rating <= 5",
+            name="ck_catalog_product_reviews_rating",
+        ),
+        Index(
+            "ix_catalog_product_reviews_product_submitted",
+            "catalog_product_id",
+            "submitted_at",
+        ),
+    )
+
+
+class CatalogReviewModeration(Base):
+    __tablename__ = "catalog_review_moderations"
+
+    review_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_product_reviews.id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), default="pending", server_default="pending", nullable=False, index=True
+    )
+    ai_categories_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    ai_theme_summary: Mapped[str | None] = mapped_column(String(1000))
+    ai_suggested_action: Mapped[str | None] = mapped_column(String(32))
+    ai_provider_metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    response_draft: Mapped[str | None] = mapped_column(String(2000))
+    response_published: Mapped[str | None] = mapped_column(String(2000))
+    response_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(255))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(String(1000))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    review: Mapped[CatalogProductReview] = relationship(back_populates="moderation")
+
+    __table_args__ = (
+        CheckConstraint("version > 0", name="ck_catalog_review_moderations_version"),
+        CheckConstraint(
+            "state IN ('pending', 'approved', 'flagged', 'rejected')",
+            name="ck_catalog_review_moderations_state",
+        ),
+    )
+
+
+class CatalogReviewAction(Base):
+    __tablename__ = "catalog_review_actions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    review_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_product_reviews.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    resulting_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    review: Mapped[CatalogProductReview] = relationship(back_populates="actions")
+
+    __table_args__ = (
+        CheckConstraint("expected_version > 0", name="ck_catalog_review_actions_expected_version"),
+        CheckConstraint("resulting_version > 0", name="ck_catalog_review_actions_resulting_version"),
     )
 
 
