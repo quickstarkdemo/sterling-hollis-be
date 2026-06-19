@@ -22,6 +22,7 @@ from app.services.catalog_workflow import (
     append_workflow_event,
     cleanup_expired_workflow_payloads,
     get_catalog_workflow_projection,
+    normalize_moderation,
     sanitize_workflow_payload,
     start_catalog_workflow,
 )
@@ -285,6 +286,23 @@ def test_projection_preserves_allowlisted_developer_fields(db):
     }
     assert detail.request_payload["product"]["title"] == "Midnight Coat"
     assert detail.response_payload["draft_id"] == "draft_123"
+
+
+def test_moderation_projection_preserves_normalized_category_names():
+    projected = normalize_moderation(
+        {
+            "flagged": True,
+            "categories": {"violence/graphic": True, "harassment": False},
+            "category_scores": {"violence/graphic": 0.987654321},
+        },
+        settings=_settings(),
+    )
+
+    assert projected == {
+        "flagged": True,
+        "categories": ["violence/graphic"],
+        "category_scores": {"violence/graphic": 0.987654},
+    }
 
 
 def test_redaction_removes_sensitive_content_at_every_depth():

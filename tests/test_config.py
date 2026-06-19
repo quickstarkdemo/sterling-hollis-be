@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.services import demo_observability
 
 
@@ -81,4 +81,24 @@ def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
     assert settings.catalog_studio_trace_retention_days == 3
     assert settings.catalog_studio_trace_max_bytes == 8192
     assert settings.catalog_studio_trace_redacted_keys == "internal_note,vendor_secret"
+    get_settings.cache_clear()
+
+
+def test_api_trace_capture_defaults_off_and_loads_independent_retention(monkeypatch):
+    assert Settings(_env_file=None).api_trace_capture_enabled is False
+
+    monkeypatch.setenv("API_TRACE_CAPTURE_ENABLED", "true")
+    monkeypatch.setenv("API_TRACE_PAYLOAD_RETENTION_HOURS", "12")
+    monkeypatch.setenv("API_TRACE_METADATA_RETENTION_DAYS", "5")
+    monkeypatch.setenv("API_TRACE_MAX_EVENTS", "75")
+    monkeypatch.setenv("API_TRACE_REDACTED_KEYS", "vendor_private")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.api_trace_capture_enabled is True
+    assert settings.api_trace_payload_retention_hours == 12
+    assert settings.api_trace_metadata_retention_days == 5
+    assert settings.api_trace_max_events == 75
+    assert settings.api_trace_redacted_keys == "vendor_private"
     get_settings.cache_clear()

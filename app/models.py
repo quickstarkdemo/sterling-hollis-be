@@ -459,6 +459,154 @@ class CatalogWorkflowEvent(Base):
     )
 
 
+class ApiTrace(Base):
+    __tablename__ = "api_traces"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    projection_version: Mapped[str] = mapped_column(
+        String(16), default="1.0", server_default="1.0", nullable=False
+    )
+    owner_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_provider_user_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True
+    )
+    surface: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    root_span_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    attributes_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    truncation_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    payload_expired: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False, index=True
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    metadata_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("duration_ms IS NULL OR duration_ms >= 0", name="ck_api_traces_duration"),
+        Index("ix_api_traces_owner_created", "owner_provider_user_id", "created_at"),
+    )
+
+
+class ApiTraceSpan(Base):
+    __tablename__ = "api_trace_spans"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(
+        ForeignKey("api_traces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    span_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_span_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    service: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    attributes_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("duration_ms IS NULL OR duration_ms >= 0", name="ck_api_trace_spans_duration"),
+        UniqueConstraint("trace_id", "span_id", name="uq_api_trace_spans_trace_span"),
+        Index("ix_api_trace_spans_trace_started", "trace_id", "started_at"),
+    )
+
+
+class ApiTraceLink(Base):
+    __tablename__ = "api_trace_links"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(
+        ForeignKey("api_traces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    link_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    span_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    linked_trace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    linked_span_id: Mapped[str | None] = mapped_column(String(64))
+    relationship: Mapped[str] = mapped_column(String(32), nullable=False)
+    attributes_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("trace_id", "link_id", name="uq_api_trace_links_trace_link"),
+    )
+
+
+class ApiTraceEvent(Base):
+    __tablename__ = "api_trace_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(
+        ForeignKey("api_traces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    span_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str | None] = mapped_column(String(32), index=True)
+    attributes_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("sequence >= 0", name="ck_api_trace_events_sequence"),
+        UniqueConstraint("trace_id", "event_id", name="uq_api_trace_events_trace_event"),
+        Index("ix_api_trace_events_trace_sequence", "trace_id", "sequence"),
+    )
+
+
+class ApiTraceArtifact(Base):
+    __tablename__ = "api_trace_artifacts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(
+        ForeignKey("api_traces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    span_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    media_type: Mapped[str | None] = mapped_column(String(128))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    attributes_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("size_bytes IS NULL OR size_bytes >= 0", name="ck_api_trace_artifacts_size"),
+        UniqueConstraint("trace_id", "artifact_id", name="uq_api_trace_artifacts_trace_artifact"),
+    )
+
+
 class CatalogSourceBundle(Base):
     __tablename__ = "catalog_source_bundles"
 

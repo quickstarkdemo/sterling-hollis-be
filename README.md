@@ -136,6 +136,19 @@ user ID before it is sent as an OpenAI safety identifier.
 | `CATALOG_STUDIO_TRACE_MAX_OBJECT_KEYS` | `50` | Optional trace override | no |
 | `CATALOG_STUDIO_TRACE_MAX_BYTES` | `16384` | Optional trace override | no |
 | `CATALOG_STUDIO_TRACE_REDACTED_KEYS` | empty | Add deployment-specific JSON keys to redact | no |
+| `API_TRACE_CAPTURE_ENABLED` | `false` | Set to `true` only for authenticated developer trace capture | no |
+| `API_TRACE_PAYLOAD_RETENTION_HOURS` | `24` | Optional generic trace payload retention override | no |
+| `API_TRACE_METADATA_RETENTION_DAYS` | `7` | Optional generic trace topology retention override | no |
+| `API_TRACE_MAX_DEPTH` | `6` | Optional generic trace redaction override | no |
+| `API_TRACE_MAX_STRING_LENGTH` | `1000` | Optional generic trace redaction override | no |
+| `API_TRACE_MAX_ARRAY_LENGTH` | `25` | Optional generic trace redaction override | no |
+| `API_TRACE_MAX_OBJECT_KEYS` | `50` | Optional generic trace redaction override | no |
+| `API_TRACE_MAX_BYTES` | `16384` | Optional generic trace payload override | no |
+| `API_TRACE_REDACTED_KEYS` | empty | Add deployment-specific generic trace keys to redact | no |
+| `API_TRACE_MAX_SPANS` | `100` | Optional per-trace topology override | no |
+| `API_TRACE_MAX_LINKS` | `100` | Optional per-trace topology override | no |
+| `API_TRACE_MAX_EVENTS` | `250` | Optional per-trace topology override | no |
+| `API_TRACE_MAX_ARTIFACTS` | `50` | Optional per-trace topology override | no |
 | `CATALOG_STUDIO_MEDIA_ALLOWED_HOSTS` | empty | Published remote images are used as edit sources | no |
 | `CATALOG_STUDIO_MEDIA_FETCH_MAX_BYTES` | `8388608` | Optional remote image safety override | no |
 | `CATALOG_STUDIO_MEDIA_FETCH_TIMEOUT_SECONDS` | `15` | Optional remote image safety override | no |
