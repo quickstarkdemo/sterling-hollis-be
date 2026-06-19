@@ -212,6 +212,26 @@ def test_api_trace_capability_reports_enabled_without_exposing_configuration():
     assert capabilities["api_traces"] == {"configured": True}
 
 
+def test_catalog_trace_capture_does_not_activate_for_uninstrumented_admin_routes():
+    settings = _settings(
+        catalog_studio_clerk_authorized_subjects="user_admin",
+        api_trace_capture_enabled=True,
+    )
+    client = _client(settings, _principal(subject="user_admin"))
+
+    ordinary = client.get("/api/admin/session")
+    traced = client.get(
+        "/api/admin/session",
+        headers={
+            "traceparent": f"00-{'1' * 32}-{'2' * 16}-01",
+            "x-trace-surface": "catalog-studio",
+        },
+    )
+
+    assert "x-trace-capture" not in ordinary.headers
+    assert "x-trace-capture" not in traced.headers
+
+
 def test_production_legacy_admin_route_requires_catalog_admin():
     settings = _settings(
         environment="production",

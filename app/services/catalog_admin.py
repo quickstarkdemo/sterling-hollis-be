@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 from typing import Callable, Literal
 from uuid import uuid4
 
@@ -50,6 +51,8 @@ from app.catalog.authoring import (
     persisted_product_metadata,
     public_product_metadata,
 )
+from app.catalog.workflow_schemas import WorkflowEventInput
+from app.config import Settings
 from app.catalog.references import (
     CATALOG_AVAILABILITY_CHOICES,
     CATALOG_AVAILABILITY_VALUES,
@@ -83,7 +86,11 @@ from app.services.catalog_normalization import (
     variant_key_for_values,
 )
 from app.services.index_jobs import enqueue_index_job
+from app.services.catalog_workflow import append_workflow_event
 from app.services.taxonomy import CATEGORY_TAXONOMY
+
+
+logger = logging.getLogger(__name__)
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -1651,6 +1658,7 @@ def publish_draft(
     expected_version: int,
     idempotency_key: str,
     principal: AuthenticatedPrincipal,
+    settings: Settings | None = None,
 ) -> tuple[LifecycleMutationResponse, bool]:
     payload = {"draft_id": draft_id, "expected_version": expected_version}
     operation = f"catalog.publish:{product_id}"
@@ -1708,7 +1716,46 @@ def publish_draft(
         principal=principal,
         action=action,
     )
-    return LifecycleMutationResponse.model_validate(response), replayed
+    result = LifecycleMutationResponse.model_validate(response)
+    if settings is not None:
+        workflow = _workflow_for_draft(db, draft_id, principal)
+        if workflow is not None:
+            try:
+                append_workflow_event(
+                    db,
+                    workflow_id=workflow.id,
+                    principal=principal,
+                    settings=settings,
+                    event=WorkflowEventInput(
+                        client_event_id=(
+                            "publication-"
+                            + hashlib.sha256(idempotency_key.encode()).hexdigest()[:24]
+                        ),
+                        stage="publication",
+                        capability="publication",
+                        status="succeeded",
+                        business_summary="Validated and published the canonical catalog product.",
+                        request_payload={
+                            "action": "publish_catalog_product",
+                            "draft_id": draft_id,
+                            "expected_draft_version": expected_version,
+                        },
+                        response_payload={
+                            "status": "published",
+                            "published_product_id": result.product_id,
+                            "draft_version": result.version,
+                        },
+                        draft_id=draft_id,
+                        published_product_id=result.product_id,
+                    ),
+                )
+            except Exception as exc:  # trace/timeline enrichment must not undo publication
+                db.rollback()
+                logger.warning(
+                    "Catalog publication trace enrichment failed (%s).",
+                    type(exc).__name__,
+                )
+    return result, replayed
 
 
 def archive_product(

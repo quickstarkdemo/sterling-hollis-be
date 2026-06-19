@@ -15,6 +15,7 @@ from app.api_traces.context import (
 )
 from app.api_traces.schemas import (
     ApiTraceProjection,
+    ClientTraceEventInput,
     TraceArtifactProjection,
     TraceEventProjection,
     TraceLinkProjection,
@@ -22,6 +23,7 @@ from app.api_traces.schemas import (
 )
 from app.api_traces.service import (
     ApiTraceRecorder,
+    append_client_trace_event,
     cleanup_expired_api_traces,
     get_trace_projection,
 )
@@ -373,6 +375,180 @@ def test_cardinality_limits_apply_across_incremental_recordings(session_factory)
     assert trace is not None
     assert trace.truncation_json == {"events": 2}
     assert event_count == 2
+
+
+def test_incremental_recording_closes_existing_spans_and_resolves_sequence_collisions(
+    session_factory,
+):
+    now = datetime(2026, 6, 19, 20, 0, tzinfo=timezone.utc)
+    recorder = ApiTraceRecorder(settings=_settings(), session_factory=session_factory)
+    first = _projection(now)
+    first.status = "running"
+    first.completed_at = None
+    first.duration_ms = None
+    first.spans[0].status = "running"
+    first.spans[0].completed_at = None
+    first.spans[0].duration_ms = None
+    first.events = [first.events[0]]
+
+    second = _projection(now)
+    second.events = [
+        TraceEventProjection(
+            event_id="event_late_collision",
+            span_id="span_root",
+            sequence=1,
+            name="Late lifecycle event",
+            event_type="status",
+            occurred_at=now + timedelta(milliseconds=850),
+        )
+    ]
+
+    assert recorder.record(context=_context(), projection=first, now=now)
+    assert recorder.record(context=_context(), projection=second, now=now)
+
+    with session_factory() as db:
+        projected = get_trace_projection(
+            db,
+            trace_id=first.trace_id,
+            owner_provider="clerk",
+            owner_provider_user_id="user_admin",
+            now=now,
+        )
+
+    assert projected is not None
+    assert projected.status == "succeeded"
+    assert projected.spans[0].status == "succeeded"
+    assert projected.spans[0].completed_at == now + timedelta(milliseconds=850)
+    assert [event.sequence for event in projected.events] == [1, 2]
+
+
+def test_client_ui_events_promote_the_browser_action_to_trace_root(session_factory):
+    now = datetime(2026, 6, 19, 20, 0, tzinfo=timezone.utc)
+    recorder = ApiTraceRecorder(settings=_settings(), session_factory=session_factory)
+    projection = _projection(now)
+    assert recorder.record(context=_context(), projection=projection, now=now)
+
+    with session_factory() as db:
+        for event_type, status, offset in (
+            ("ui.started", "running", 0),
+            ("ui.completed", "completed", 900),
+        ):
+            append_client_trace_event(
+                db,
+                trace_id=projection.trace_id,
+                owner_provider="clerk",
+                owner_provider_user_id="user_admin",
+                event=ClientTraceEventInput(
+                    event_id=f"browser-{event_type}",
+                    span_id="span_browser_action",
+                    name="Generate product draft",
+                    event_type=event_type,
+                    status=status,
+                    occurred_at=now + timedelta(milliseconds=offset),
+                    attributes={"operation": "ui.action"},
+                ),
+                settings=_settings(),
+                now=now + timedelta(milliseconds=offset),
+            )
+        projected = get_trace_projection(
+            db,
+            trace_id=projection.trace_id,
+            owner_provider="clerk",
+            owner_provider_user_id="user_admin",
+            now=now,
+        )
+
+    assert projected is not None
+    assert projected.root_span_id == "span_browser_action"
+    assert projected.spans[0].span_id == "span_browser_action"
+    assert projected.spans[1].parent_span_id == "span_browser_action"
+    assert projected.status == "completed"
+    assert projected.spans[0].status == "completed"
+
+
+def test_client_ui_event_cannot_relabel_a_backend_span(session_factory):
+    now = datetime(2026, 6, 19, 20, 0, tzinfo=timezone.utc)
+    recorder = ApiTraceRecorder(settings=_settings(), session_factory=session_factory)
+    projection = _projection(now)
+    assert recorder.record(context=_context(), projection=projection, now=now)
+
+    with session_factory() as db, pytest.raises(
+        ValueError, match="browser action span"
+    ):
+        append_client_trace_event(
+            db,
+            trace_id=projection.trace_id,
+            owner_provider="clerk",
+            owner_provider_user_id="user_admin",
+            event=ClientTraceEventInput(
+                event_id="forged-ui-complete",
+                span_id="span_openai",
+                name="Relabel provider span",
+                event_type="ui.completed",
+                status="completed",
+                occurred_at=now,
+            ),
+            settings=_settings(),
+            now=now,
+        )
+
+
+def test_incremental_request_roots_attach_to_the_existing_trace_root(session_factory):
+    now = datetime(2026, 6, 19, 20, 0, tzinfo=timezone.utc)
+    recorder = ApiTraceRecorder(settings=_settings(), session_factory=session_factory)
+    first = _projection(now)
+    second = ApiTraceProjection(
+        trace_id=first.trace_id,
+        surface=first.surface,
+        name=first.name,
+        root_span_id="span_request_two",
+        status="succeeded",
+        started_at=now + timedelta(seconds=1),
+        completed_at=now + timedelta(seconds=2),
+        duration_ms=1000,
+        spans=[
+            TraceSpanProjection(
+                span_id="span_request_two",
+                name="Second browser request",
+                operation="http.client",
+                service="sterling-hollis-fe",
+                status="succeeded",
+                started_at=now + timedelta(seconds=1),
+                completed_at=now + timedelta(seconds=2),
+                duration_ms=1000,
+            ),
+            TraceSpanProjection(
+                span_id="span_server_two",
+                parent_span_id="span_request_two",
+                name="Second API request",
+                operation="http.server",
+                service="sterling-hollis-be",
+                status="succeeded",
+                started_at=now + timedelta(seconds=1),
+                completed_at=now + timedelta(seconds=2),
+                duration_ms=1000,
+            ),
+        ],
+    )
+
+    assert recorder.record(context=_context(), projection=first, now=now)
+    assert recorder.record(context=_context(), projection=second, now=now)
+
+    with session_factory() as db:
+        projected = get_trace_projection(
+            db,
+            trace_id=first.trace_id,
+            owner_provider="clerk",
+            owner_provider_user_id="user_admin",
+            now=now,
+        )
+
+    assert projected is not None
+    request_two = next(
+        span for span in projected.spans if span.span_id == "span_request_two"
+    )
+    assert projected.root_span_id == first.root_span_id
+    assert request_two.parent_span_id == first.root_span_id
 
 
 def test_disabled_unauthorized_or_failed_recording_is_fail_open(session_factory):

@@ -15,6 +15,10 @@ from app.catalog.ai_schemas import CatalogAICommandRequest
 from app.catalog.admin_schemas import product_draft_v3_from_snapshot
 from app.config import Settings
 from app.models import CatalogDraftRevision, CatalogWorkflow
+from app.api_traces.adapters import (
+    new_openai_client_request_id,
+    openai_request_ids,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal
 from app.services.catalog_admin import draft_revision_version
 from app.services.catalog_suggestions import validate_suggestion_target_path
@@ -228,6 +232,9 @@ class CatalogRealtimeService:
             tool_names = self._v3_tool_names(context)
         else:
             tool_names = [tool_name]
+        client_request_id = new_openai_client_request_id("realtime")
+        response_id: str | None = None
+        provider_request_id: str | None = None
         try:
             provider = self._resolve_client()
             created = provider.realtime.client_secrets.create(
@@ -246,8 +253,10 @@ class CatalogRealtimeService:
                 ),
                 extra_headers={
                     "OpenAI-Safety-Identifier": self._safety_identifier(principal),
+                    "X-Client-Request-Id": client_request_id,
                 },
             )
+            response_id, provider_request_id = openai_request_ids(created)
             secret = str(getattr(created, "value", "") or "")
             expires_at = int(getattr(created, "expires_at", 0) or 0)
             if not secret or expires_at <= 0:
@@ -266,6 +275,9 @@ class CatalogRealtimeService:
                 error=exc,
                 session_id=session_id,
                 context=context_payload,
+                client_request_id=client_request_id,
+                response_id=response_id,
+                provider_request_id=provider_request_id,
             )
             raise
         except Exception as exc:
@@ -278,6 +290,9 @@ class CatalogRealtimeService:
                 error=error,
                 session_id=session_id,
                 context=context_payload,
+                client_request_id=client_request_id,
+                response_id=response_id,
+                provider_request_id=provider_request_id,
             )
             raise error from exc
 
@@ -291,6 +306,9 @@ class CatalogRealtimeService:
             session_id=session_id,
             expires_at=expires_at,
             context=context_payload,
+            client_request_id=client_request_id,
+            response_id=response_id,
+            provider_request_id=provider_request_id,
         )
         return CatalogRealtimeSessionResponse(
             client_secret=secret,
@@ -539,6 +557,9 @@ class CatalogRealtimeService:
         session_id: str | None = None,
         expires_at: int | None = None,
         context: dict[str, Any] | None = None,
+        client_request_id: str | None = None,
+        response_id: str | None = None,
+        provider_request_id: str | None = None,
         error: CatalogRealtimeError | None = None,
     ) -> None:
         append_workflow_event(
@@ -557,9 +578,11 @@ class CatalogRealtimeService:
                     else (error.detail if error else "Realtime voice could not start.")
                 ),
                 model=self.settings.catalog_studio_realtime_model,
+                request_id=provider_request_id or response_id,
                 error_code=error.code if error else None,
                 retryable=error.retryable if error else False,
                 request_payload={
+                    "client_request_id": client_request_id,
                     "input": {
                         "action": "create_realtime_session",
                         "safety_identifier_attached": bool(
@@ -571,6 +594,8 @@ class CatalogRealtimeService:
                 },
                 response_payload={
                     "status": "ready" if status_value == "succeeded" else "failed",
+                    "response_id": response_id,
+                    "provider_request_id": provider_request_id,
                     "tool_name": tool_name,
                     "tool_names": tool_names or ([tool_name] if tool_name else []),
                     "session_id": session_id,

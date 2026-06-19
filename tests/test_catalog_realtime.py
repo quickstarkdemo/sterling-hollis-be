@@ -121,14 +121,14 @@ def test_session_issues_workflow_bound_ephemeral_credential_with_only_draft_tool
     expected_safety_id = hmac.new(
         b"stable-test-secret", b"clerk:user_admin", hashlib.sha256
     ).hexdigest()
-    assert call["extra_headers"] == {"OpenAI-Safety-Identifier": expected_safety_id}
+    assert call["extra_headers"]["OpenAI-Safety-Identifier"] == expected_safety_id
+    assert call["extra_headers"]["X-Client-Request-Id"].startswith("sh-realtime-")
     assert "user_admin" not in expected_safety_id
     assert events[-1].capability == "realtime"
-    assert events[-1].request_json == {
-        "input": {
-            "action": "create_realtime_session",
-            "safety_identifier_attached": True,
-        }
+    assert events[-1].request_json["client_request_id"].startswith("sh-realtime-")
+    assert events[-1].request_json["input"] == {
+        "action": "create_realtime_session",
+        "safety_identifier_attached": True,
     }
     assert "audio" not in repr(events[-1].request_json).lower()
     assert "ek_short_lived" not in repr(events[-1].response_json)

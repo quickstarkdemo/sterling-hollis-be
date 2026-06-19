@@ -18,6 +18,7 @@ from app.catalog.workflow_schemas import (
     WorkflowEventInput,
     WorkflowEventResponse,
 )
+from app.api_traces.adapters import queue_catalog_workflow_event
 from app.config import Settings
 from app.models import (
     CatalogDraftRevision,
@@ -270,7 +271,27 @@ def start_catalog_workflow(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Idempotency-Key was already used for a different catalog workflow.",
             )
-        if scrubbed:
+        initial = db.scalar(
+            select(CatalogWorkflowEvent).where(
+                CatalogWorkflowEvent.workflow_id == existing.id,
+                CatalogWorkflowEvent.sequence == 1,
+            )
+        )
+        queued = bool(
+            initial
+            and queue_catalog_workflow_event(
+                db,
+                workflow=existing,
+                event=initial,
+                settings=settings,
+                image_job=(
+                    db.get(ImageGenerationJob, image_job_id)
+                    if image_job_id
+                    else None
+                ),
+            )
+        )
+        if scrubbed or queued:
             db.commit()
         return existing
     _validate_links(
@@ -320,6 +341,13 @@ def start_catalog_workflow(
         created_at=now,
     )
     db.add_all([workflow, initial])
+    queue_catalog_workflow_event(
+        db,
+        workflow=workflow,
+        event=initial,
+        settings=settings,
+        image_job=db.get(ImageGenerationJob, image_job_id) if image_job_id else None,
+    )
     try:
         db.commit()
     except IntegrityError as exc:
@@ -365,7 +393,18 @@ def append_workflow_event(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="client_event_id was already used for a different workflow event.",
             )
-        if scrubbed and commit:
+        queued = queue_catalog_workflow_event(
+            db,
+            workflow=workflow,
+            event=existing,
+            settings=settings,
+            image_job=(
+                db.get(ImageGenerationJob, event.image_job_id)
+                if event.image_job_id
+                else None
+            ),
+        )
+        if commit and (scrubbed or queued):
             db.commit()
         return existing
 
@@ -425,6 +464,17 @@ def append_workflow_event(
     if event.published_product_id:
         workflow.published_product_id = event.published_product_id
     db.add(row)
+    queue_catalog_workflow_event(
+        db,
+        workflow=workflow,
+        event=row,
+        settings=settings,
+        image_job=(
+            db.get(ImageGenerationJob, event.image_job_id)
+            if event.image_job_id
+            else None
+        ),
+    )
     if commit:
         db.commit()
     else:

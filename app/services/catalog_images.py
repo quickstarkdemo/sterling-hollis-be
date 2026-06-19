@@ -38,6 +38,11 @@ from app.catalog.image_schemas import (
     CatalogMediaMutationRequest,
 )
 from app.catalog.workflow_schemas import WorkflowEventInput
+from app.api_traces.adapters import (
+    current_image_trace_lineage,
+    new_openai_client_request_id,
+    openai_request_ids,
+)
 from app.config import Settings
 from app.models import CatalogDraftRevision, CatalogWorkflow, ImageGenerationJob
 from app.schemas import IndexJobStatus
@@ -98,6 +103,33 @@ def _owned_workflow(
     ):
         raise HTTPException(status_code=404, detail="Catalog Studio catalog workflow not found.")
     return workflow
+
+
+def _latest_failed_trace_job(
+    db: Session,
+    *,
+    workflow_id: str,
+    draft_revision_id: str,
+    requested_action: str,
+    requested_variant_index: int,
+    source_media_id: str | None = None,
+    requested_intent: str | None = None,
+) -> ImageGenerationJob | None:
+    return db.scalar(
+        select(ImageGenerationJob)
+        .where(
+            ImageGenerationJob.workflow_id == workflow_id,
+            ImageGenerationJob.draft_revision_id == draft_revision_id,
+            ImageGenerationJob.requested_action == requested_action,
+            ImageGenerationJob.requested_variant_index == requested_variant_index,
+            ImageGenerationJob.source_media_id == source_media_id,
+            ImageGenerationJob.requested_intent == requested_intent,
+            ImageGenerationJob.status == IndexJobStatus.failed.value,
+            ImageGenerationJob.api_trace_id.is_not(None),
+        )
+        .order_by(ImageGenerationJob.created_at.desc(), ImageGenerationJob.id.desc())
+        .limit(1)
+    )
 
 
 def _current_draft(
@@ -329,6 +361,14 @@ def enqueue_catalog_image_job(
             raise _conflict("The approved source image is no longer available to refine.")
 
     options = product_image_options(detail_count=1, settings=settings)
+    api_trace_id, api_trace_span_id = current_image_trace_lineage()
+    retry_of = _latest_failed_trace_job(
+        db,
+        workflow_id=workflow.id,
+        draft_revision_id=request.draft_id,
+        requested_action=request.action,
+        requested_variant_index=request.variant_index,
+    )
     now = datetime.now(timezone.utc)
     job = ImageGenerationJob(
         id=f"imgjob_{uuid4().hex[:12]}",
@@ -339,6 +379,9 @@ def enqueue_catalog_image_job(
         requested_variant_index=request.variant_index,
         idempotency_key_hash=key_hash,
         request_hash=fingerprint,
+        api_trace_id=api_trace_id,
+        api_trace_span_id=api_trace_span_id,
+        api_trace_retry_of_job_id=retry_of.id if retry_of else None,
         refinement_prompt=request.refinement_prompt,
         source_image_path=source_path,
         limit=1,
@@ -468,6 +511,16 @@ def enqueue_catalog_media_job(
         draft, revision.snapshot_json
     )
     options = product_image_options(detail_count=1, settings=settings)
+    api_trace_id, api_trace_span_id = current_image_trace_lineage()
+    retry_of = _latest_failed_trace_job(
+        db,
+        workflow_id=workflow.id,
+        draft_revision_id=revision.id,
+        requested_action="refine",
+        requested_variant_index=0,
+        source_media_id=source.media_id,
+        requested_intent=request.intent,
+    )
     job = ImageGenerationJob(
         id=f"imgjob_{uuid4().hex[:12]}",
         workflow_id=workflow.id,
@@ -480,6 +533,9 @@ def enqueue_catalog_media_job(
         requested_intent=request.intent,
         idempotency_key_hash=key_hash,
         request_hash=fingerprint,
+        api_trace_id=api_trace_id,
+        api_trace_span_id=api_trace_span_id,
+        api_trace_retry_of_job_id=retry_of.id if retry_of else None,
         refinement_prompt=_media_refinement_prompt(request),
         source_image_path=source_path,
         limit=1,
@@ -697,9 +753,11 @@ def _moderate_media_instruction(
             timeout=settings.catalog_studio_responses_timeout_seconds,
         )
     try:
+        client_request_id = new_openai_client_request_id("moderation")
         response = client.moderations.create(
             model=settings.catalog_studio_moderation_model,
             input=instruction,
+            extra_headers={"X-Client-Request-Id": client_request_id},
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Media instruction moderation failed.") from exc
@@ -834,6 +892,7 @@ def enqueue_catalog_image_variant_set(
     latest_by_variant = {job.requested_variant_index or 0: job for job in existing}
     command_key_hash = _hash(idempotency_key.strip())
     options = product_image_options(detail_count=1, settings=settings)
+    api_trace_id, api_trace_span_id = current_image_trace_lineage()
     now = datetime.now(timezone.utc)
     created: list[ImageGenerationJob] = []
     primary = draft.variants[primary_index]
@@ -877,6 +936,15 @@ def enqueue_catalog_image_variant_set(
             image_variant_set_id=set_id,
             idempotency_key_hash=child_key,
             request_hash=_hash(refinement),
+            api_trace_id=api_trace_id,
+            api_trace_span_id=api_trace_span_id,
+            api_trace_retry_of_job_id=(
+                latest.id
+                if latest is not None
+                and latest.status == IndexJobStatus.failed.value
+                and latest.api_trace_id
+                else None
+            ),
             refinement_prompt=refinement,
             source_image_path=source_path,
             limit=1,
@@ -1203,6 +1271,7 @@ def _process_catalog_image_job(
             written=written,
         )
 
+    client_request_id = new_openai_client_request_id("images")
     try:
         if client is None:
             if OpenAI is None:
@@ -1215,6 +1284,7 @@ def _process_catalog_image_job(
             "quality": options.quality,
             "output_format": options.output_format,
             "n": 1,
+            "extra_headers": {"X-Client-Request-Id": client_request_id},
         }
         if job.requested_action == "refine":
             if job.target_media_id:
@@ -1312,7 +1382,7 @@ def _process_catalog_image_job(
         job.result_sample = [{"image_link": detail_url, "thumbnail_link": thumb_url}]
         job.error_message = None
         job.finished_at = datetime.now(timezone.utc)
-        request_id = getattr(response, "_request_id", None) or getattr(response, "request_id", None)
+        response_id, provider_request_id = openai_request_ids(response)
         append_workflow_event(
             db,
             workflow_id=workflow.id,
@@ -1326,10 +1396,13 @@ def _process_catalog_image_job(
                 status="succeeded",
                 business_summary="Generated an image for review in the catalog draft.",
                 model=job.model,
-                request_id=request_id,
+                request_id=provider_request_id or response_id,
                 duration_ms=max(0, int((monotonic() - timer) * 1000)),
                 usage=_response_usage(response),
+                request_payload={"client_request_id": client_request_id},
                 response_payload={
+                    "response_id": response_id,
+                    "provider_request_id": provider_request_id,
                     "image_url": detail_url,
                     "thumbnail_url": thumb_url,
                     "approval_status": "review",
@@ -1376,6 +1449,7 @@ def _process_catalog_image_job(
                 duration_ms=max(0, int((monotonic() - timer) * 1000)),
                 error_code=code,
                 retryable=retryable,
+                request_payload={"client_request_id": client_request_id},
                 response_payload={
                     "image_variant_set_id": job.image_variant_set_id,
                     "variant_index": job.requested_variant_index,

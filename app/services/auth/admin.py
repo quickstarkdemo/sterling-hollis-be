@@ -75,6 +75,9 @@ def require_catalog_admin(
 
 
 _TRACE_SURFACE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_CATALOG_TRACE_PATH_RE = re.compile(
+    r"^/api/admin/catalog/(?:workflows(?:/.*)?|(?:(?:v2|v3)/)?products/[^/]+/publish)$"
+)
 
 
 async def require_api_trace_capture(
@@ -102,6 +105,39 @@ async def require_api_trace_capture(
         requested_surface
         if _TRACE_SURFACE_RE.fullmatch(requested_surface)
         else "developer"
+    )
+    context = TraceCaptureContext.authorized_for(
+        owner_provider=principal.provider,
+        owner_provider_user_id=principal.provider_user_id,
+        surface=surface,
+        provisional=provisional,
+    )
+    request.state.api_trace_capture = context
+    with bind_trace_capture_context(context):
+        yield context
+
+
+async def bind_catalog_trace_capture(
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> AsyncIterator[TraceCaptureContext | None]:
+    """Bind opt-in trace capture around Catalog Studio business endpoints."""
+
+    provisional = getattr(request.state, "api_trace_provisional", None)
+    if (
+        not settings.api_trace_capture_enabled
+        or not isinstance(provisional, ProvisionalTraceContext)
+        or not provisional.remote_parent_valid
+        or not _CATALOG_TRACE_PATH_RE.fullmatch(request.url.path)
+    ):
+        yield None
+        return
+    requested_surface = request.headers.get("x-trace-surface", "catalog-studio").strip().lower()
+    surface = (
+        requested_surface
+        if _TRACE_SURFACE_RE.fullmatch(requested_surface)
+        else "catalog-studio"
     )
     context = TraceCaptureContext.authorized_for(
         owner_provider=principal.provider,

@@ -205,13 +205,24 @@ class ApiTraceRecorder:
         ):
             raise ValueError("trace ownership mismatch")
 
-        existing_span_ids = set(
-            db.scalars(
-                select(ApiTraceSpan.span_id).where(
+        def persisted_parent_span_id(span: TraceSpanProjection) -> str | None:
+            if (
+                trace is not None
+                and span.span_id == projection.root_span_id
+                and span.span_id != trace.root_span_id
+            ):
+                return trace.root_span_id
+            return span.parent_span_id
+
+        existing_spans = {
+            row.span_id: row
+            for row in db.scalars(
+                select(ApiTraceSpan).where(
                     ApiTraceSpan.trace_id == projection.trace_id
                 )
             ).all()
-        )
+        }
+        existing_span_ids = set(existing_spans)
         existing_link_ids = set(
             db.scalars(
                 select(ApiTraceLink.link_id).where(
@@ -222,6 +233,13 @@ class ApiTraceRecorder:
         existing_event_ids = set(
             db.scalars(
                 select(ApiTraceEvent.event_id).where(
+                    ApiTraceEvent.trace_id == projection.trace_id
+                )
+            ).all()
+        )
+        existing_event_sequences = set(
+            db.scalars(
+                select(ApiTraceEvent.sequence).where(
                     ApiTraceEvent.trace_id == projection.trace_id
                 )
             ).all()
@@ -259,6 +277,18 @@ class ApiTraceRecorder:
             identity=lambda item: item.event_id,
             limit=self.settings.api_trace_max_events,
         )
+        next_event_sequence = max(existing_event_sequences, default=-1) + 1
+        resolved_events: list[TraceEventProjection] = []
+        for event in events:
+            sequence = event.sequence
+            if sequence in existing_event_sequences:
+                while next_event_sequence in existing_event_sequences:
+                    next_event_sequence += 1
+                sequence = next_event_sequence
+                next_event_sequence += 1
+            existing_event_sequences.add(sequence)
+            resolved_events.append(event.model_copy(update={"sequence": sequence}))
+        events = resolved_events
         eligible_artifacts = [
             item for item in projection.artifacts if not item.span_id or item.span_id in kept_span_ids
         ]
@@ -331,13 +361,31 @@ class ApiTraceRecorder:
                 )
 
         payload_expired = trace.payload_expired
+        for span in projection.spans:
+            existing = existing_spans.get(span.span_id)
+            if existing is None:
+                continue
+            if (
+                existing.parent_span_id != persisted_parent_span_id(span)
+                or existing.name != safe_observability_text(span.name, max_length=128)
+                or existing.operation
+                != safe_observability_text(span.operation, max_length=64)
+                or existing.service != safe_observability_text(span.service, max_length=128)
+            ):
+                raise ValueError("existing trace span topology is immutable")
+            existing.status = span.status
+            existing.duration_ms = span.duration_ms
+            existing.completed_at = span.completed_at
+            if not payload_expired:
+                existing.attributes_json = _payload(span.attributes, policy=policy)
+
         for span in spans:
             db.add(
                 ApiTraceSpan(
                     id=_row_id("span", trace.id, span.span_id),
                     trace_id=trace.id,
                     span_id=span.span_id,
-                    parent_span_id=span.parent_span_id,
+                    parent_span_id=persisted_parent_span_id(span),
                     name=safe_observability_text(span.name, max_length=128),
                     operation=safe_observability_text(span.operation, max_length=64),
                     service=safe_observability_text(span.service, max_length=128),
@@ -720,13 +768,83 @@ def append_client_trace_event(
     )
     if existing:
         return _event_projection(existing, payload_expired=payload_expired)
-    if event.span_id and not db.scalar(
-        select(ApiTraceSpan.id).where(
-            ApiTraceSpan.trace_id == trace.id,
-            ApiTraceSpan.span_id == event.span_id,
+    span = None
+    if event.span_id:
+        span = db.scalar(
+            select(ApiTraceSpan).where(
+                ApiTraceSpan.trace_id == trace.id,
+                ApiTraceSpan.span_id == event.span_id,
+            )
         )
-    ):
+    if event.span_id and span is None and not event.event_type.startswith("ui."):
         raise ValueError("span_id does not belong to this trace")
+    policy = _redaction_policy(settings)
+    if event.span_id and event.event_type.startswith("ui."):
+        occurred_at = _as_utc(event.occurred_at)
+        ui_status = event.status or (
+            "running" if event.event_type == "ui.started" else "completed"
+        )
+        completed_at = None if event.event_type == "ui.started" else occurred_at
+        if span is not None and (
+            span.operation != "ui.action" or span.service != "sterling-hollis-fe"
+        ):
+            raise ValueError("ui events must reference a browser action span")
+        if span is None:
+            span_count = db.scalar(
+                select(func.count(ApiTraceSpan.id)).where(
+                    ApiTraceSpan.trace_id == trace.id
+                )
+            ) or 0
+            if span_count >= max(1, settings.api_trace_max_spans):
+                raise ValueError("trace span limit reached")
+            current_root = db.scalar(
+                select(ApiTraceSpan).where(
+                    ApiTraceSpan.trace_id == trace.id,
+                    ApiTraceSpan.span_id == trace.root_span_id,
+                )
+            )
+            if current_root is None:
+                raise ValueError("trace root span is unavailable")
+            current_root.parent_span_id = event.span_id
+            span = ApiTraceSpan(
+                id=_row_id("span", trace.id, event.span_id),
+                trace_id=trace.id,
+                span_id=event.span_id,
+                parent_span_id=None,
+                name=safe_observability_text(event.name, max_length=128),
+                operation="ui.action",
+                service="sterling-hollis-fe",
+                status=ui_status,
+                duration_ms=0 if completed_at is not None else None,
+                attributes_json=_payload(
+                    event.attributes,
+                    policy=policy,
+                    expired=payload_expired,
+                ),
+                started_at=occurred_at,
+                completed_at=completed_at,
+                created_at=recorded_at,
+            )
+            db.add(span)
+            trace.root_span_id = event.span_id
+            trace.started_at = min(_as_utc(trace.started_at), occurred_at)
+        else:
+            span.status = ui_status
+            if completed_at is not None:
+                span.completed_at = completed_at
+                span.duration_ms = max(
+                    0,
+                    int((completed_at - _as_utc(span.started_at)).total_seconds() * 1000),
+                )
+            if not payload_expired:
+                span.attributes_json = _payload(event.attributes, policy=policy)
+        if completed_at is not None:
+            trace.status = "failed" if event.event_type == "ui.failed" else "completed"
+            trace.completed_at = completed_at
+            trace.duration_ms = max(
+                0,
+                int((completed_at - _as_utc(trace.started_at)).total_seconds() * 1000),
+            )
     event_count = db.scalar(
         select(func.count(ApiTraceEvent.id)).where(ApiTraceEvent.trace_id == trace.id)
     ) or 0
@@ -736,7 +854,6 @@ def append_client_trace_event(
         select(func.max(ApiTraceEvent.sequence)).where(ApiTraceEvent.trace_id == trace.id)
     )
     sequence = (-1 if last_sequence is None else last_sequence) + 1
-    policy = _redaction_policy(settings)
     row = ApiTraceEvent(
         id=_row_id("event", trace.id, event.event_id),
         trace_id=trace.id,

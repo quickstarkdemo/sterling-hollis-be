@@ -153,11 +153,19 @@ from app.services.catalog_workflow import (
     project_workflow_event,
     start_catalog_workflow,
 )
-from app.services.auth.admin import catalog_studio_capabilities, require_catalog_admin
+from app.services.auth.admin import (
+    bind_catalog_trace_capture,
+    catalog_studio_capabilities,
+    require_catalog_admin,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal
 
 
-router = APIRouter(prefix="/api/admin", tags=["catalog-studio-admin"])
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["catalog-studio-admin"],
+    dependencies=[Depends(bind_catalog_trace_capture)],
+)
 
 
 def get_catalog_ai_service(
@@ -474,6 +482,7 @@ def publish_catalog_product(
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
 ) -> LifecycleMutationResponse:
     result, _ = publish_draft(
         db,
@@ -482,6 +491,7 @@ def publish_catalog_product(
         expected_version=request.expected_version,
         idempotency_key=idempotency_key,
         principal=principal,
+        settings=settings,
     )
     return result
 
@@ -680,6 +690,7 @@ def publish_catalog_product_v2(
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
 ) -> LifecycleMutationResponse:
     result, _ = publish_draft(
         db,
@@ -688,6 +699,7 @@ def publish_catalog_product_v2(
         expected_version=request.expected_version,
         idempotency_key=idempotency_key,
         principal=principal,
+        settings=settings,
     )
     return result
 
@@ -1009,6 +1021,7 @@ def publish_catalog_product_v3(
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
 ) -> LifecycleMutationResponse:
     result, _ = publish_draft(
         db,
@@ -1017,6 +1030,7 @@ def publish_catalog_product_v3(
         expected_version=request.expected_version,
         idempotency_key=idempotency_key,
         principal=principal,
+        settings=settings,
     )
     return result
 
