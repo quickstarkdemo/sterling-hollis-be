@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import math
-import re
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -28,262 +27,34 @@ from app.models import (
     CatalogWorkflowEvent,
     ImageGenerationJob,
 )
+from app.observability.redaction import (
+    RETENTION_MARKER,
+    RedactionPolicy,
+    configured_redacted_keys,
+    enforce_payload_bytes,
+    safe_observability_text,
+    sanitize_observability_payload,
+)
 from app.services.auth.clerk import AuthenticatedPrincipal
 
-
-REDACTED = "[REDACTED]"
-RETENTION_MARKER = {"_retention": "expired"}
-
-_BUILT_IN_REDACTED_KEYS = {
-    "api_key",
-    "authorization",
-    "cookie",
-    "credentials",
-    "customer",
-    "customer_id",
-    "address",
-    "email",
-    "first_name",
-    "full_name",
-    "headers",
-    "identity",
-    "image_bytes",
-    "instructions",
-    "password",
-    "phone",
-    "ip_address",
-    "last_name",
-    "private_reasoning",
-    "provider_user_id",
-    "raw_audio",
-    "reasoning",
-    "secret",
-    "system",
-    "system_prompt",
-    "token",
-    "user_id",
-}
-
-_ALLOWED_KEYS = {
-    "action",
-    "approval_status",
-    "attributes",
-    "availability",
-    "base_version",
-    "blocked",
-    "brand",
-    "capability",
-    "categories",
-    "category",
-    "category_scores",
-    "citation_ids",
-    "color",
-    "context",
-    "decision",
-    "description",
-    "detail_urls",
-    "draft",
-    "draft_id",
-    "draft_version",
-    "error",
-    "error_code",
-    "expires_at",
-    "expected_draft_version",
-    "flagged",
-    "gender",
-    "id",
-    "image_direction",
-    "image_job_id",
-    "image_link",
-    "image_set",
-    "image_url",
-    "input",
-    "input_origin",
-    "inventory",
-    "inventory_qty",
-    "items",
-    "link",
-    "material",
-    "metadata",
-    "model",
-    "mode",
-    "moderation",
-    "mutation",
-    "name",
-    "objective_weight",
-    "output",
-    "presenter_input",
-    "price",
-    "price_max",
-    "price_min",
-    "primary_url",
-    "query_scopes",
-    "product",
-    "product_id",
-    "products",
-    "published_product_id",
-    "request",
-    "request_id",
-    "response",
-    "result",
-    "retryable",
-    "season",
-    "safety_identifier_attached",
-    "session_id",
-    "size",
-    "stage",
-    "status",
-    "store_id",
-    "summary",
-    "source_asset_count",
-    "source_asset_ids",
-    "suggestion_count",
-    "suggestion_set_id",
-    "thumbnail_url",
-    "title",
-    "tool",
-    "tool_name",
-    "tool_names",
-    "tools",
-    "target_path",
-    "target_paths",
-    "usage",
-    "unknown_count",
-    "variant_index",
-    "variant",
-    "variant_id",
-    "variants",
-}
-
-_SECRET_PATTERNS = (
-    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"),
-)
-
-
-def _normalized_key(key: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(key).strip().casefold()).strip("_")
-
-
-def _redacted_keys(settings: Settings) -> set[str]:
-    configured = {
-        _normalized_key(key)
-        for key in settings.catalog_studio_trace_redacted_keys.split(",")
-        if key.strip()
-    }
-    return _BUILT_IN_REDACTED_KEYS | configured
-
-
-def _key_is_redacted(key: str, redacted_keys: set[str]) -> bool:
-    if key in redacted_keys:
-        return True
-    parts = set(key.split("_"))
-    return bool(parts & {"authorization", "password", "secret", "token"})
-
-
 def _safe_text(value: object, *, max_length: int) -> str:
-    text = str(value or "")
-    for pattern in _SECRET_PATTERNS:
-        text = pattern.sub(REDACTED, text)
-    if len(text) <= max_length:
-        return text
-    omitted = len(text) - max_length
-    marker = f"...[truncated {omitted} chars]"
-    if len(marker) >= max_length:
-        return marker[:max_length]
-    return f"{text[: max_length - len(marker)]}{marker}"
-
-
-def _sanitize_value(
-    value: Any,
-    *,
-    settings: Settings,
-    redacted_keys: set[str],
-    depth: int,
-) -> Any:
-    if depth > settings.catalog_studio_trace_max_depth:
-        return {"_truncated": "maximum depth reached"}
-    if value is None or isinstance(value, bool | int | float):
-        return value
-    if isinstance(value, str):
-        return _safe_text(
-            value, max_length=max(1, settings.catalog_studio_trace_max_string_length)
-        )
-    if isinstance(value, bytes | bytearray | memoryview):
-        return REDACTED
-    if isinstance(value, Mapping):
-        projected: dict[str, Any] = {}
-        omitted = 0
-        truncated = 0
-        allowed_count = 0
-        max_keys = max(1, settings.catalog_studio_trace_max_object_keys)
-        for raw_key in sorted(value, key=lambda item: str(item).casefold()):
-            key = _normalized_key(raw_key)
-            if not key:
-                omitted += 1
-                continue
-            if _key_is_redacted(key, redacted_keys):
-                projected[key] = REDACTED
-                continue
-            if key not in _ALLOWED_KEYS:
-                omitted += 1
-                continue
-            if allowed_count >= max_keys:
-                truncated += 1
-                continue
-            projected[key] = _sanitize_value(
-                value[raw_key],
-                settings=settings,
-                redacted_keys=redacted_keys,
-                depth=depth + 1,
-            )
-            allowed_count += 1
-        if omitted:
-            projected["_omitted_fields"] = omitted
-        if truncated:
-            projected["_truncated_fields"] = truncated
-        return projected
-    if isinstance(value, (list, tuple, set)):
-        rows = sorted(value, key=repr) if isinstance(value, set) else list(value)
-        limit = max(1, settings.catalog_studio_trace_max_array_length)
-        projected = [
-            _sanitize_value(
-                row,
-                settings=settings,
-                redacted_keys=redacted_keys,
-                depth=depth + 1,
-            )
-            for row in rows[:limit]
-        ]
-        if len(rows) > limit:
-            projected.append({"_truncated_items": len(rows) - limit})
-        return projected
-    return REDACTED
+    return safe_observability_text(value, max_length=max_length)
 
 
 def sanitize_workflow_payload(value: Any, *, settings: Settings) -> dict:
-    projected = _sanitize_value(
+    return sanitize_observability_payload(
         value,
-        settings=settings,
-        redacted_keys=_redacted_keys(settings),
-        depth=0,
+        policy=RedactionPolicy(
+            max_depth=settings.catalog_studio_trace_max_depth,
+            max_string_length=settings.catalog_studio_trace_max_string_length,
+            max_array_length=settings.catalog_studio_trace_max_array_length,
+            max_object_keys=settings.catalog_studio_trace_max_object_keys,
+            max_bytes=settings.catalog_studio_trace_max_bytes,
+            redacted_keys=configured_redacted_keys(
+                settings.catalog_studio_trace_redacted_keys
+            ),
+        ),
     )
-    if not isinstance(projected, dict):
-        projected = {"value": projected}
-    return _enforce_total_bytes(projected, settings=settings)
-
-
-def _enforce_total_bytes(projected: dict, *, settings: Settings) -> dict:
-    encoded = json.dumps(
-        projected, sort_keys=True, separators=(",", ":"), default=str
-    ).encode()
-    max_bytes = max(96, settings.catalog_studio_trace_max_bytes)
-    if len(encoded) > max_bytes:
-        return {
-            "_truncated": f"payload exceeded {max_bytes} bytes",
-            "_projected_bytes": len(encoded),
-        }
-    return projected
 
 
 def normalize_usage(value: Mapping[str, Any] | None) -> dict[str, int]:
@@ -351,7 +122,10 @@ def normalize_moderation(value: Mapping[str, Any] | None, *, settings: Settings)
             and not isinstance(score, bool)
             and math.isfinite(score)
         }
-    return _enforce_total_bytes(normalized, settings=settings)
+    return enforce_payload_bytes(
+        normalized,
+        max_bytes=settings.catalog_studio_trace_max_bytes,
+    )
 
 
 def _event_hash(event: WorkflowEventInput) -> str:
