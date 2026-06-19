@@ -4,6 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.catalog.review_schemas import PublicProductReview
 from app.schemas import StyleConstraints
 
 
@@ -124,6 +125,7 @@ class ProductDetailResponse(CatalogProduct):
     media: list[ProductMedia] = Field(default_factory=list)
     inventory: list[ProductInventory] = Field(default_factory=list)
     variants: list[CatalogVariant] = Field(default_factory=list, deprecated=True)
+    reviews: list[PublicProductReview] = Field(default_factory=list)
 
 
 class ProductRecommendationRequest(BaseModel):

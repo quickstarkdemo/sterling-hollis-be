@@ -42,6 +42,7 @@ from app.services.embeddings import EmbeddingService
 from app.services.image_analysis import image_analysis_query_text
 from app.services.inventory_status import is_in_stock, is_preorder
 from app.services.pinecone_service import PineconeService
+from app.services.product_reviews import public_product_reviews
 from app.services.recommendations import customer_recommendations
 from app.services.taxonomy import CATEGORY_TAXONOMY
 
@@ -328,6 +329,7 @@ def product_to_catalog(
         ],
         inventory=inventory,
         variants=variant_payload,
+        reviews=public_product_reviews(db, product_id=product.id),
     )
 
 
