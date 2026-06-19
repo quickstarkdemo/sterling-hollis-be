@@ -72,6 +72,12 @@ Generated image files are served from:
 | Image recommendations | `POST` | `/api/recommendations/image` |
 | Storefront chat | `POST` | `/api/chat` |
 | Catalog Studio administrator session and capabilities | `GET` | `/api/admin/session` |
+| List owned API traces | `GET` | `/api/admin/traces` |
+| Read one owned API trace | `GET` | `/api/admin/traces/{trace_id}` |
+| Catch up on ordered trace events | `GET` | `/api/admin/traces/{trace_id}/events` |
+| Ingest a bounded browser trace event | `POST` | `/api/admin/traces/{trace_id}/events` |
+| Stream owned trace events | `GET` | `/api/admin/traces/{trace_id}/stream` |
+| Download sanitized trace JSON | `GET` | `/api/admin/traces/{trace_id}/export` |
 | List canonical brands, stores, categories, and availability choices | `GET` | `/api/admin/catalog/v2/references` |
 | Add a canonical brand | `POST` | `/api/admin/catalog/v2/brands` |
 | Search products across lifecycle states | `GET` | `/api/admin/catalog/products` |
@@ -265,7 +271,7 @@ custom claim:
 Existing demo-observability allowlists and `CLERK_DEMO_CUSTOMER_EMAIL` remain
 valid administrator sources for backward compatibility. The response contains
 booleans describing whether Responses, Moderation, Image Generation, Realtime,
-worker storage, and catalog dependencies are configured. An unavailable
+worker storage, API trace capture, and catalog dependencies are configured. An unavailable
 Realtime capability also includes one safe reason: `feature_disabled`,
 `missing_api_key`, or `missing_safety_secret`. It does not probe providers or
 return configuration values.
@@ -284,6 +290,7 @@ authorization: Bearer <Clerk token>
     "image_generation": {"configured": true},
     "realtime": {"configured": false, "reason": "feature_disabled"},
     "worker_storage": {"configured": true},
+    "api_traces": {"configured": false, "reason": "feature_disabled"},
     "catalog": {"configured": true, "authoring_schema_version": 3}
   }
 }
@@ -343,6 +350,39 @@ The generated FastAPI docs are available at `/docs`. Public endpoints can use
 
 Never paste the standard OpenAI API key, Clerk secret key, or an authorization
 header copied from another user into Swagger.
+
+## API Trace Capture
+
+API trace capture is disabled unless `API_TRACE_CAPTURE_ENABLED=true`. The
+browser may send W3C `traceparent` and `tracestate` headers. Middleware validates
+that context and creates a child request span, but the headers alone never
+authorize or persist data. Persistence and trace API access begin only after the
+existing Catalog Studio administrator dependency binds the Clerk owner.
+
+Authorized responses expose `traceparent`, `tracestate`, `X-Trace-Id`,
+`X-Trace-Span-Id`, and `X-Trace-Capture`. CORS accepts those request headers only
+from configured origins. Unknown origins and request headers fail preflight.
+
+Use the owner-scoped API as follows:
+
+1. List recent traces with `GET /api/admin/traces?limit=25`. Follow the opaque
+   `next_cursor` when present.
+2. Read a projection with `GET /api/admin/traces/{trace_id}` or resume ordered
+   events with `GET /api/admin/traces/{trace_id}/events?after_sequence=12`.
+3. Append only allowlisted, bounded browser events with `POST` to the events
+   route. Stable `event_id` values make retries idempotent.
+4. Stream with authenticated `fetch`, not `EventSource`, so the Clerk bearer
+   token remains in the `Authorization` header. The server rejects `token`,
+   `access_token`, `authorization`, and `bearer` query parameters. Resume with
+   `after_sequence`; the stream sends ordered `trace_event` records, keepalive
+   comments, and an `expired` event when retained metadata disappears.
+5. Download the same versioned, sanitized projection from the `/export` route.
+   After payload retention expires, the JSON remains structurally valid and
+   carries retention markers instead of prior payload values.
+
+All trace lookup failures return `404` without revealing whether another owner
+has the identifier. Disabled capture returns `503`; `/api/admin/session` reports
+the safe `api_traces` capability reason `feature_disabled`.
 
 ## Catalog Studio Supplier Sources
 

@@ -203,6 +203,7 @@ class CatalogStudioCapabilities(BaseModel):
     image_generation: CapabilityStatus
     realtime: CapabilityStatus
     worker_storage: CapabilityStatus
+    api_traces: CapabilityStatus
     catalog: CatalogCapabilityStatus
 
 

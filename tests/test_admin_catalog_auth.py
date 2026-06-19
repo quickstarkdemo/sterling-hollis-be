@@ -158,6 +158,7 @@ def test_catalog_admin_session_reports_capabilities_without_secrets_or_probes():
             "image_generation": {"configured": True},
             "realtime": {"configured": False, "reason": "feature_disabled"},
             "worker_storage": {"configured": True},
+            "api_traces": {"configured": False, "reason": "feature_disabled"},
                 "catalog": {"configured": True, "authoring_schema_version": 3},
         },
     }
@@ -174,6 +175,7 @@ def test_capability_status_reports_unconfigured_openai_without_probing():
         "image_generation": {"configured": False},
         "realtime": {"configured": False, "reason": "feature_disabled"},
         "worker_storage": {"configured": False},
+        "api_traces": {"configured": False, "reason": "feature_disabled"},
         "catalog": {"configured": True, "authoring_schema_version": 3},
     }
 
@@ -200,6 +202,14 @@ def test_realtime_capability_reports_each_missing_prerequisite_without_values():
         "configured": False,
         "reason": "missing_safety_secret",
     }
+
+
+def test_api_trace_capability_reports_enabled_without_exposing_configuration():
+    capabilities = catalog_studio_capabilities(
+        _settings(api_trace_capture_enabled=True)
+    )
+
+    assert capabilities["api_traces"] == {"configured": True}
 
 
 def test_production_legacy_admin_route_requires_catalog_admin():

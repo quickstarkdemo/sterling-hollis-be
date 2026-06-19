@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+import re
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 
+from app.api_traces.context import (
+    ProvisionalTraceContext,
+    TraceCaptureContext,
+    bind_trace_capture_context,
+    provisional_trace_context,
+)
 from app.config import Settings, get_settings
 from app.services.auth.clerk import AuthenticatedPrincipal, require_clerk_principal
 
@@ -67,6 +74,46 @@ def require_catalog_admin(
     )
 
 
+_TRACE_SURFACE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+async def require_api_trace_capture(
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> AsyncIterator[TraceCaptureContext]:
+    """Authorize trace access and bind owner identity for this request only."""
+
+    if not settings.api_trace_capture_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API trace capture is disabled.",
+        )
+    provisional = getattr(request.state, "api_trace_provisional", None)
+    if not isinstance(provisional, ProvisionalTraceContext):
+        provisional = provisional_trace_context(
+            request.headers.get("traceparent"),
+            request.headers.get("tracestate"),
+        )
+    requested_surface = (
+        request.headers.get("x-trace-surface", "developer").strip().lower()
+    )
+    surface = (
+        requested_surface
+        if _TRACE_SURFACE_RE.fullmatch(requested_surface)
+        else "developer"
+    )
+    context = TraceCaptureContext.authorized_for(
+        owner_provider=principal.provider,
+        owner_provider_user_id=principal.provider_user_id,
+        surface=surface,
+        provisional=provisional,
+    )
+    request.state.api_trace_capture = context
+    with bind_trace_capture_context(context):
+        yield context
+
+
 def _realtime_capability(settings: Settings, *, openai_configured: bool) -> dict[str, object]:
     if not settings.catalog_studio_realtime_enabled:
         return {"configured": False, "reason": "feature_disabled"}
@@ -87,6 +134,11 @@ def catalog_studio_capabilities(settings: Settings) -> dict[str, dict[str, objec
         "image_generation": {"configured": openai_configured and image_storage_configured},
         "realtime": _realtime_capability(settings, openai_configured=openai_configured),
         "worker_storage": {"configured": image_storage_configured},
+        "api_traces": (
+            {"configured": True}
+            if settings.api_trace_capture_enabled
+            else {"configured": False, "reason": "feature_disabled"}
+        ),
         "catalog": {
             "configured": catalog_configured,
             "authoring_schema_version": 3,
