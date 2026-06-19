@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     catalog_studio_media_fetch_max_bytes: int = 8 * 1024 * 1024
     catalog_studio_media_fetch_timeout_seconds: float = 15.0
     catalog_studio_media_fetch_max_redirects: int = 3
+    catalog_source_output_dir: str = "data/catalog-sources"
+    catalog_source_upload_max_bytes: int = 8 * 1024 * 1024
+    catalog_source_max_assets_per_bundle: int = 20
+    catalog_source_max_dimension: int = 12_000
+    catalog_source_max_pixels: int = 40_000_000
+    catalog_source_thumbnail_size: int = 320
     enable_legacy_admin_routes: bool = True
     dd_site: str = "datadoghq.com"
     dd_api_key: str | None = None

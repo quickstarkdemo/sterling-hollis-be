@@ -48,6 +48,156 @@ paths:
           description: Missing or invalid Clerk token.
         "403":
           description: Valid Clerk user is not a Catalog Studio administrator.
+  /api/admin/catalog/source-bundles:
+    get:
+      tags: [catalog-studio-admin, images]
+      summary: List owned private supplier source bundles
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Owner-scoped source bundles with bounded preview URLs and no storage paths.
+          headers:
+            Cache-Control:
+              schema: {type: string}
+              example: private, no-store
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogSourceBundleListResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+    post:
+      tags: [catalog-studio-admin, images]
+      summary: Upload private supplier images for catalog authoring
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items: {type: string, format: binary}
+                title: {type: string, minLength: 1, maxLength: 255, default: Supplier source bundle}
+                catalog_product_id: {type: string, maxLength: 64, nullable: true}
+                draft_revision_id: {type: string, maxLength: 64, nullable: true}
+      responses:
+        "201":
+          description: Private ordered source bundle.
+          headers:
+            Cache-Control:
+              schema: {type: string}
+              example: private, no-store
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogSourceBundleResponse"}
+        "400": {description: Empty, invalid, spoofed, extreme-dimension, or path-bearing image input.}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Associated product or owned draft not found.}
+        "413": {description: Image exceeds the configured byte limit.}
+        "415": {description: Unsupported image type.}
+        "422": {description: Invalid association or bundle size.}
+        "503": {description: Private source storage is unavailable or not configured.}
+  /api/admin/catalog/source-bundles/{bundle_id}:
+    get:
+      tags: [catalog-studio-admin, images]
+      summary: Read an owned private supplier source bundle
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: bundle_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Private source bundle.
+          headers:
+            Cache-Control:
+              schema: {type: string}
+              example: private, no-store
+            X-Content-Type-Options:
+              schema: {type: string}
+              example: nosniff
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogSourceBundleResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Bundle is missing or owned by another administrator.}
+  /api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/preview:
+    get:
+      tags: [catalog-studio-admin, images]
+      summary: Read an authorized bounded supplier image preview
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: bundle_id, in: path, required: true, schema: {type: string}}
+        - {name: asset_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Metadata-stripped JPEG preview.
+          headers:
+            Cache-Control:
+              schema: {type: string}
+              example: private, no-store
+          content:
+            image/jpeg:
+              schema: {type: string, format: binary}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Bundle, asset, or preview is missing or not owned.}
+  /api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}:
+    delete:
+      tags: [catalog-studio-admin, images]
+      summary: Remove an unattached private supplier source image
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: bundle_id, in: path, required: true, schema: {type: string}}
+        - {name: asset_id, in: path, required: true, schema: {type: string}}
+      responses:
+        "204": {description: Source metadata and managed private files removed.}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Bundle or asset is missing or not owned.}
+        "409": {description: Source is promoted or referenced by an active image job.}
+        "503": {description: Managed private files could not be removed.}
+  /api/admin/catalog/source-bundles/{bundle_id}/assets/{asset_id}/promote:
+    post:
+      tags: [catalog-studio-admin, images]
+      summary: Promote a private supplier source into approved draft media
+      security:
+        - bearerAuth: []
+      parameters:
+        - {name: bundle_id, in: path, required: true, schema: {type: string}}
+        - {name: asset_id, in: path, required: true, schema: {type: string}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CatalogSourcePromotionRequest"}
+      responses:
+        "201":
+          description: Approved media derivative and new versioned draft.
+          headers:
+            Cache-Control:
+              schema: {type: string}
+              example: private, no-store
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CatalogSourcePromotionResponse"}
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not an administrator.}
+        "404": {description: Bundle, source image, or owned draft not found.}
+        "409": {description: Stale draft, different product, or idempotency conflict.}
+        "422": {description: Invalid promotion request.}
+        "503": {description: Approved public derivatives could not be created.}
   /api/admin/catalog/products:
     get:
       tags: [catalog-studio-admin]
@@ -1450,6 +1600,64 @@ components:
           enum: [true]
         capabilities:
           $ref: "#/components/schemas/CatalogStudioCapabilities"
+    CatalogSourceAssetResponse:
+      type: object
+      additionalProperties: false
+      required:
+        [id, display_order, original_filename, content_type, byte_size, width, height, checksum_sha256, storage_provider, status, preview_url, created_at]
+      properties:
+        id: {type: string}
+        display_order: {type: integer, minimum: 0}
+        original_filename: {type: string}
+        content_type: {type: string, enum: [image/jpeg, image/png, image/webp]}
+        byte_size: {type: integer, minimum: 1}
+        width: {type: integer, minimum: 1}
+        height: {type: integer, minimum: 1}
+        checksum_sha256: {type: string, minLength: 64, maxLength: 64}
+        storage_provider: {type: string, enum: [local_private]}
+        status: {type: string, enum: [ready, promoted]}
+        promoted_media_id: {type: string, nullable: true}
+        preview_url: {type: string}
+        created_at: {type: string, format: date-time}
+    CatalogSourceBundleResponse:
+      type: object
+      additionalProperties: false
+      required: [id, title, status, assets, created_at, updated_at]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        catalog_product_id: {type: string, nullable: true}
+        draft_revision_id: {type: string, nullable: true}
+        status: {type: string, enum: [active]}
+        assets:
+          type: array
+          items: {$ref: "#/components/schemas/CatalogSourceAssetResponse"}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    CatalogSourceBundleListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/CatalogSourceBundleResponse"}
+    CatalogSourcePromotionRequest:
+      type: object
+      additionalProperties: false
+      required: [draft_id, expected_draft_version]
+      properties:
+        draft_id: {type: string, minLength: 1, maxLength: 64}
+        expected_draft_version: {type: integer, minimum: 1}
+    CatalogSourcePromotionResponse:
+      type: object
+      additionalProperties: false
+      required: [bundle_id, media_id, asset, draft]
+      properties:
+        bundle_id: {type: string}
+        media_id: {type: string}
+        asset: {$ref: "#/components/schemas/CatalogSourceAssetResponse"}
+        draft: {$ref: "#/components/schemas/DraftRevisionResponse"}
     CatalogInventoryDraft:
       type: object
       additionalProperties: false

@@ -2,7 +2,19 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -36,6 +48,12 @@ from app.catalog.image_schemas import (
     CatalogImageVariantSetResponse,
     CatalogMediaCommandRequest,
     CatalogMediaMutationRequest,
+)
+from app.catalog.source_schemas import (
+    CatalogSourceBundleListResponse,
+    CatalogSourceBundleResponse,
+    CatalogSourcePromotionRequest,
+    CatalogSourcePromotionResponse,
 )
 from app.catalog.workflow_schemas import (
     CatalogWorkflowResponse,
@@ -75,6 +93,15 @@ from app.services.catalog_realtime import (
     CatalogRealtimeToolCallRequest,
     record_realtime_tool_call,
 )
+from app.services.catalog_sources import (
+    create_source_bundle,
+    get_source_bundle,
+    get_source_preview_path,
+    list_source_bundles,
+    promote_source_asset,
+    remove_source_asset,
+)
+from app.services.image_analysis import ImageUploadError
 from app.services.catalog_workflow import (
     append_workflow_event,
     get_catalog_workflow_projection,
@@ -140,6 +167,145 @@ def catalog_studio_session(
     response.headers["Cache-Control"] = "no-store"
     return CatalogStudioSessionResponse(
         capabilities=CatalogStudioCapabilities(**catalog_studio_capabilities(settings)),
+    )
+
+
+@router.post(
+    "/catalog/source-bundles",
+    response_model=CatalogSourceBundleResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload private supplier images for catalog authoring",
+)
+def upload_catalog_source_bundle(
+    response: Response,
+    files: list[UploadFile] = File(...),
+    title: str = Form(default="Supplier source bundle", min_length=1, max_length=255),
+    catalog_product_id: str | None = Form(default=None, max_length=64),
+    draft_revision_id: str | None = Form(default=None, max_length=64),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> CatalogSourceBundleResponse:
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return create_source_bundle(
+            db,
+            files=files,
+            title=title,
+            catalog_product_id=catalog_product_id,
+            draft_revision_id=draft_revision_id,
+            principal=principal,
+            settings=settings,
+        )
+    except ImageUploadError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.get(
+    "/catalog/source-bundles",
+    response_model=CatalogSourceBundleListResponse,
+    summary="List owned private supplier source bundles",
+)
+def catalog_source_bundles(
+    response: Response,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogSourceBundleListResponse:
+    response.headers["Cache-Control"] = "private, no-store"
+    return list_source_bundles(db, principal=principal)
+
+
+@router.get(
+    "/catalog/source-bundles/{bundle_id}",
+    response_model=CatalogSourceBundleResponse,
+    summary="Read an owned private supplier source bundle",
+)
+def catalog_source_bundle_detail(
+    bundle_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogSourceBundleResponse:
+    response.headers["Cache-Control"] = "private, no-store"
+    return get_source_bundle(db, bundle_id=bundle_id, principal=principal)
+
+
+@router.get(
+    "/catalog/source-bundles/{bundle_id}/assets/{asset_id}/preview",
+    response_class=FileResponse,
+    summary="Read an authorized bounded supplier image preview",
+)
+def catalog_source_asset_preview(
+    bundle_id: str,
+    asset_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    preview_path = get_source_preview_path(
+        db,
+        bundle_id=bundle_id,
+        asset_id=asset_id,
+        principal=principal,
+        settings=settings,
+    )
+    return FileResponse(
+        preview_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete(
+    "/catalog/source-bundles/{bundle_id}/assets/{asset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove an unattached private supplier source image",
+)
+def delete_catalog_source_asset(
+    bundle_id: str,
+    asset_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    remove_source_asset(
+        db,
+        bundle_id=bundle_id,
+        asset_id=asset_id,
+        principal=principal,
+        settings=settings,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/catalog/source-bundles/{bundle_id}/assets/{asset_id}/promote",
+    response_model=CatalogSourcePromotionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Promote a private supplier source into approved draft media",
+)
+def promote_catalog_source_asset(
+    bundle_id: str,
+    asset_id: str,
+    request: CatalogSourcePromotionRequest,
+    response: Response,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+) -> CatalogSourcePromotionResponse:
+    response.headers["Cache-Control"] = "private, no-store"
+    return promote_source_asset(
+        db,
+        bundle_id=bundle_id,
+        asset_id=asset_id,
+        request=request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        settings=settings,
     )
 
 
