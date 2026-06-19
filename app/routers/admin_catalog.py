@@ -47,7 +47,9 @@ from app.catalog.admin_schemas import (
 )
 from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
+    CatalogAIDirectSuggestionCommandRequest,
     CatalogAIWorkflowResponse,
+    CatalogAISuggestionCommandResult,
 )
 from app.catalog.image_schemas import (
     CatalogImageApprovalRequest,
@@ -96,7 +98,11 @@ from app.services.catalog_suggestions import (
     decide_suggestion_set,
     list_suggestion_sets,
 )
-from app.services.catalog_ai import CatalogAICommandError, CatalogAIService
+from app.services.catalog_ai import (
+    CatalogAICommandError,
+    CatalogAIService,
+    CatalogAISuggestionService,
+)
 from app.services.catalog_images import (
     approve_catalog_image,
     enqueue_catalog_image_job,
@@ -109,9 +115,16 @@ from app.services.catalog_images import (
 from app.services.catalog_realtime import (
     CatalogRealtimeError,
     CatalogRealtimeService,
+    CatalogRealtimeSessionContextRequest,
     CatalogRealtimeSessionResponse,
     CatalogRealtimeToolCallRequest,
+    CatalogRealtimeV3ToolCallRequest,
+    reject_legacy_realtime_mutation_for_v3,
     record_realtime_tool_call,
+)
+from app.services.catalog_voice_tools import (
+    CatalogVoiceToolResult,
+    execute_catalog_voice_tool,
 )
 from app.services.catalog_sources import (
     create_source_bundle,
@@ -139,6 +152,12 @@ def get_catalog_ai_service(
     settings: Settings = Depends(get_settings),
 ) -> CatalogAIService:
     return CatalogAIService(settings)
+
+
+def get_catalog_suggestion_ai_service(
+    settings: Settings = Depends(get_settings),
+) -> CatalogAISuggestionService:
+    return CatalogAISuggestionService(settings)
 
 
 def get_catalog_realtime_service(
@@ -820,6 +839,40 @@ def create_catalog_suggestion_set_v3(
     return result
 
 
+@router.post(
+    "/catalog/v3/products/{product_id}/ai-suggestion-sets",
+    response_model=CatalogAISuggestionCommandResult,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate grounded, reviewable product field suggestions",
+)
+def generate_catalog_suggestion_set_v3(
+    product_id: str,
+    request: CatalogAIDirectSuggestionCommandRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    service: CatalogAISuggestionService = Depends(get_catalog_suggestion_ai_service),
+) -> CatalogAISuggestionCommandResult:
+    try:
+        return service.execute(
+            db,
+            product_id=product_id,
+            command=request,
+            idempotency_key=idempotency_key,
+            principal=principal,
+        )
+    except CatalogAICommandError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail,
+                "retryable": exc.retryable,
+            },
+        ) from exc
+
+
 @router.get(
     "/catalog/v3/products/{product_id}/suggestion-sets",
     response_model=CatalogSuggestionSetListResponse,
@@ -1014,6 +1067,7 @@ def create_catalog_ai_draft(
 def create_catalog_realtime_session(
     workflow_id: str,
     response: Response,
+    request: CatalogRealtimeSessionContextRequest | None = None,
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
     service: CatalogRealtimeService = Depends(get_catalog_realtime_service),
@@ -1024,8 +1078,47 @@ def create_catalog_realtime_session(
             db,
             workflow_id=workflow_id,
             principal=principal,
+            context=request,
         )
     except CatalogRealtimeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail,
+                "retryable": exc.retryable,
+            },
+        ) from exc
+
+
+@router.post(
+    "/catalog/workflows/{workflow_id}/realtime/v3/tool-calls",
+    response_model=CatalogVoiceToolResult,
+    response_model_exclude_none=True,
+    summary="Execute a bounded Realtime product query or field proposal",
+)
+def execute_catalog_realtime_v3_tool_call(
+    workflow_id: str,
+    request: CatalogRealtimeV3ToolCallRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    settings: Settings = Depends(get_settings),
+    suggestion_service: CatalogAISuggestionService = Depends(
+        get_catalog_suggestion_ai_service
+    ),
+) -> CatalogVoiceToolResult:
+    try:
+        return execute_catalog_voice_tool(
+            db,
+            workflow_id=workflow_id,
+            request=request,
+            idempotency_key=idempotency_key,
+            principal=principal,
+            settings=settings,
+            suggestion_service=suggestion_service,
+        )
+    except CatalogAICommandError as exc:
         raise HTTPException(
             status_code=exc.status_code,
             detail={
@@ -1051,6 +1144,11 @@ def execute_catalog_realtime_tool_call(
     settings: Settings = Depends(get_settings),
     service: CatalogAIService = Depends(get_catalog_ai_service),
 ) -> CatalogAIWorkflowResponse:
+    reject_legacy_realtime_mutation_for_v3(
+        db,
+        workflow_id=workflow_id,
+        principal=principal,
+    )
     if not settings.catalog_studio_realtime_enabled:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

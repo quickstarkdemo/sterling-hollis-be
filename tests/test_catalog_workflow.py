@@ -329,6 +329,36 @@ def test_redaction_removes_sensitive_content_at_every_depth():
     assert "[REDACTED]" in encoded
 
 
+def test_voice_session_context_is_bounded_without_transcript_or_credentials():
+    settings = _settings()
+    raw = {
+        "status": "ready",
+        "session_id": "realtime_session_safe",
+        "expires_at": 1_782_000_600,
+        "tool_names": ["read_inventory_status"],
+        "context": {
+            "mode": "workbench",
+            "product_id": "product_safe",
+            "draft_id": "draft_safe",
+            "expected_draft_version": 3,
+            "query_scopes": ["inventory"],
+        },
+        "full_transcript": "retain none of this conversation",
+        "raw_audio": "voice bytes",
+        "client_secret": "ek_short_lived_private",
+    }
+
+    projected = sanitize_workflow_payload(raw, settings=settings)
+    encoded = json.dumps(projected, sort_keys=True)
+
+    assert projected["session_id"] == "realtime_session_safe"
+    assert projected["context"]["draft_id"] == "draft_safe"
+    assert projected["context"]["query_scopes"] == ["inventory"]
+    assert "retain none" not in encoded
+    assert "voice bytes" not in encoded
+    assert "ek_short_lived_private" not in encoded
+
+
 def test_oversized_payloads_are_deterministically_bounded():
     settings = _settings(
         catalog_studio_trace_max_depth=2,

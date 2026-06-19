@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+import base64
 import hashlib
 import json
+from pathlib import Path
 import time
 from typing import Any, Mapping
 from uuid import uuid4
@@ -14,9 +16,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
+    CatalogFieldSuggestionCreate,
+    CatalogSuggestionSetCreateRequest,
     ProductDraftV2,
+    ProductDraftV3,
     ProductInventoryDraftV2,
     product_draft_v2_from_snapshot,
+    product_draft_v3_from_snapshot,
 )
 from app.catalog.ai_schemas import (
     CatalogAICommandRequest,
@@ -24,6 +30,9 @@ from app.catalog.ai_schemas import (
     CatalogAIDraftResult,
     CatalogAIInventoryProposal,
     CatalogAIProductProposal,
+    CatalogAISuggestionCommandRequest,
+    CatalogAISuggestionCommandResult,
+    CatalogAISuggestionProposal,
 )
 from app.catalog.references import normalized_brand_name
 from app.catalog.workflow_schemas import WorkflowEventInput
@@ -33,16 +42,25 @@ from app.models import (
     CatalogBrand,
     CatalogDraftRevision,
     CatalogProduct,
+    CatalogSourceAsset,
+    CatalogSourceBundle,
     CatalogWorkflow,
     Store,
     SyntheticRun,
 )
 from app.observability.genai_otel import genai_llm_span, set_span_attributes
 from app.services.auth.clerk import AuthenticatedPrincipal
-from app.services.catalog_admin import draft_revision_version
+from app.services.catalog_admin import (
+    _latest_owned_draft,
+    draft_revision_version,
+)
 from app.services.catalog_normalization import catalog_key_for_values, catalog_product_id_for_key
 from app.services.taxonomy import CATEGORY_TAXONOMY
 from app.services.catalog_workflow import append_workflow_event, normalize_usage
+from app.services.catalog_suggestions import (
+    create_suggestion_set,
+    validate_suggestion_target_path,
+)
 
 
 CATALOG_AI_INSTRUCTIONS = """You create private Sterling Hollis retail catalog drafts.
@@ -53,6 +71,19 @@ concise customer-safe copy, and useful image art direction. Do not create commer
 include people, customer identity, secrets, URLs, medical claims, sexual content, hateful content, instructions
 for wrongdoing, or private reasoning. If the instruction is unrelated to a retail product, make
 the smallest reasonable catalog proposal consistent with the current draft."""
+
+
+CATALOG_SUGGESTION_INSTRUCTIONS = """You propose reviewable Sterling Hollis product field changes.
+Return only the requested structured suggestion proposal. Use only the requested target paths.
+For supplier analysis, cite every directly visible fact with one or more provided source asset IDs.
+Classify marketing language and other inferences as derived. Never infer exact dimensions, weight,
+identifiers, GTIN or UPC values, compliance, certifications, or safety claims from appearance. Put
+unsupported facts in unknown_fields with a concise question. Do not return inventory, lifecycle,
+publication, archive, credentials, private reasoning, or customer data. Suggestions are proposals
+only and must never be described as already saved or published."""
+
+_SUPPLIER_OBSERVED_PATHS = {"/color", "/material", "/specifications"}
+_SUPPLIER_UNSUPPORTED_PATHS = {"/price_min", "/price_max", "/link"}
 
 
 class CatalogAICommandError(RuntimeError):
@@ -88,6 +119,33 @@ class CatalogAIService:
         return execute_catalog_ai_command(
             db,
             workflow_id=workflow_id,
+            command=command,
+            idempotency_key=idempotency_key,
+            principal=principal,
+            settings=self.settings,
+            client=self.client,
+        )
+
+
+class CatalogAISuggestionService:
+    """Generate grounded v3 proposals without mutating the canonical draft."""
+
+    def __init__(self, settings: Settings, client: Any | None = None) -> None:
+        self.settings = settings
+        self.client = client
+
+    def execute(
+        self,
+        db: Session,
+        *,
+        product_id: str,
+        command: CatalogAISuggestionCommandRequest,
+        idempotency_key: str,
+        principal: AuthenticatedPrincipal,
+    ) -> CatalogAISuggestionCommandResult:
+        return execute_catalog_ai_suggestion_command(
+            db,
+            product_id=product_id,
             command=command,
             idempotency_key=idempotency_key,
             principal=principal,
@@ -164,6 +222,10 @@ def _validate_command_state(
     revision = db.get(CatalogDraftRevision, command.current_draft_id)
     if revision is None or revision.created_by != principal.provider_user_id:
         raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
+    if revision.snapshot_json.get("schema_version") == 3:
+        raise _conflict(
+            "V3 catalog drafts require reviewable suggestion commands instead of direct AI mutation."
+        )
     actual_version = draft_revision_version(db, revision)
     if actual_version != command.expected_draft_version:
         raise _conflict(
@@ -947,4 +1009,666 @@ def execute_catalog_ai_command(
             principal=principal,
             settings=settings,
             error=_provider_failure(exc),
+        ) from exc
+
+
+def _suggestion_command_hash(
+    product_id: str, command: CatalogAISuggestionCommandRequest
+) -> str:
+    payload = json.dumps(
+        {"product_id": product_id, **command.model_dump(mode="json")},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _suggestion_mutation_key(
+    *,
+    product_id: str,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+) -> str:
+    source = (
+        f"{principal.provider}:{principal.provider_user_id}:"
+        f"{product_id}:{idempotency_key}"
+    )
+    return f"ai_suggestions_{hashlib.sha256(source.encode()).hexdigest()}"
+
+
+def _replay_suggestion_mutation(
+    mutation: CatalogAdminMutation,
+    *,
+    operation: str,
+    request_hash: str,
+) -> CatalogAISuggestionCommandResult:
+    if mutation.operation != operation or mutation.request_hash != request_hash:
+        raise _conflict(
+            "Idempotency-Key was already used for a different Catalog Studio suggestion command."
+        )
+    payload = dict(mutation.response_json or {})
+    state = payload.get("state")
+    if state == "completed":
+        result = CatalogAISuggestionCommandResult.model_validate(payload.get("result") or {})
+        return result.model_copy(update={"replayed": True})
+    if state == "failed":
+        raise CatalogAICommandError(
+            code=str(payload.get("code") or "catalog_ai_failed"),
+            detail=str(payload.get("detail") or "The suggestion command failed."),
+            status_code=int(payload.get("status_code") or 502),
+            retryable=bool(payload.get("retryable")),
+        )
+    raise _conflict("This Catalog Studio suggestion command is already processing.")
+
+
+def _reserve_suggestion_command(
+    db: Session,
+    *,
+    product_id: str,
+    command: CatalogAISuggestionCommandRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+) -> tuple[CatalogAdminMutation, CatalogAISuggestionCommandResult | None]:
+    key = idempotency_key.strip()
+    if not key:
+        raise HTTPException(status_code=422, detail="Idempotency-Key must not be blank.")
+    mutation_key = _suggestion_mutation_key(
+        product_id=product_id,
+        idempotency_key=key,
+        principal=principal,
+    )
+    operation = f"catalog.ai.suggestions:{product_id}"
+    request_hash = _suggestion_command_hash(product_id, command)
+    existing = db.get(CatalogAdminMutation, mutation_key)
+    if existing is not None:
+        return existing, _replay_suggestion_mutation(
+            existing,
+            operation=operation,
+            request_hash=request_hash,
+        )
+    mutation = CatalogAdminMutation(
+        idempotency_key=mutation_key,
+        operation=operation,
+        request_hash=request_hash,
+        response_json={"state": "processing"},
+        created_by=principal.provider_user_id,
+    )
+    db.add(mutation)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        concurrent = db.get(CatalogAdminMutation, mutation_key)
+        if concurrent is None:
+            raise _conflict("Catalog Studio suggestion state changed; retry.")
+        return concurrent, _replay_suggestion_mutation(
+            concurrent,
+            operation=operation,
+            request_hash=request_hash,
+        )
+    return mutation, None
+
+
+def _owned_suggestion_context(
+    db: Session,
+    *,
+    product_id: str,
+    command: CatalogAISuggestionCommandRequest,
+    principal: AuthenticatedPrincipal,
+) -> tuple[CatalogDraftRevision, ProductDraftV3]:
+    workflow = _owned_workflow(
+        db,
+        workflow_id=command.workflow_id,
+        principal=principal,
+        lock=False,
+    )
+    revision = _latest_owned_draft(db, product_id, principal)
+    if revision is None or revision.id != command.draft_id:
+        raise _conflict("The requested catalog draft is no longer current.")
+    actual_version = draft_revision_version(db, revision)
+    if actual_version != command.expected_draft_version:
+        raise _conflict(
+            f"Expected catalog draft version {command.expected_draft_version}, "
+            f"but current version is {actual_version}."
+        )
+    if workflow.draft_revision_id not in {None, revision.id}:
+        raise _conflict("The catalog workflow is linked to another draft.")
+    if workflow.published_product_id not in {None, product_id}:
+        raise _conflict("The catalog workflow is linked to another product.")
+    product = product_draft_v3_from_snapshot(revision.snapshot_json)
+    for target_path in command.target_paths:
+        validate_suggestion_target_path(target_path)
+        if (
+            command.input_origin == "supplier_analysis"
+            and target_path in _SUPPLIER_UNSUPPORTED_PATHS
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Supplier image analysis cannot propose pricing or product links; "
+                    "enter those fields manually."
+                ),
+            )
+    return revision, product
+
+
+def _owned_source_assets(
+    db: Session,
+    *,
+    source_asset_ids: list[str],
+    product: ProductDraftV3,
+    principal: AuthenticatedPrincipal,
+) -> list[CatalogSourceAsset]:
+    if not source_asset_ids:
+        return []
+    referenced_ids = {
+        asset_id
+        for reference in product.source_references
+        for asset_id in reference.asset_ids
+    }
+    if not set(source_asset_ids).issubset(referenced_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="AI source assets must be attached to the current catalog draft.",
+        )
+    rows = db.scalars(
+        select(CatalogSourceAsset)
+        .join(CatalogSourceBundle, CatalogSourceAsset.bundle_id == CatalogSourceBundle.id)
+        .where(
+            CatalogSourceAsset.id.in_(source_asset_ids),
+            CatalogSourceBundle.owner_provider == principal.provider,
+            CatalogSourceBundle.owner_provider_user_id == principal.provider_user_id,
+        )
+    ).all()
+    by_id = {row.id: row for row in rows}
+    if set(by_id) != set(source_asset_ids):
+        raise HTTPException(status_code=404, detail="Catalog source asset not found.")
+    return [by_id[asset_id] for asset_id in source_asset_ids]
+
+
+def _source_asset_preview_bytes(settings: Settings, asset: CatalogSourceAsset) -> bytes:
+    base = Path(str(settings.catalog_source_output_dir or "")).expanduser().resolve()
+    candidate = (base / asset.preview_storage_key).resolve()
+    if not candidate.is_relative_to(base):
+        raise CatalogAICommandError(
+            code="source_asset_unavailable",
+            detail="A selected supplier source image is unavailable.",
+            status_code=status.HTTP_409_CONFLICT,
+            retryable=False,
+        )
+    try:
+        return candidate.read_bytes()
+    except OSError as exc:
+        raise CatalogAICommandError(
+            code="source_asset_unavailable",
+            detail="A selected supplier source image is unavailable.",
+            status_code=status.HTTP_409_CONFLICT,
+            retryable=False,
+        ) from exc
+
+
+def _suggestion_current_draft_payload(product: ProductDraftV3) -> dict[str, Any]:
+    """Return approved authoring facts without storage or private metadata."""
+
+    return {
+        "title": product.title,
+        "description": product.description,
+        "brand_id": product.brand_id,
+        "brand": product.brand,
+        "category": product.category,
+        "color": product.color,
+        "material": product.material,
+        "gender": product.gender,
+        "season": product.season,
+        "benefits": product.benefits,
+        "specifications": [item.model_dump(mode="json") for item in product.specifications],
+        "care_instructions": product.care_instructions,
+        "content_details": product.content_details,
+        "seo": product.seo.model_dump(mode="json"),
+        "media": [
+            {
+                "media_id": item.media_id,
+                "role": item.role,
+                "alt_text": item.alt_text,
+            }
+            for item in product.media
+        ],
+    }
+
+
+def _suggestion_provider_input(
+    *,
+    command: CatalogAISuggestionCommandRequest,
+    product: ProductDraftV3,
+    source_assets: list[CatalogSourceAsset],
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    source_manifest = [
+        {
+            "asset_id": asset.id,
+            "content_type": asset.content_type,
+            "width": asset.width,
+            "height": asset.height,
+            "checksum_sha256": asset.checksum_sha256,
+        }
+        for asset in source_assets
+    ]
+    payload = {
+        "presenter_instruction": command.instruction,
+        "input_origin": command.input_origin,
+        "allowed_target_paths": command.target_paths,
+        "current_draft": _suggestion_current_draft_payload(product),
+        "source_assets": source_manifest,
+    }
+    content: list[dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        }
+    ]
+    for asset in source_assets:
+        encoded = base64.b64encode(_source_asset_preview_bytes(settings, asset)).decode(
+            "ascii"
+        )
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:image/jpeg;base64,{encoded}",
+                "detail": "high",
+            }
+        )
+    return [{"role": "user", "content": content}]
+
+
+def _validated_suggestion_proposal(
+    proposal: CatalogAISuggestionProposal,
+    *,
+    command: CatalogAISuggestionCommandRequest,
+) -> CatalogAISuggestionProposal:
+    allowed_paths = set(command.target_paths)
+    source_ids = set(command.source_asset_ids)
+    for item in proposal.suggestions:
+        validate_suggestion_target_path(item.target_path)
+        if item.target_path not in allowed_paths:
+            raise CatalogAICommandError(
+                code="invalid_structured_output",
+                detail="Responses proposed a field outside the requested target scope.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+        if not set(item.evidence_asset_ids).issubset(source_ids):
+            raise CatalogAICommandError(
+                code="invalid_structured_output",
+                detail="Responses cited source evidence outside the authorized source set.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+        if (
+            command.input_origin == "supplier_analysis"
+            and item.target_path in _SUPPLIER_OBSERVED_PATHS
+            and item.certainty_class != "observed"
+        ):
+            raise CatalogAICommandError(
+                code="invalid_structured_output",
+                detail="Responses returned an objective supplier fact without observed evidence.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+    for item in proposal.unknown_fields:
+        if item.target_path not in allowed_paths:
+            raise CatalogAICommandError(
+                code="invalid_structured_output",
+                detail="Responses returned an unknown field outside the requested target scope.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+    return proposal
+
+
+def _store_suggestion_failure(
+    db: Session,
+    *,
+    mutation: CatalogAdminMutation,
+    command: CatalogAISuggestionCommandRequest,
+    principal: AuthenticatedPrincipal,
+    settings: Settings,
+    error: CatalogAICommandError,
+) -> None:
+    mutation.response_json = {
+        "state": "failed",
+        "code": error.code,
+        "detail": error.detail,
+        "status_code": error.status_code,
+        "retryable": error.retryable,
+    }
+    append_workflow_event(
+        db,
+        workflow_id=command.workflow_id,
+        principal=principal,
+        settings=settings,
+        commit=False,
+        event=WorkflowEventInput(
+            client_event_id=f"{_event_prefix(mutation.idempotency_key)}-suggestions-failed",
+            stage="suggestions",
+            capability="responses",
+            status="failed",
+            business_summary=error.detail,
+            error_code=error.code,
+            retryable=error.retryable,
+            request_payload={
+                "input": {
+                    "action": "generate_product_suggestions",
+                    "draft_id": command.draft_id,
+                    "expected_draft_version": command.expected_draft_version,
+                    "source_asset_count": len(command.source_asset_ids),
+                    "target_paths": command.target_paths,
+                }
+            },
+            response_payload={"status": "failed", "error_code": error.code},
+        ),
+    )
+    db.commit()
+
+
+def _record_suggestion_failure(
+    db: Session,
+    *,
+    mutation: CatalogAdminMutation,
+    command: CatalogAISuggestionCommandRequest,
+    principal: AuthenticatedPrincipal,
+    settings: Settings,
+    error: CatalogAICommandError,
+) -> CatalogAICommandError:
+    mutation_key = mutation.idempotency_key
+    db.rollback()
+    persisted = db.get(CatalogAdminMutation, mutation_key) or mutation
+    _store_suggestion_failure(
+        db,
+        mutation=persisted,
+        command=command,
+        principal=principal,
+        settings=settings,
+        error=error,
+    )
+    return error
+
+
+def _suggestion_provider_failure(exc: Exception) -> CatalogAICommandError:
+    error = _provider_failure(exc)
+    detail_by_code = {
+        "responses_timeout": "Responses timed out before the suggestions were ready.",
+        "responses_unavailable": "Responses is temporarily unavailable for suggestions.",
+        "invalid_structured_output": "Responses did not return valid product suggestions.",
+        "responses_failed": "Responses could not create product suggestions.",
+    }
+    return CatalogAICommandError(
+        code=error.code,
+        detail=detail_by_code.get(error.code, error.detail),
+        status_code=error.status_code,
+        retryable=error.retryable,
+    )
+
+
+def execute_catalog_ai_suggestion_command(
+    db: Session,
+    *,
+    product_id: str,
+    command: CatalogAISuggestionCommandRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    settings: Settings,
+    client: Any | None = None,
+) -> CatalogAISuggestionCommandResult:
+    mutation_key = _suggestion_mutation_key(
+        product_id=product_id,
+        idempotency_key=idempotency_key.strip(),
+        principal=principal,
+    )
+    existing = db.get(CatalogAdminMutation, mutation_key)
+    if existing is not None:
+        return _replay_suggestion_mutation(
+            existing,
+            operation=f"catalog.ai.suggestions:{product_id}",
+            request_hash=_suggestion_command_hash(product_id, command),
+        )
+    revision, product = _owned_suggestion_context(
+        db,
+        product_id=product_id,
+        command=command,
+        principal=principal,
+    )
+    source_assets = _owned_source_assets(
+        db,
+        source_asset_ids=command.source_asset_ids,
+        product=product,
+        principal=principal,
+    )
+    mutation, replay = _reserve_suggestion_command(
+        db,
+        product_id=product_id,
+        command=command,
+        idempotency_key=idempotency_key,
+        principal=principal,
+    )
+    if replay is not None:
+        return replay
+
+    started = time.monotonic()
+    try:
+        provider = _resolve_client(settings, client)
+        with genai_llm_span(
+            "catalog_studio_suggestions",
+            model=settings.catalog_studio_responses_model,
+            provider="openai",
+            attributes={
+                "app.catalog_studio.workflow_id": command.workflow_id,
+                "app.catalog_studio.product_id": product_id,
+                "app.catalog_studio.action": command.input_origin,
+                "app.catalog_studio.source_asset_count": len(source_assets),
+            },
+        ) as span:
+            response = provider.responses.parse(
+                model=settings.catalog_studio_responses_model,
+                instructions=CATALOG_SUGGESTION_INSTRUCTIONS,
+                input=_suggestion_provider_input(
+                    command=command,
+                    product=product,
+                    source_assets=source_assets,
+                    settings=settings,
+                ),
+                text_format=CatalogAISuggestionProposal,
+                moderation={"model": settings.catalog_studio_moderation_model},
+                max_output_tokens=settings.catalog_studio_responses_max_output_tokens,
+                safety_identifier=_safety_identifier(principal),
+                store=False,
+                timeout=settings.catalog_studio_responses_timeout_seconds,
+            )
+            set_span_attributes(
+                span,
+                {
+                    "gen_ai.response.id": getattr(response, "id", None),
+                    "gen_ai.response.model": getattr(response, "model", None),
+                },
+            )
+        duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        if getattr(response, "status", None) != "completed":
+            raise CatalogAICommandError(
+                code="invalid_structured_output",
+                detail="Responses did not complete a valid suggestion proposal.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+        moderation = _combined_moderation(
+            _moderation_result(
+                getattr(getattr(response, "moderation", None), "input", None),
+                label="input",
+            ),
+            _moderation_result(
+                getattr(getattr(response, "moderation", None), "output", None),
+                label="output",
+            ),
+        )
+        response_model = str(
+            getattr(response, "model", None) or settings.catalog_studio_responses_model
+        )
+        request_id = getattr(response, "id", None)
+        usage = _usage(response)
+        if moderation["flagged"]:
+            result = CatalogAISuggestionCommandResult(
+                status="blocked",
+                message="Moderation stopped these suggestions before they were saved.",
+            )
+            append_workflow_event(
+                db,
+                workflow_id=command.workflow_id,
+                principal=principal,
+                settings=settings,
+                commit=False,
+                event=WorkflowEventInput(
+                    client_event_id=f"{_event_prefix(mutation.idempotency_key)}-suggestions-blocked",
+                    stage="suggestions",
+                    capability="responses",
+                    status="blocked",
+                    business_summary=result.message,
+                    model=response_model,
+                    request_id=request_id,
+                    duration_ms=duration_ms,
+                    usage=usage,
+                    moderation=moderation,
+                    request_payload={"input": {"action": "generate_product_suggestions"}},
+                    response_payload={"status": "blocked"},
+                ),
+            )
+            mutation.response_json = {
+                "state": "completed",
+                "result": result.model_dump(mode="json"),
+            }
+            db.commit()
+            return result
+
+        proposal = getattr(response, "output_parsed", None)
+        if not isinstance(proposal, CatalogAISuggestionProposal):
+            raise CatalogAICommandError(
+                code="responses_refused",
+                detail="Responses did not return a reviewable suggestion proposal.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+        proposal = _validated_suggestion_proposal(proposal, command=command)
+        suggestion_set = None
+        if proposal.suggestions:
+            create_request = CatalogSuggestionSetCreateRequest(
+                draft_id=revision.id,
+                expected_draft_version=command.expected_draft_version,
+                workflow_id=command.workflow_id,
+                suggestions=[
+                    CatalogFieldSuggestionCreate(
+                        target_path=item.target_path,
+                        proposed_value=item.proposed_value,
+                        evidence_asset_ids=item.evidence_asset_ids,
+                        certainty_class=item.certainty_class,
+                        input_origin=command.input_origin,
+                    )
+                    for item in proposal.suggestions
+                ],
+            )
+            suggestion_set, _ = create_suggestion_set(
+                db,
+                product_id=product_id,
+                request=create_request,
+                idempotency_key=f"{mutation.idempotency_key}:set",
+                principal=principal,
+            )
+        result = CatalogAISuggestionCommandResult(
+            status="succeeded",
+            message=(
+                "Review the generated product suggestions before applying them."
+                if suggestion_set
+                else "No supported facts were proposed; review the follow-up questions."
+            ),
+            suggestion_set=suggestion_set,
+            follow_up_questions=proposal.unknown_fields,
+        )
+        append_workflow_event(
+            db,
+            workflow_id=command.workflow_id,
+            principal=principal,
+            settings=settings,
+            commit=False,
+            event=WorkflowEventInput(
+                client_event_id=f"{_event_prefix(mutation.idempotency_key)}-suggestions",
+                stage="suggestions",
+                capability="responses",
+                status="succeeded",
+                business_summary=result.message,
+                model=response_model,
+                request_id=request_id,
+                duration_ms=duration_ms,
+                usage=usage,
+                moderation=moderation,
+                request_payload={
+                    "input": {
+                        "action": "generate_product_suggestions",
+                        "draft_id": command.draft_id,
+                        "expected_draft_version": command.expected_draft_version,
+                        "input_origin": command.input_origin,
+                        "source_asset_ids": command.source_asset_ids,
+                        "target_paths": command.target_paths,
+                    }
+                },
+                response_payload={
+                    "status": "succeeded",
+                    "suggestion_set_id": suggestion_set.id if suggestion_set else None,
+                    "suggestion_count": len(proposal.suggestions),
+                    "unknown_count": len(proposal.unknown_fields),
+                },
+            ),
+        )
+        mutation.response_json = {
+            "state": "completed",
+            "result": result.model_dump(mode="json"),
+        }
+        db.commit()
+        return result
+    except CatalogAICommandError as exc:
+        raise _record_suggestion_failure(
+            db,
+            mutation=mutation,
+            command=command,
+            principal=principal,
+            settings=settings,
+            error=exc,
+        )
+    except HTTPException as exc:
+        provider_output_invalid = exc.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        error = CatalogAICommandError(
+            code=(
+                "invalid_structured_output"
+                if provider_output_invalid
+                else "suggestion_state_conflict"
+            ),
+            detail=str(exc.detail),
+            status_code=(
+                status.HTTP_502_BAD_GATEWAY
+                if provider_output_invalid
+                else exc.status_code
+            ),
+            retryable=provider_output_invalid,
+        )
+        raise _record_suggestion_failure(
+            db,
+            mutation=mutation,
+            command=command,
+            principal=principal,
+            settings=settings,
+            error=error,
+        ) from exc
+    except Exception as exc:
+        raise _record_suggestion_failure(
+            db,
+            mutation=mutation,
+            command=command,
+            principal=principal,
+            settings=settings,
+            error=_suggestion_provider_failure(exc),
         ) from exc

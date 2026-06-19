@@ -77,6 +77,12 @@ def _section_for_path(path: str) -> str:
     raise _unprocessable(f"Unsupported suggestion target_path: {path!r}.")
 
 
+def validate_suggestion_target_path(path: str) -> str:
+    """Validate an application-owned suggestion path and return its editor section."""
+
+    return _section_for_path(path)
+
+
 def _media_index(product_payload: dict[str, Any], media_id: str) -> int:
     for index, media in enumerate(product_payload.get("media", [])):
         if media.get("media_id") == media_id:
