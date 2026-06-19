@@ -9,31 +9,41 @@ from uuid import uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.catalog.admin_schemas import (
     AdminDraftSnapshot,
     AdminDraftSnapshotV2,
+    AdminDraftSnapshotV3,
     AdminProductListItem,
     AdminProductListResponse,
     AdminProductResponse,
     AdminProductResponseV2,
+    AdminProductResponseV3,
     BrandCreateRequest,
     BrandReference,
     CatalogChoice,
     CatalogReferenceData,
     DraftMutationRequest,
     DraftMutationRequestV2,
+    DraftMutationRequestV3,
     DraftRevisionResponse,
     LifecycleMutationResponse,
     ProductDraft,
     ProductDraftV2,
+    ProductDraftV3,
+    ProductDraftPreviewV3,
+    ProductReadinessResponse,
+    ReadinessIssue,
     StoreReference,
     StartRevisionRequest,
     product_draft_v1_from_snapshot,
     product_draft_v1_from_v2,
     product_draft_v2_from_snapshot,
     product_draft_v2_from_v1,
+    product_draft_v2_from_v3,
+    product_draft_v3_from_snapshot,
+    product_draft_v3_from_v2,
 )
 from app.catalog.authoring import (
     authoring_metadata,
@@ -51,6 +61,8 @@ from app.models import (
     CatalogAdminMutation,
     CatalogBrand,
     CatalogDraftRevision,
+    CatalogSourceBundle,
+    CatalogSuggestionSet,
     CatalogProduct,
     CatalogWorkflow,
     ProductMediaAsset,
@@ -204,7 +216,11 @@ def _idempotent(
     fingerprint = _request_hash(payload)
     existing = db.get(CatalogAdminMutation, key)
     if existing:
-        if existing.operation != operation or existing.request_hash != fingerprint:
+        if (
+            existing.created_by != principal.provider_user_id
+            or existing.operation != operation
+            or existing.request_hash != fingerprint
+        ):
             raise _conflict("Idempotency-Key was already used for a different catalog mutation.")
         return dict(existing.response_json), True
 
@@ -225,6 +241,7 @@ def _idempotent(
         concurrent = db.get(CatalogAdminMutation, key)
         if (
             concurrent
+            and concurrent.created_by == principal.provider_user_id
             and concurrent.operation == operation
             and concurrent.request_hash == fingerprint
         ):
@@ -393,6 +410,17 @@ def _assert_expected_version(
     return product
 
 
+def _reject_older_write_to_v3_product(
+    product: CatalogProduct | None,
+    *,
+    contract: str,
+) -> None:
+    if product and isinstance(authoring_metadata(product.metadata_json).get("v3"), dict):
+        raise _conflict(
+            f"This product is owned by the v3 authoring contract and cannot be replaced by a {contract} write."
+        )
+
+
 def _draft_response(revision: CatalogDraftRevision) -> DraftRevisionResponse:
     return DraftRevisionResponse(
         id=revision.id,
@@ -435,6 +463,25 @@ def _latest_owned_draft(
     )
 
 
+def _owned_draft_for_update(
+    db: Session,
+    *,
+    draft_id: str,
+    product_id: str,
+    principal: AuthenticatedPrincipal,
+) -> CatalogDraftRevision | None:
+    return db.scalar(
+        select(CatalogDraftRevision)
+        .where(
+            CatalogDraftRevision.id == draft_id,
+            CatalogDraftRevision.catalog_product_id == product_id,
+            CatalogDraftRevision.created_by == principal.provider_user_id,
+            CatalogDraftRevision.status == "draft",
+        )
+        .with_for_update()
+    )
+
+
 def _workflow_for_draft(
     db: Session, draft_id: str, principal: AuthenticatedPrincipal
 ) -> CatalogWorkflow | None:
@@ -456,6 +503,18 @@ def _safe_image_value(value):
         }
     if isinstance(value, list):
         return [_safe_image_value(item) for item in value]
+    return value
+
+
+def _safe_preview_value(value):
+    if isinstance(value, dict):
+        return {
+            key: _safe_preview_value(item)
+            for key, item in value.items()
+            if key not in {"file_path", "storage_key", "preview_storage_key"}
+        }
+    if isinstance(value, list):
+        return [_safe_preview_value(item) for item in value]
     return value
 
 
@@ -552,6 +611,48 @@ def _preserve_server_image_fields_v2(
                 asset.image_set, previous.image_set
             )
     return ProductDraftV2.model_validate(payload)
+
+
+def _preserve_server_image_fields_v3(
+    incoming: ProductDraftV3, current: ProductDraftV3
+) -> ProductDraftV3:
+    current_media = {row.media_id: row for row in current.media}
+    payload = incoming.model_dump(mode="json")
+    for index, asset in enumerate(incoming.media):
+        previous = current_media.get(asset.media_id)
+        if previous is None:
+            continue
+        for field in (
+            "approval_status",
+            "source_media_id",
+            "predecessor_media_id",
+            "provenance",
+        ):
+            payload["media"][index][field] = getattr(previous, field)
+        if asset.image_set:
+            payload["media"][index]["image_set"] = _restore_server_image_fields(
+                asset.image_set, previous.image_set
+            )
+    return ProductDraftV3.model_validate(payload)
+
+
+def _v3_authoring_metadata(product: ProductDraftV3) -> dict:
+    return {
+        "benefits": list(product.benefits),
+        "specifications": [
+            specification.model_dump(mode="json")
+            for specification in product.specifications
+        ],
+        "care_instructions": list(product.care_instructions),
+        "content_details": list(product.content_details),
+        "seo": product.seo.model_dump(mode="json"),
+        "readiness_inputs": product.readiness_inputs.model_dump(mode="json"),
+        "media_alt_text": {
+            asset.media_id: asset.alt_text
+            for asset in product.media
+            if asset.alt_text
+        },
+    }
 
 
 def _published_snapshot(db: Session, row: CatalogProduct) -> ProductDraft:
@@ -697,6 +798,128 @@ def _published_snapshot_v2(db: Session, row: CatalogProduct) -> ProductDraftV2:
     )
 
 
+def _published_snapshot_v3(db: Session, row: CatalogProduct) -> ProductDraftV3:
+    base = product_draft_v3_from_v2(_published_snapshot_v2(db, row))
+    stored = authoring_metadata(row.metadata_json).get("v3")
+    if not isinstance(stored, dict):
+        return base
+    payload = base.model_dump(mode="json")
+    for field in (
+        "benefits",
+        "specifications",
+        "care_instructions",
+        "content_details",
+        "seo",
+        "readiness_inputs",
+    ):
+        if field in stored:
+            payload[field] = stored[field]
+    media_alt_text = stored.get("media_alt_text")
+    if isinstance(media_alt_text, dict):
+        for media in payload.get("media", []):
+            value = media_alt_text.get(media["media_id"])
+            if isinstance(value, str):
+                media["alt_text"] = value
+    return ProductDraftV3.model_validate(payload)
+
+
+def _readiness_response(
+    db: Session,
+    revision: CatalogDraftRevision,
+    product: ProductDraftV3,
+) -> ProductReadinessResponse:
+    blocking: list[ReadinessIssue] = []
+    recommendations: list[ReadinessIssue] = []
+    approved_core = any(
+        asset.role == "core" and asset.approval_status == "approved"
+        for asset in product.media
+    )
+    if not approved_core:
+        blocking.append(
+            ReadinessIssue(
+                code="missing_approved_media",
+                field_path="/media",
+                message="An approved core product image is required.",
+            )
+        )
+    if any(asset.approval_status != "approved" for asset in product.media):
+        blocking.append(
+            ReadinessIssue(
+                code="unapproved_media",
+                field_path="/media",
+                message="Every product image must be approved before publication.",
+            )
+        )
+    if product.price_min <= 0 or product.price_max <= 0:
+        blocking.append(
+            ReadinessIssue(
+                code="missing_price",
+                field_path="/price_min",
+                message="A positive product price is required.",
+            )
+        )
+    specification_names = {
+        specification.name.casefold() for specification in product.specifications
+    }
+    for required in product.readiness_inputs.required_specifications:
+        if required.casefold() not in specification_names:
+            blocking.append(
+                ReadinessIssue(
+                    code="missing_required_specification",
+                    field_path="/specifications",
+                    message=f"Required specification {required!r} is missing.",
+                )
+            )
+    if revision.moderation_state != "approved":
+        blocking.append(
+            ReadinessIssue(
+                code="moderation_not_approved",
+                field_path="/moderation_state",
+                message="Catalog moderation must be approved before publication.",
+            )
+        )
+    if not db.get(SyntheticRun, product.seed_run_id):
+        blocking.append(
+            ReadinessIssue(
+                code="missing_seed_run",
+                field_path="/seed_run_id",
+                message="The product seed run is unavailable.",
+            )
+        )
+    if not product.seo.title:
+        recommendations.append(
+            ReadinessIssue(
+                code="missing_seo_title",
+                field_path="/seo/title",
+                message="Add a search title before publication.",
+            )
+        )
+    if not product.seo.description:
+        recommendations.append(
+            ReadinessIssue(
+                code="missing_seo_description",
+                field_path="/seo/description",
+                message="Add a search description before publication.",
+            )
+        )
+    if any(not asset.alt_text for asset in product.media):
+        recommendations.append(
+            ReadinessIssue(
+                code="missing_media_alt_text",
+                field_path="/media",
+                message="Add alt text for every product image.",
+            )
+        )
+    return ProductReadinessResponse(
+        product_id=revision.catalog_product_id,
+        draft_id=revision.id,
+        draft_version=draft_revision_version(db, revision),
+        ready=not blocking,
+        blocking_errors=blocking,
+        recommendations=recommendations,
+    )
+
+
 def _admin_draft_snapshot(
     db: Session,
     revision: CatalogDraftRevision,
@@ -731,6 +954,26 @@ def _admin_draft_snapshot_v2(
     )
 
 
+def _admin_draft_snapshot_v3(
+    db: Session,
+    revision: CatalogDraftRevision,
+    principal: AuthenticatedPrincipal,
+) -> AdminDraftSnapshotV3:
+    workflow = _workflow_for_draft(db, revision.id, principal)
+    product = product_draft_v3_from_snapshot(revision.snapshot_json)
+    payload = product.model_dump(mode="json")
+    for asset in payload.get("media", []):
+        asset["image_set"] = _safe_image_value(asset.get("image_set") or {})
+    safe_product = ProductDraftV3.model_validate(payload)
+    return AdminDraftSnapshotV3(
+        revision=_draft_response(revision),
+        draft_version=draft_revision_version(db, revision),
+        workflow_id=workflow.id if workflow else None,
+        product=safe_product,
+        readiness=_readiness_response(db, revision, safe_product),
+    )
+
+
 def create_draft(
     db: Session,
     request: DraftMutationRequest,
@@ -758,13 +1001,25 @@ def create_draft(
     operation = f"catalog.draft:{product_id}"
 
     def action() -> dict:
-        _assert_expected_version(db, product_id, request.expected_version)
+        published = _assert_expected_version(db, product_id, request.expected_version)
+        _reject_older_write_to_v3_product(published, contract="legacy")
         product = _safe_product_snapshot(
             request.product.model_copy(update={"product_id": product_id})
         )
+        latest = _latest_owned_draft(db, product_id, principal)
+        if latest and int(latest.snapshot_json.get("schema_version") or 1) >= 3:
+            raise _conflict(
+                "This draft is owned by the v3 authoring contract and cannot be replaced by an older write."
+            )
         if request.current_draft_id:
-            current = _latest_owned_draft(db, product_id, principal)
-            if current is None or current.id != request.current_draft_id:
+            current = _owned_draft_for_update(
+                db,
+                draft_id=request.current_draft_id,
+                product_id=product_id,
+                principal=principal,
+            )
+            latest = _latest_owned_draft(db, product_id, principal)
+            if current is None or latest is None or latest.id != current.id:
                 raise _conflict("The requested catalog draft is no longer current.")
             actual_draft_version = draft_revision_version(db, current)
             if actual_draft_version != request.expected_draft_version:
@@ -851,11 +1106,23 @@ def create_draft_v2(
     operation = f"catalog.v2.draft:{product_id}"
 
     def action() -> dict:
-        _assert_expected_version(db, product_id, request.expected_version)
+        published = _assert_expected_version(db, product_id, request.expected_version)
+        _reject_older_write_to_v3_product(published, contract="v2")
         product_to_save = product
+        latest = _latest_owned_draft(db, product_id, principal)
+        if latest and int(latest.snapshot_json.get("schema_version") or 1) >= 3:
+            raise _conflict(
+                "This draft is owned by the v3 authoring contract and cannot be replaced by a v2 write."
+            )
         if request.current_draft_id:
-            current = _latest_owned_draft(db, product_id, principal)
-            if current is None or current.id != request.current_draft_id:
+            current = _owned_draft_for_update(
+                db,
+                draft_id=request.current_draft_id,
+                product_id=product_id,
+                principal=principal,
+            )
+            latest = _latest_owned_draft(db, product_id, principal)
+            if current is None or latest is None or latest.id != current.id:
                 raise _conflict("The requested catalog draft is no longer current.")
             actual_draft_version = draft_revision_version(db, current)
             if actual_draft_version != request.expected_draft_version:
@@ -905,6 +1172,224 @@ def create_draft_v2(
     return DraftRevisionResponse.model_validate(response), replayed
 
 
+def _validate_v3_source_references(
+    db: Session,
+    *,
+    product: ProductDraftV3,
+    product_id: str,
+    principal: AuthenticatedPrincipal,
+) -> list[CatalogSourceBundle]:
+    bundle_ids = [reference.bundle_id for reference in product.source_references]
+    owned_bundles = {
+        bundle.id: bundle
+        for bundle in db.scalars(
+            select(CatalogSourceBundle)
+            .options(selectinload(CatalogSourceBundle.assets))
+            .where(
+                CatalogSourceBundle.id.in_(bundle_ids),
+                CatalogSourceBundle.owner_provider == principal.provider,
+                CatalogSourceBundle.owner_provider_user_id
+                == principal.provider_user_id,
+            )
+        ).all()
+    }
+    bundles: list[CatalogSourceBundle] = []
+    for reference in product.source_references:
+        bundle = owned_bundles.get(reference.bundle_id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail="Catalog source bundle not found.")
+        if bundle.catalog_product_id and bundle.catalog_product_id != product_id:
+            raise _conflict("A source bundle belongs to a different catalog product.")
+        bundle_asset_ids = {asset.id for asset in bundle.assets}
+        if not set(reference.asset_ids).issubset(bundle_asset_ids):
+            raise HTTPException(status_code=404, detail="Catalog source asset not found.")
+        bundles.append(bundle)
+    return bundles
+
+
+def _supersede_other_suggestion_sets(
+    db: Session,
+    *,
+    product_id: str,
+    current_draft_id: str,
+    exclude_set_id: str | None = None,
+) -> None:
+    rows = db.scalars(
+        select(CatalogSuggestionSet)
+        .options(selectinload(CatalogSuggestionSet.suggestions))
+        .where(
+            CatalogSuggestionSet.catalog_product_id == product_id,
+            CatalogSuggestionSet.current_draft_revision_id == current_draft_id,
+            CatalogSuggestionSet.status.in_(["pending", "partially_reviewed"]),
+        )
+    ).all()
+    for row in rows:
+        if row.id == exclude_set_id:
+            continue
+        row.status = "superseded"
+        row.updated_at = datetime.now(timezone.utc)
+        for suggestion in row.suggestions:
+            if suggestion.status == "pending":
+                suggestion.status = "superseded"
+
+
+def create_draft_v3(
+    db: Session,
+    request: DraftMutationRequestV3,
+    *,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    path_product_id: str | None = None,
+) -> tuple[DraftRevisionResponse, bool]:
+    if path_product_id is None and request.expected_version != 0:
+        raise HTTPException(
+            status_code=422,
+            detail="New catalog product drafts require expected_version 0.",
+        )
+    if path_product_id is None and request.product.product_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="New catalog product IDs are assigned by the server.",
+        )
+    canonical_product = _canonicalize_v2_references(db, request.product)
+    product_id = path_product_id or catalog_product_id_for_key(
+        catalog_key_for_values(
+            brand=canonical_product.brand,
+            title=canonical_product.title,
+            category=canonical_product.category,
+        )
+    )
+    if path_product_id and request.product.product_id not in (None, path_product_id):
+        raise HTTPException(
+            status_code=422,
+            detail="Body product_id must match the path product_id.",
+        )
+    product = ProductDraftV3.model_validate(
+        canonical_product.model_copy(update={"product_id": product_id})
+    )
+    source_bundles = _validate_v3_source_references(
+        db,
+        product=product,
+        product_id=product_id,
+        principal=principal,
+    )
+    payload = request.model_dump(mode="json")
+    payload["product"] = product.model_dump(mode="json")
+    operation = f"catalog.v3.draft:{product_id}"
+
+    def action() -> dict:
+        _assert_expected_version(db, product_id, request.expected_version)
+        product_to_save = product
+        current = None
+        if request.current_draft_id:
+            current = _owned_draft_for_update(
+                db,
+                draft_id=request.current_draft_id,
+                product_id=product_id,
+                principal=principal,
+            )
+            latest = _latest_owned_draft(db, product_id, principal)
+            if current is None or latest is None or latest.id != current.id:
+                raise _conflict("The requested catalog draft is no longer current.")
+            actual_draft_version = draft_revision_version(db, current)
+            if actual_draft_version != request.expected_draft_version:
+                raise _conflict(
+                    f"Expected catalog draft version {request.expected_draft_version}, "
+                    f"but current version is {actual_draft_version}."
+                )
+            if current.base_version != request.expected_version:
+                raise _conflict(
+                    "The current draft no longer targets the expected published version."
+                )
+            product_to_save = _preserve_server_image_fields_v3(
+                product,
+                product_draft_v3_from_snapshot(current.snapshot_json),
+            )
+        revision = CatalogDraftRevision(
+            id=f"draft_{uuid4().hex[:24]}",
+            catalog_product_id=product_id,
+            base_version=request.expected_version,
+            status="draft",
+            moderation_state=request.moderation_state,
+            snapshot_json=product_to_save.model_dump(mode="json"),
+            created_by=principal.provider_user_id,
+        )
+        db.add(revision)
+        db.flush()
+        if current:
+            _supersede_other_suggestion_sets(
+                db,
+                product_id=product_id,
+                current_draft_id=current.id,
+            )
+            workflows = db.scalars(
+                select(CatalogWorkflow).where(
+                    CatalogWorkflow.draft_revision_id == current.id,
+                    CatalogWorkflow.owner_provider == principal.provider,
+                    CatalogWorkflow.owner_provider_user_id
+                    == principal.provider_user_id,
+                )
+            ).all()
+            for workflow in workflows:
+                workflow.draft_revision_id = revision.id
+                workflow.updated_at = datetime.now(timezone.utc)
+        for bundle in source_bundles:
+            bundle.catalog_product_id = product_id
+            bundle.draft_revision_id = revision.id
+            bundle.updated_at = datetime.now(timezone.utc)
+        return _draft_response(revision).model_dump(mode="json")
+
+    response, replayed = _idempotent(
+        db,
+        key=idempotency_key,
+        operation=operation,
+        payload=payload,
+        principal=principal,
+        action=action,
+    )
+    return DraftRevisionResponse.model_validate(response), replayed
+
+
+def create_draft_from_v2_compatibility(
+    db: Session,
+    request: DraftMutationRequestV2,
+    *,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+    path_product_id: str,
+) -> tuple[DraftRevisionResponse, bool]:
+    current = db.get(CatalogDraftRevision, request.current_draft_id)
+    if (
+        current
+        and current.created_by == principal.provider_user_id
+        and current.snapshot_json.get("schema_version") == 3
+    ):
+        preserved = product_draft_v3_from_snapshot(current.snapshot_json)
+        return create_draft_v3(
+            db,
+            DraftMutationRequestV3(
+                expected_version=request.expected_version,
+                current_draft_id=request.current_draft_id,
+                expected_draft_version=request.expected_draft_version,
+                moderation_state=request.moderation_state,
+                product=product_draft_v3_from_v2(
+                    request.product,
+                    preserved=preserved,
+                ),
+            ),
+            idempotency_key=idempotency_key,
+            principal=principal,
+            path_product_id=path_product_id,
+        )
+    return create_draft_v2(
+        db,
+        request,
+        idempotency_key=idempotency_key,
+        principal=principal,
+        path_product_id=path_product_id,
+    )
+
+
 def _validate_publishable(
     db: Session, revision: CatalogDraftRevision, product: ProductDraft
 ) -> None:
@@ -951,7 +1436,12 @@ def _variant_id(product: ProductDraft, variant) -> str:
 
 
 def _apply_snapshot(
-    db: Session, product_id: str, product: ProductDraft, version: int
+    db: Session,
+    product_id: str,
+    product: ProductDraft,
+    version: int,
+    *,
+    authoring_v3: dict | None = None,
 ) -> CatalogProduct:
     canonical = product_draft_v2_from_v1(product)
     brand_reference = _active_brand_for_name(db, product.brand)
@@ -989,6 +1479,7 @@ def _apply_snapshot(
         ),
         variant_axes=list(product.variant_axes),
         primary_variant_id=primary_variant_id,
+        authoring_v3=authoring_v3,
     )
     row = db.get(CatalogProduct, product_id)
     if row is None:
@@ -1166,14 +1657,40 @@ def publish_draft(
 
     def action() -> dict:
         _assert_expected_version(db, product_id, expected_version)
-        revision = db.get(CatalogDraftRevision, draft_id)
-        if not revision or revision.catalog_product_id != product_id:
+        revision = _owned_draft_for_update(
+            db,
+            draft_id=draft_id,
+            product_id=product_id,
+            principal=principal,
+        )
+        if revision is None:
             raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
+        latest = _latest_owned_draft(db, product_id, principal)
+        if latest is None or latest.id != revision.id:
+            raise _conflict("The requested catalog draft is no longer current.")
         if revision.base_version != expected_version:
             raise _conflict("Draft base version does not match the expected catalog version.")
+        product_v3 = (
+            product_draft_v3_from_snapshot(revision.snapshot_json)
+            if revision.snapshot_json.get("schema_version") == 3
+            else None
+        )
+        if product_v3:
+            readiness = _readiness_response(db, revision, product_v3)
+            if readiness.blocking_errors:
+                raise _conflict(
+                    "Catalog publication is blocked: "
+                    + readiness.blocking_errors[0].message
+                )
         product = product_draft_v1_from_snapshot(revision.snapshot_json)
         _validate_publishable(db, revision, product)
-        row = _apply_snapshot(db, product_id, product, expected_version + 1)
+        row = _apply_snapshot(
+            db,
+            product_id,
+            product,
+            expected_version + 1,
+            authoring_v3=_v3_authoring_metadata(product_v3) if product_v3 else None,
+        )
         enqueue_index_job(db, product.seed_run_id, commit=False, deduplicate=False)
         revision.status = "published"
         revision.published_at = datetime.now(timezone.utc)
@@ -1244,6 +1761,7 @@ def start_product_revision(
         row = _assert_expected_version(db, product_id, request.expected_version)
         if row is None:
             raise HTTPException(status_code=404, detail="Catalog product not found.")
+        _reject_older_write_to_v3_product(row, contract="legacy")
         current = _latest_owned_draft(db, product_id, principal)
         if current and current.base_version == row.version:
             raise _conflict(
@@ -1319,6 +1837,7 @@ def start_product_revision_v2(
         row = _assert_expected_version(db, product_id, request.expected_version)
         if row is None:
             raise HTTPException(status_code=404, detail="Catalog product not found.")
+        _reject_older_write_to_v3_product(row, contract="v2")
         current = _latest_owned_draft(db, product_id, principal)
         if current and current.base_version == row.version:
             raise _conflict("This catalog product already has a current private draft.")
@@ -1374,6 +1893,78 @@ def start_product_revision_v2(
         action=action,
     )
     return AdminDraftSnapshotV2.model_validate(response), replayed
+
+
+def start_product_revision_v3(
+    db: Session,
+    *,
+    product_id: str,
+    request: StartRevisionRequest,
+    idempotency_key: str,
+    principal: AuthenticatedPrincipal,
+) -> tuple[AdminDraftSnapshotV3, bool]:
+    payload = request.model_dump(mode="json")
+    operation = f"catalog.v3.start-revision:{product_id}"
+
+    def action() -> dict:
+        row = _assert_expected_version(db, product_id, request.expected_version)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Catalog product not found.")
+        current = _latest_owned_draft(db, product_id, principal)
+        if current and current.base_version == row.version:
+            raise _conflict("This catalog product already has a current private draft.")
+        workflow = None
+        if request.workflow_id:
+            workflow = db.scalar(
+                select(CatalogWorkflow)
+                .where(CatalogWorkflow.id == request.workflow_id)
+                .with_for_update()
+            )
+            if (
+                workflow is None
+                or workflow.owner_provider != principal.provider
+                or workflow.owner_provider_user_id != principal.provider_user_id
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail="Catalog Studio catalog workflow not found.",
+                )
+            if workflow.draft_revision_id:
+                raise _conflict("This catalog workflow already has a current draft.")
+            if (
+                workflow.published_product_id
+                and workflow.published_product_id != product_id
+            ):
+                raise _conflict(
+                    "This catalog workflow is already linked to another product."
+                )
+        revision = CatalogDraftRevision(
+            id=f"draft_{uuid4().hex[:24]}",
+            catalog_product_id=product_id,
+            base_version=row.version,
+            status="draft",
+            moderation_state="approved",
+            snapshot_json=_published_snapshot_v3(db, row).model_dump(mode="json"),
+            created_by=principal.provider_user_id,
+        )
+        db.add(revision)
+        db.flush()
+        if workflow:
+            workflow.draft_revision_id = revision.id
+            workflow.published_product_id = product_id
+            workflow.updated_at = datetime.now(timezone.utc)
+            db.flush()
+        return _admin_draft_snapshot_v3(db, revision, principal).model_dump(mode="json")
+
+    response, replayed = _idempotent(
+        db,
+        key=idempotency_key,
+        operation=operation,
+        payload=payload,
+        principal=principal,
+        action=action,
+    )
+    return AdminDraftSnapshotV3.model_validate(response), replayed
 
 
 def list_admin_products(
@@ -1492,7 +2083,10 @@ def get_admin_product(
     row = db.get(CatalogProduct, product_id)
     drafts = db.scalars(
         select(CatalogDraftRevision)
-        .where(CatalogDraftRevision.catalog_product_id == product_id)
+        .where(
+            CatalogDraftRevision.catalog_product_id == product_id,
+            CatalogDraftRevision.created_by == principal.provider_user_id,
+        )
         .order_by(CatalogDraftRevision.created_at.desc())
     ).all()
     current = _latest_owned_draft(db, product_id, principal)
@@ -1544,7 +2138,10 @@ def get_admin_product_v2(
     row = db.get(CatalogProduct, product_id)
     drafts = db.scalars(
         select(CatalogDraftRevision)
-        .where(CatalogDraftRevision.catalog_product_id == product_id)
+        .where(
+            CatalogDraftRevision.catalog_product_id == product_id,
+            CatalogDraftRevision.created_by == principal.provider_user_id,
+        )
         .order_by(CatalogDraftRevision.created_at.desc())
     ).all()
     current = _latest_owned_draft(db, product_id, principal)
@@ -1584,4 +2181,123 @@ def get_admin_product_v2(
         metadata=snapshot.metadata,
         current_draft=current_snapshot,
         drafts=[_draft_response(draft) for draft in drafts],
+    )
+
+
+def get_admin_product_v3(
+    db: Session,
+    product_id: str,
+    *,
+    principal: AuthenticatedPrincipal,
+) -> AdminProductResponseV3 | None:
+    row = db.get(CatalogProduct, product_id)
+    drafts = db.scalars(
+        select(CatalogDraftRevision)
+        .where(
+            CatalogDraftRevision.catalog_product_id == product_id,
+            CatalogDraftRevision.created_by == principal.provider_user_id,
+        )
+        .order_by(CatalogDraftRevision.created_at.desc())
+    ).all()
+    current = _latest_owned_draft(db, product_id, principal)
+    if row and current and current.base_version != row.version:
+        current = None
+    current_snapshot = (
+        _admin_draft_snapshot_v3(db, current, principal) if current else None
+    )
+    published_snapshot = _published_snapshot_v3(db, row) if row else None
+    if row:
+        effective = current_snapshot.product if current_snapshot else published_snapshot
+        assert effective is not None
+        return AdminProductResponseV3(
+            product_id=row.id,
+            lifecycle_status=row.lifecycle_status,  # type: ignore[arg-type]
+            version=row.version,
+            title=effective.title,
+            description=effective.description,
+            brand=effective.brand,
+            category=effective.category,
+            metadata=effective.metadata,
+            published_snapshot=published_snapshot,
+            current_draft=current_snapshot,
+            drafts=[_draft_response(draft) for draft in drafts],
+        )
+    if not drafts:
+        return None
+    snapshot = product_draft_v3_from_snapshot(drafts[0].snapshot_json)
+    return AdminProductResponseV3(
+        product_id=product_id,
+        lifecycle_status="draft",
+        version=0,
+        title=snapshot.title,
+        description=snapshot.description,
+        brand=snapshot.brand,
+        category=snapshot.category,
+        metadata=snapshot.metadata,
+        current_draft=current_snapshot,
+        drafts=[_draft_response(draft) for draft in drafts],
+    )
+
+
+def _owned_draft(
+    db: Session,
+    *,
+    product_id: str,
+    draft_id: str,
+    principal: AuthenticatedPrincipal,
+) -> CatalogDraftRevision:
+    revision = db.scalar(
+        select(CatalogDraftRevision).where(
+            CatalogDraftRevision.id == draft_id,
+            CatalogDraftRevision.catalog_product_id == product_id,
+            CatalogDraftRevision.created_by == principal.provider_user_id,
+        )
+    )
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
+    return revision
+
+
+def get_product_readiness_v3(
+    db: Session,
+    *,
+    product_id: str,
+    draft_id: str,
+    principal: AuthenticatedPrincipal,
+) -> ProductReadinessResponse:
+    revision = _owned_draft(
+        db,
+        product_id=product_id,
+        draft_id=draft_id,
+        principal=principal,
+    )
+    product = product_draft_v3_from_snapshot(revision.snapshot_json)
+    return _readiness_response(db, revision, product)
+
+
+def get_product_preview_v3(
+    db: Session,
+    *,
+    product_id: str,
+    draft_id: str,
+    principal: AuthenticatedPrincipal,
+) -> ProductDraftPreviewV3:
+    revision = _owned_draft(
+        db,
+        product_id=product_id,
+        draft_id=draft_id,
+        principal=principal,
+    )
+    product = product_draft_v3_from_snapshot(revision.snapshot_json)
+    payload = product.model_dump(
+        mode="json",
+        exclude={"source_references", "readiness_inputs"},
+    )
+    payload = _safe_preview_value(payload)
+    return ProductDraftPreviewV3(
+        product_id=product_id,
+        draft_id=draft_id,
+        draft_version=draft_revision_version(db, revision),
+        preview=payload,
+        readiness=_readiness_response(db, revision, product),
     )

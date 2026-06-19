@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
@@ -360,6 +360,282 @@ class DraftMutationRequestV2(BaseModel):
         return self
 
 
+class ProductMediaDraftV3(ProductMediaDraft):
+    alt_text: str | None = Field(default=None, max_length=500)
+
+
+class ProductSpecificationDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=1000)
+
+
+class ProductSeoDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+    keywords: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+    @model_validator(mode="after")
+    def validate_keywords(self):
+        normalized = [value.casefold() for value in self.keywords]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("SEO keywords must be unique")
+        return self
+
+
+class ProductSourceReferenceDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    bundle_id: str = Field(min_length=1, max_length=64)
+    asset_ids: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
+        min_length=1,
+        max_length=20,
+    )
+
+    @model_validator(mode="after")
+    def validate_asset_ids(self):
+        if len(self.asset_ids) != len(set(self.asset_ids)):
+            raise ValueError("source reference asset_ids must be unique")
+        return self
+
+
+class ProductReadinessInputsDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    required_specifications: list[
+        Annotated[str, Field(min_length=1, max_length=128)]
+    ] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode="after")
+    def validate_required_specifications(self):
+        normalized = [value.casefold() for value in self.required_specifications]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("required specifications must be unique")
+        return self
+
+
+class ProductDraftV3(ProductDraftV2):
+    schema_version: Literal[3] = 3
+    benefits: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    specifications: list[ProductSpecificationDraft] = Field(
+        default_factory=list,
+        max_length=80,
+    )
+    care_instructions: list[
+        Annotated[str, Field(min_length=1, max_length=500)]
+    ] = Field(default_factory=list, max_length=20)
+    content_details: list[
+        Annotated[str, Field(min_length=1, max_length=500)]
+    ] = Field(default_factory=list, max_length=40)
+    seo: ProductSeoDraft = Field(default_factory=ProductSeoDraft)
+    source_references: list[ProductSourceReferenceDraft] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    readiness_inputs: ProductReadinessInputsDraft = Field(
+        default_factory=ProductReadinessInputsDraft
+    )
+    media: list[ProductMediaDraftV3] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_v3_authoring(self):
+        for values, label in (
+            (self.benefits, "benefits"),
+            (self.care_instructions, "care instructions"),
+            (self.content_details, "content details"),
+        ):
+            normalized = [value.casefold() for value in values]
+            if len(normalized) != len(set(normalized)):
+                raise ValueError(f"{label} must be unique")
+        specification_names = [item.name.casefold() for item in self.specifications]
+        if len(specification_names) != len(set(specification_names)):
+            raise ValueError("specification names must be unique")
+        bundle_ids = [reference.bundle_id for reference in self.source_references]
+        if len(bundle_ids) != len(set(bundle_ids)):
+            raise ValueError("source bundle references must be unique")
+        return self
+
+
+class DraftMutationRequestV3(DraftMutationRequestV2):
+    product: ProductDraftV3
+
+
+class ReadinessIssue(BaseModel):
+    code: str
+    field_path: str
+    message: str
+
+
+class ProductReadinessResponse(BaseModel):
+    product_id: str
+    draft_id: str
+    draft_version: int = Field(ge=1)
+    ready: bool
+    blocking_errors: list[ReadinessIssue]
+    recommendations: list[ReadinessIssue]
+
+
+class ProductDraftPreviewV3(BaseModel):
+    product_id: str
+    draft_id: str
+    draft_version: int = Field(ge=1)
+    preview: dict[str, Any]
+    readiness: ProductReadinessResponse
+
+
+class AdminDraftSnapshotV3(BaseModel):
+    revision: DraftRevisionResponse
+    draft_version: int = Field(ge=1)
+    workflow_id: str | None = None
+    product: ProductDraftV3
+    readiness: ProductReadinessResponse
+
+
+class AdminProductResponseV3(BaseModel):
+    product_id: str
+    lifecycle_status: LifecycleStatus
+    version: int
+    title: str
+    description: str
+    brand: str
+    category: str
+    metadata: dict
+    published_snapshot: ProductDraftV3 | None = None
+    current_draft: AdminDraftSnapshotV3 | None = None
+    drafts: list[DraftRevisionResponse] = Field(default_factory=list)
+
+
+CertaintyClass = Literal["observed", "derived", "unknown"]
+SuggestionInputOrigin = Literal["supplier_analysis", "typed_action", "voice"]
+SuggestionStatus = Literal["pending", "accepted", "rejected", "superseded"]
+
+
+class CatalogFieldSuggestionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_path: str = Field(min_length=1, max_length=255)
+    proposed_value: Any
+    evidence_asset_ids: list[
+        Annotated[str, Field(min_length=1, max_length=64)]
+    ] = Field(default_factory=list, max_length=20)
+    certainty_class: CertaintyClass
+    input_origin: SuggestionInputOrigin
+
+    @model_validator(mode="after")
+    def validate_evidence(self):
+        if len(self.evidence_asset_ids) != len(set(self.evidence_asset_ids)):
+            raise ValueError("evidence_asset_ids must be unique")
+        if self.certainty_class == "observed" and not self.evidence_asset_ids:
+            raise ValueError("observed suggestions require source evidence")
+        return self
+
+
+class CatalogSuggestionSetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    draft_id: str = Field(min_length=1, max_length=64)
+    expected_draft_version: int = Field(ge=1)
+    workflow_id: str | None = Field(default=None, max_length=64)
+    suggestions: list[CatalogFieldSuggestionCreate] = Field(
+        min_length=1,
+        max_length=80,
+    )
+
+    @model_validator(mode="after")
+    def validate_target_paths(self):
+        paths = [suggestion.target_path for suggestion in self.suggestions]
+        if len(paths) != len(set(paths)):
+            raise ValueError("suggestion target paths must be unique within a set")
+        return self
+
+
+class CatalogFieldSuggestionResponse(BaseModel):
+    id: str
+    section: str
+    target_path: str
+    proposed_value: Any
+    baseline_value: Any
+    prior_value: Any | None = None
+    evidence_asset_ids: list[str]
+    certainty_class: CertaintyClass
+    input_origin: SuggestionInputOrigin
+    status: SuggestionStatus
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    review_reason: str | None = None
+    applied_draft_revision_id: str | None = None
+    created_at: datetime
+
+
+class CatalogSuggestionReviewResponse(BaseModel):
+    id: str
+    action: Literal["accept", "reject", "supersede"]
+    scope: Literal["suggestion", "section", "remaining"]
+    suggestion_ids: list[str]
+    section: str | None = None
+    expected_draft_version: int = Field(ge=1)
+    resulting_draft_revision_id: str | None = None
+    actor_provider_user_id: str
+    reason: str | None = None
+    created_at: datetime
+
+
+class CatalogSuggestionSetResponse(BaseModel):
+    id: str
+    product_id: str
+    base_draft_id: str
+    base_draft_version: int = Field(ge=1)
+    current_draft_id: str
+    current_draft_version: int = Field(ge=1)
+    workflow_id: str | None = None
+    status: Literal["pending", "partially_reviewed", "reviewed", "superseded"]
+    suggestions: list[CatalogFieldSuggestionResponse]
+    reviews: list[CatalogSuggestionReviewResponse]
+    created_at: datetime
+    updated_at: datetime
+
+
+class CatalogSuggestionSetListResponse(BaseModel):
+    items: list[CatalogSuggestionSetResponse]
+
+
+class CatalogSuggestionDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    action: Literal["accept", "reject", "supersede"]
+    scope: Literal["suggestion", "section", "remaining"]
+    suggestion_id: str | None = Field(default=None, max_length=64)
+    section: Literal["identity", "content", "seo", "media"] | None = None
+    expected_draft_version: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if self.scope == "suggestion" and not self.suggestion_id:
+            raise ValueError("suggestion scope requires suggestion_id")
+        if self.scope != "suggestion" and self.suggestion_id:
+            raise ValueError("suggestion_id is only valid for suggestion scope")
+        if self.scope == "section" and not self.section:
+            raise ValueError("section scope requires section")
+        if self.scope != "section" and self.section:
+            raise ValueError("section is only valid for section scope")
+        return self
+
+
+class CatalogSuggestionDecisionResponse(BaseModel):
+    suggestion_set: CatalogSuggestionSetResponse
+    draft: AdminDraftSnapshotV3 | None = None
+
+
 class AdminDraftSnapshotV2(BaseModel):
     revision: DraftRevisionResponse
     draft_version: int = Field(ge=1)
@@ -479,6 +755,8 @@ def product_draft_v1_from_v2(product: ProductDraftV2) -> ProductDraft:
 
 
 def product_draft_v2_from_snapshot(snapshot: dict) -> ProductDraftV2:
+    if snapshot.get("schema_version") == 3:
+        return product_draft_v2_from_v3(ProductDraftV3.model_validate(snapshot))
     if snapshot.get("schema_version") == 2:
         payload = dict(snapshot)
         if not payload.get("brand_id") and payload.get("brand"):
@@ -488,12 +766,83 @@ def product_draft_v2_from_snapshot(snapshot: dict) -> ProductDraftV2:
 
 
 def product_draft_v1_from_snapshot(snapshot: dict) -> ProductDraft:
-    if snapshot.get("schema_version") == 2:
-        return product_draft_v1_from_v2(ProductDraftV2.model_validate(snapshot))
+    if snapshot.get("schema_version") in {2, 3}:
+        return product_draft_v1_from_v2(product_draft_v2_from_snapshot(snapshot))
     return ProductDraft.model_validate(snapshot)
 
 
 def product_draft_snapshot_from_v1(product: ProductDraft, original: dict) -> dict:
+    if original.get("schema_version") == 3:
+        return product_draft_v3_from_v2(
+            product_draft_v2_from_v1(product),
+            preserved=ProductDraftV3.model_validate(original),
+        ).model_dump(mode="json")
     if original.get("schema_version") == 2:
         return product_draft_v2_from_v1(product).model_dump(mode="json")
     return product.model_dump(mode="json")
+
+
+def product_draft_v2_from_v3(product: ProductDraftV3) -> ProductDraftV2:
+    payload = product.model_dump(
+        mode="json",
+        exclude={
+            "benefits",
+            "specifications",
+            "care_instructions",
+            "content_details",
+            "seo",
+            "source_references",
+            "readiness_inputs",
+            "media",
+        },
+    )
+    payload["schema_version"] = 2
+    payload["media"] = [
+        ProductMediaDraft.model_validate(
+            asset.model_dump(mode="json", exclude={"alt_text"})
+        ).model_dump(mode="json")
+        for asset in product.media
+    ]
+    return ProductDraftV2.model_validate(payload)
+
+
+def product_draft_v3_from_v2(
+    product: ProductDraftV2,
+    *,
+    preserved: ProductDraftV3 | None = None,
+) -> ProductDraftV3:
+    payload = product.model_dump(mode="json", exclude={"media"})
+    payload["schema_version"] = 3
+    payload["media"] = [
+        {
+            **asset.model_dump(mode="json"),
+            "alt_text": None,
+        }
+        for asset in product.media
+    ]
+    if preserved:
+        preserved_payload = preserved.model_dump(mode="json")
+        for field in (
+            "benefits",
+            "specifications",
+            "care_instructions",
+            "content_details",
+            "seo",
+            "source_references",
+            "readiness_inputs",
+        ):
+            payload[field] = preserved_payload[field]
+        alt_text_by_media_id = {
+            asset.media_id: asset.alt_text
+            for asset in preserved.media
+            if asset.alt_text
+        }
+        for media in payload["media"]:
+            media["alt_text"] = alt_text_by_media_id.get(media["media_id"])
+    return ProductDraftV3.model_validate(payload)
+
+
+def product_draft_v3_from_snapshot(snapshot: dict) -> ProductDraftV3:
+    if snapshot.get("schema_version") == 3:
+        return ProductDraftV3.model_validate(snapshot)
+    return product_draft_v3_from_v2(product_draft_v2_from_snapshot(snapshot))

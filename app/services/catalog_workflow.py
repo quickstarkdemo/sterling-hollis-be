@@ -23,6 +23,7 @@ from app.config import Settings
 from app.models import (
     CatalogDraftRevision,
     CatalogProduct,
+    CatalogSuggestionSet,
     CatalogWorkflow,
     CatalogWorkflowEvent,
     ImageGenerationJob,
@@ -691,6 +692,20 @@ def get_catalog_workflow_projection(
         .where(CatalogWorkflowEvent.workflow_id == workflow.id)
         .order_by(CatalogWorkflowEvent.sequence)
     ).all()
+    suggestion_set_ids = []
+    if is_owner:
+        suggestion_set_ids = list(
+            db.scalars(
+                select(CatalogSuggestionSet.id)
+                .where(
+                    CatalogSuggestionSet.workflow_id == workflow.id,
+                    CatalogSuggestionSet.owner_provider == workflow.owner_provider,
+                    CatalogSuggestionSet.owner_provider_user_id
+                    == workflow.owner_provider_user_id,
+                )
+                .order_by(CatalogSuggestionSet.created_at, CatalogSuggestionSet.id)
+            ).all()
+        )
     return CatalogWorkflowResponse(
         id=workflow.id,
         title=workflow.title,
@@ -700,6 +715,7 @@ def get_catalog_workflow_projection(
         draft_id=workflow.draft_revision_id,
         image_job_id=workflow.image_job_id,
         published_product_id=workflow.published_product_id,
+        suggestion_set_ids=suggestion_set_ids,
         is_owner=is_owner,
         created_at=workflow.created_at,
         updated_at=workflow.updated_at,

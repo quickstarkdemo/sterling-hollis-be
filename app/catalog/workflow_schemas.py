@@ -90,6 +90,7 @@ class CatalogWorkflowResponse(BaseModel):
     draft_id: str | None = None
     image_job_id: str | None = None
     published_product_id: str | None = None
+    suggestion_set_ids: list[str] = Field(default_factory=list)
     is_owner: bool
     created_at: datetime
     updated_at: datetime

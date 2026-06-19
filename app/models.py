@@ -558,6 +558,168 @@ class CatalogSourceAsset(Base):
     )
 
 
+class CatalogSuggestionSet(Base):
+    __tablename__ = "catalog_suggestion_sets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_provider_user_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True
+    )
+    catalog_product_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    base_draft_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    base_draft_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_draft_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    current_draft_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    workflow_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_workflows.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    suggestions: Mapped[list["CatalogFieldSuggestion"]] = relationship(
+        back_populates="suggestion_set",
+        cascade="all, delete-orphan",
+        order_by="CatalogFieldSuggestion.created_at",
+    )
+    reviews: Mapped[list["CatalogSuggestionReview"]] = relationship(
+        back_populates="suggestion_set",
+        cascade="all, delete-orphan",
+        order_by="CatalogSuggestionReview.created_at",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "base_draft_version > 0",
+            name="ck_catalog_suggestion_sets_base_version_positive",
+        ),
+        CheckConstraint(
+            "current_draft_version > 0",
+            name="ck_catalog_suggestion_sets_current_version_positive",
+        ),
+        Index(
+            "ix_catalog_suggestion_sets_owner_product_created",
+            "owner_provider",
+            "owner_provider_user_id",
+            "catalog_product_id",
+            "created_at",
+        ),
+    )
+
+
+class CatalogFieldSuggestion(Base):
+    __tablename__ = "catalog_field_suggestions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    suggestion_set_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_suggestion_sets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    section: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    target_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    proposed_value_json: Mapped[object] = mapped_column(JSON, nullable=False)
+    baseline_value_json: Mapped[object] = mapped_column(JSON, nullable=False)
+    prior_value_json: Mapped[object | None] = mapped_column(JSON, nullable=True)
+    evidence_asset_ids_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    certainty_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending", index=True
+    )
+    reviewed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    applied_draft_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    suggestion_set: Mapped[CatalogSuggestionSet] = relationship(
+        back_populates="suggestions"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "suggestion_set_id",
+            "target_path",
+            name="uq_catalog_field_suggestions_set_target",
+        ),
+    )
+
+
+class CatalogSuggestionReview(Base):
+    __tablename__ = "catalog_suggestion_reviews"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    suggestion_set_id: Mapped[str] = mapped_column(
+        ForeignKey("catalog_suggestion_sets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    expected_draft_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    resulting_draft_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("catalog_draft_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    actor_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    suggestion_set: Mapped[CatalogSuggestionSet] = relationship(back_populates="reviews")
+
+    __table_args__ = (
+        CheckConstraint(
+            "expected_draft_version > 0",
+            name="ck_catalog_suggestion_reviews_version_positive",
+        ),
+    )
+
+
 class SupplierProductOffer(Base):
     __tablename__ = "supplier_product_offers"
 
