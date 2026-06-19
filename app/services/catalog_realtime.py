@@ -6,20 +6,30 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.catalog.ai_schemas import CatalogAICommandRequest
 from app.catalog.workflow_schemas import WorkflowEventInput
+from app.catalog.ai_schemas import CatalogAICommandRequest
+from app.catalog.admin_schemas import product_draft_v3_from_snapshot
 from app.config import Settings
 from app.models import CatalogDraftRevision, CatalogWorkflow
 from app.services.auth.clerk import AuthenticatedPrincipal
 from app.services.catalog_admin import draft_revision_version
+from app.services.catalog_suggestions import validate_suggestion_target_path
 from app.services.catalog_workflow import append_workflow_event
 
 
 RealtimeDraftToolName = Literal["create_catalog_draft", "refine_catalog_draft"]
+RealtimeV3ToolName = Literal[
+    "read_product_summary",
+    "read_catalog_summary",
+    "read_inventory_status",
+    "read_publish_readiness",
+    "propose_product_field",
+]
+RealtimeToolName = RealtimeDraftToolName | RealtimeV3ToolName
 REALTIME_WEBRTC_URL = "https://api.openai.com/v1/realtime/calls"
 
 REALTIME_INSTRUCTIONS = """You are the voice interface for Sterling Hollis Catalog Studio.
@@ -27,6 +37,27 @@ Help the presenter create or refine the private product draft in the current wor
 spoken responses concise. Use only the provided catalog draft tool when the presenter asks for
 a product change. Never claim that a product was published, archived, or changed until the tool
 returns success. Do not request or repeat credentials, customer identity, or private data."""
+
+_VOICE_FIELD_PATHS = {
+    "/description",
+    "/benefits",
+    "/specifications",
+    "/seo/title",
+    "/seo/description",
+    "/seo/keywords",
+}
+
+
+def _voice_field_target_is_allowed(path: str) -> bool:
+    if path in _VOICE_FIELD_PATHS:
+        return True
+    parts = path.split("/")
+    return (
+        len(parts) == 4
+        and parts[1] == "media"
+        and bool(parts[2])
+        and parts[3] == "alt_text"
+    )
 
 
 class CatalogRealtimeError(RuntimeError):
@@ -51,7 +82,68 @@ class CatalogRealtimeSessionResponse(BaseModel):
     workflow_id: str
     model: str
     webrtc_url: str = REALTIME_WEBRTC_URL
-    tool_names: list[RealtimeDraftToolName]
+    tool_names: list[RealtimeToolName]
+    session_id: str | None = None
+
+
+class CatalogRealtimeSessionContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    mode: Literal["workbench", "field"]
+    product_id: str = Field(min_length=1, max_length=64)
+    draft_id: str = Field(min_length=1, max_length=64)
+    expected_draft_version: int = Field(ge=1)
+    target_path: str | None = Field(default=None, max_length=255)
+    query_scopes: list[Literal["product", "catalog", "inventory", "readiness"]] = Field(
+        default_factory=lambda: ["product", "catalog", "inventory", "readiness"],
+        max_length=4,
+    )
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode == "field":
+            if not self.target_path:
+                raise ValueError("field mode requires target_path")
+            validate_suggestion_target_path(self.target_path)
+            if not _voice_field_target_is_allowed(self.target_path):
+                raise ValueError("target_path is not eligible for field voice assistance")
+        elif self.target_path is not None:
+            raise ValueError("target_path is only valid for field mode")
+        if self.mode == "workbench" and not self.query_scopes:
+            raise ValueError("workbench mode requires at least one query scope")
+        if len(self.query_scopes) != len(set(self.query_scopes)):
+            raise ValueError("query_scopes must be unique")
+        return self
+
+
+class CatalogRealtimeV3ToolArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    question: str | None = Field(default=None, min_length=1, max_length=1000)
+    instruction: str | None = Field(default=None, min_length=1, max_length=1000)
+
+
+class CatalogRealtimeV3ToolCallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    session_id: str = Field(min_length=1, max_length=64)
+    call_id: str = Field(min_length=1, max_length=128)
+    name: RealtimeV3ToolName
+    arguments: CatalogRealtimeV3ToolArguments
+
+    @model_validator(mode="after")
+    def validate_arguments(self):
+        if self.name == "propose_product_field":
+            if not self.arguments.instruction:
+                raise ValueError("field proposals require an instruction")
+            if self.arguments.question is not None:
+                raise ValueError("field proposals do not accept a question")
+        else:
+            if not self.arguments.question:
+                raise ValueError("read tools require a question")
+            if self.arguments.instruction is not None:
+                raise ValueError("read tools cannot propose a product change")
+        return self
 
 
 class CatalogRealtimeToolArguments(BaseModel):
@@ -95,6 +187,7 @@ class CatalogRealtimeService:
         *,
         workflow_id: str,
         principal: AuthenticatedPrincipal,
+        context: CatalogRealtimeSessionContextRequest | None = None,
     ) -> CatalogRealtimeSessionResponse:
         workflow = db.scalar(
             select(CatalogWorkflow).where(
@@ -122,6 +215,19 @@ class CatalogRealtimeService:
                     detail="The catalog workflow's current draft is unavailable.",
                 )
             expected_draft_version = draft_revision_version(db, revision)
+        session_id = f"realtime_session_{uuid4().hex[:24]}" if context else None
+        context_payload: dict[str, Any] | None = None
+        tool_names: list[RealtimeToolName]
+        if context is not None:
+            context_payload = self._validated_v3_context(
+                db,
+                workflow=workflow,
+                context=context,
+                principal=principal,
+            )
+            tool_names = self._v3_tool_names(context)
+        else:
+            tool_names = [tool_name]
         try:
             provider = self._resolve_client()
             created = provider.realtime.client_secrets.create(
@@ -129,10 +235,14 @@ class CatalogRealtimeService:
                     "anchor": "created_at",
                     "seconds": self.settings.catalog_studio_realtime_client_secret_ttl_seconds,
                 },
-                session=self._session_config(
-                    tool_name,
-                    current_draft_id=workflow.draft_revision_id,
-                    expected_draft_version=expected_draft_version,
+                session=(
+                    self._v3_session_config(tool_names)
+                    if context is not None
+                    else self._session_config(
+                        tool_name,
+                        current_draft_id=workflow.draft_revision_id,
+                        expected_draft_version=expected_draft_version,
+                    )
                 ),
                 extra_headers={
                     "OpenAI-Safety-Identifier": self._safety_identifier(principal),
@@ -154,6 +264,8 @@ class CatalogRealtimeService:
                 principal=principal,
                 status_value="failed",
                 error=exc,
+                session_id=session_id,
+                context=context_payload,
             )
             raise
         except Exception as exc:
@@ -164,6 +276,8 @@ class CatalogRealtimeService:
                 principal=principal,
                 status_value="failed",
                 error=error,
+                session_id=session_id,
+                context=context_payload,
             )
             raise error from exc
 
@@ -172,15 +286,147 @@ class CatalogRealtimeService:
             workflow_id=workflow_id,
             principal=principal,
             status_value="succeeded",
-            tool_name=tool_name,
+            tool_name=tool_name if context is None else None,
+            tool_names=tool_names,
+            session_id=session_id,
+            expires_at=expires_at,
+            context=context_payload,
         )
         return CatalogRealtimeSessionResponse(
             client_secret=secret,
             expires_at=expires_at,
             workflow_id=workflow_id,
             model=self.settings.catalog_studio_realtime_model,
-            tool_names=[tool_name],
+            tool_names=tool_names,
+            session_id=session_id,
         )
+
+    def _validated_v3_context(
+        self,
+        db: Session,
+        *,
+        workflow: CatalogWorkflow,
+        context: CatalogRealtimeSessionContextRequest,
+        principal: AuthenticatedPrincipal,
+    ) -> dict[str, Any]:
+        revision = db.get(CatalogDraftRevision, context.draft_id)
+        if (
+            revision is None
+            or revision.catalog_product_id != context.product_id
+            or revision.created_by != principal.provider_user_id
+        ):
+            raise HTTPException(status_code=404, detail="Catalog draft revision not found.")
+        if workflow.draft_revision_id not in {None, revision.id}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The catalog workflow is linked to another draft.",
+            )
+        actual_version = draft_revision_version(db, revision)
+        if actual_version != context.expected_draft_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Expected catalog draft version {context.expected_draft_version}, "
+                    f"but current version is {actual_version}."
+                ),
+            )
+        if context.mode == "field" and context.target_path.startswith("/media/"):
+            product = product_draft_v3_from_snapshot(revision.snapshot_json)
+            media_id = context.target_path.split("/")[2]
+            if all(item.media_id != media_id for item in product.media):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="The selected media target is not present in the current draft.",
+                )
+        workflow.draft_revision_id = revision.id
+        return {
+            "mode": context.mode,
+            "product_id": context.product_id,
+            "draft_id": revision.id,
+            "expected_draft_version": actual_version,
+            "target_path": context.target_path,
+            "query_scopes": context.query_scopes if context.mode == "workbench" else [],
+        }
+
+    @staticmethod
+    def _v3_tool_names(
+        context: CatalogRealtimeSessionContextRequest,
+    ) -> list[RealtimeToolName]:
+        if context.mode == "field":
+            return ["propose_product_field"]
+        by_scope: dict[str, RealtimeV3ToolName] = {
+            "product": "read_product_summary",
+            "catalog": "read_catalog_summary",
+            "inventory": "read_inventory_status",
+            "readiness": "read_publish_readiness",
+        }
+        return [by_scope[scope] for scope in context.query_scopes]
+
+    def _v3_session_config(
+        self,
+        tool_names: list[RealtimeToolName],
+    ) -> dict[str, Any]:
+        tools = []
+        for name in tool_names:
+            if name == "propose_product_field":
+                properties: dict[str, Any] = {
+                    "instruction": {
+                        "type": "string",
+                        "description": (
+                            "A bounded dictation or refinement instruction. The application "
+                            "selects and validates the target field outside model arguments."
+                        ),
+                    },
+                }
+                required = ["instruction"]
+                description = "Stage a proposal for the field selected by the application."
+            else:
+                properties = {
+                    "question": {
+                        "type": "string",
+                        "description": "The merchandiser's bounded catalog question.",
+                    }
+                }
+                required = ["question"]
+                description = {
+                    "read_product_summary": "Read the active product summary.",
+                    "read_catalog_summary": "Read a bounded catalog summary.",
+                    "read_inventory_status": "Read store inventory for the active product.",
+                    "read_publish_readiness": "Read deterministic publish readiness.",
+                }[name]
+            tools.append(
+                {
+                    "type": "function",
+                    "name": name,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": properties,
+                        "required": required,
+                    },
+                }
+            )
+        return {
+            "type": "realtime",
+            "model": self.settings.catalog_studio_realtime_model,
+            "instructions": (
+                "You are the bounded voice assistant for Sterling Hollis Catalog Studio. "
+                "Use only the provided tools. Read tools never change state. A field tool "
+                "stages one proposal for merchant review and never saves, publishes, archives, "
+                "or changes inventory. Do not request credentials or private customer data."
+            ),
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "transcription": {
+                        "model": self.settings.catalog_studio_realtime_transcription_model,
+                    }
+                }
+            },
+            "tools": tools,
+            "tool_choice": "auto",
+        }
 
     def _resolve_client(self) -> Any:
         if not self.settings.catalog_studio_realtime_enabled:
@@ -289,6 +535,10 @@ class CatalogRealtimeService:
         principal: AuthenticatedPrincipal,
         status_value: Literal["succeeded", "failed"],
         tool_name: RealtimeDraftToolName | None = None,
+        tool_names: list[RealtimeToolName] | None = None,
+        session_id: str | None = None,
+        expires_at: int | None = None,
+        context: dict[str, Any] | None = None,
         error: CatalogRealtimeError | None = None,
     ) -> None:
         append_workflow_event(
@@ -322,6 +572,10 @@ class CatalogRealtimeService:
                 response_payload={
                     "status": "ready" if status_value == "succeeded" else "failed",
                     "tool_name": tool_name,
+                    "tool_names": tool_names or ([tool_name] if tool_name else []),
+                    "session_id": session_id,
+                    "expires_at": expires_at,
+                    "context": context,
                 },
             ),
         )
@@ -348,6 +602,34 @@ class CatalogRealtimeService:
             detail="Realtime could not create a client credential.",
             status_code=status.HTTP_502_BAD_GATEWAY,
             retryable=bool(provider_status == 429 or (provider_status and provider_status >= 500)),
+        )
+
+
+def reject_legacy_realtime_mutation_for_v3(
+    db: Session,
+    *,
+    workflow_id: str,
+    principal: AuthenticatedPrincipal,
+) -> None:
+    workflow = db.scalar(
+        select(CatalogWorkflow).where(
+            CatalogWorkflow.id == workflow_id,
+            CatalogWorkflow.owner_provider == principal.provider,
+            CatalogWorkflow.owner_provider_user_id == principal.provider_user_id,
+        )
+    )
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Catalog Studio catalog workflow not found.")
+    if not workflow.draft_revision_id:
+        return
+    revision = db.get(CatalogDraftRevision, workflow.draft_revision_id)
+    if revision is not None and revision.snapshot_json.get("schema_version") == 3:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "V3 voice actions require a bounded Realtime context and a reviewable "
+                "field suggestion."
+            ),
         )
 
 

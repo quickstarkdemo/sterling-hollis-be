@@ -4,7 +4,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.catalog.admin_schemas import DesignSpecificationDraft, ProductDraftV2
+from app.catalog.admin_schemas import (
+    CatalogSuggestionSetResponse,
+    DesignSpecificationDraft,
+    ProductSpecificationDraft,
+    ProductDraftV2,
+)
 from app.catalog.workflow_schemas import CatalogWorkflowResponse
 
 
@@ -98,3 +103,89 @@ class CatalogAICommandResult(BaseModel):
 
 class CatalogAIWorkflowResponse(CatalogAICommandResult):
     workflow: CatalogWorkflowResponse
+
+
+SuggestionCertainty = Literal["observed", "derived"]
+SuggestionInputOrigin = Literal["supplier_analysis", "typed_action", "voice"]
+
+
+class CatalogAIFieldProposal(BaseModel):
+    """One grounded field proposal returned by Structured Outputs."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_path: str = Field(min_length=1, max_length=255)
+    proposed_value: str | float | list[str] | list[ProductSpecificationDraft]
+    evidence_asset_ids: list[str] = Field(default_factory=list, max_length=20)
+    certainty_class: SuggestionCertainty
+
+    @model_validator(mode="after")
+    def validate_evidence(self):
+        if len(self.evidence_asset_ids) != len(set(self.evidence_asset_ids)):
+            raise ValueError("evidence_asset_ids must be unique")
+        if self.certainty_class == "observed" and not self.evidence_asset_ids:
+            raise ValueError("observed suggestions require source evidence")
+        return self
+
+
+class CatalogAIUnknownField(BaseModel):
+    """An unresolved fact that must remain outside canonical product state."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_path: str = Field(min_length=1, max_length=255)
+    question: str = Field(min_length=1, max_length=500)
+
+
+class CatalogAISuggestionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    suggestions: list[CatalogAIFieldProposal] = Field(default_factory=list, max_length=80)
+    unknown_fields: list[CatalogAIUnknownField] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode="after")
+    def validate_unique_targets(self):
+        paths = [item.target_path for item in self.suggestions]
+        if len(paths) != len(set(paths)):
+            raise ValueError("suggestion target paths must be unique")
+        unknown_paths = [item.target_path for item in self.unknown_fields]
+        if len(unknown_paths) != len(set(unknown_paths)):
+            raise ValueError("unknown field target paths must be unique")
+        if set(paths) & set(unknown_paths):
+            raise ValueError("a target path cannot be both suggested and unknown")
+        return self
+
+
+class CatalogAISuggestionCommandRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    draft_id: str = Field(min_length=1, max_length=64)
+    expected_draft_version: int = Field(ge=1)
+    workflow_id: str = Field(min_length=1, max_length=64)
+    instruction: str = Field(min_length=1, max_length=4000)
+    input_origin: SuggestionInputOrigin
+    source_asset_ids: list[str] = Field(default_factory=list, max_length=20)
+    target_paths: list[str] = Field(min_length=1, max_length=40)
+
+    @model_validator(mode="after")
+    def validate_command(self):
+        if len(self.source_asset_ids) != len(set(self.source_asset_ids)):
+            raise ValueError("source_asset_ids must be unique")
+        if len(self.target_paths) != len(set(self.target_paths)):
+            raise ValueError("target_paths must be unique")
+        if self.input_origin == "supplier_analysis" and not self.source_asset_ids:
+            raise ValueError("supplier analysis requires source assets")
+        return self
+
+
+class CatalogAIDirectSuggestionCommandRequest(CatalogAISuggestionCommandRequest):
+    input_origin: Literal["supplier_analysis", "typed_action"]
+
+
+class CatalogAISuggestionCommandResult(BaseModel):
+    status: Literal["succeeded", "blocked"]
+    message: str
+    retryable: bool = False
+    replayed: bool = False
+    suggestion_set: CatalogSuggestionSetResponse | None = None
+    follow_up_questions: list[CatalogAIUnknownField] = Field(default_factory=list)
