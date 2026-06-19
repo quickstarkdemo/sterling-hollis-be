@@ -7,15 +7,17 @@ import hashlib
 import logging
 from typing import Any, TypeVar
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.api_traces.context import TraceCaptureContext
 from app.api_traces.schemas import (
     ApiTraceProjection,
+    ClientTraceEventInput,
     TraceArtifactProjection,
     TraceEventProjection,
     TraceLinkProjection,
+    TraceSummaryProjection,
     TraceSpanProjection,
 )
 from app.config import Settings
@@ -559,3 +561,197 @@ def get_trace_projection(
             for row in artifacts
         ],
     )
+
+
+def _owned_trace(
+    db: Session,
+    *,
+    trace_id: str,
+    owner_provider: str,
+    owner_provider_user_id: str,
+    now: datetime,
+    for_update: bool = False,
+) -> ApiTrace | None:
+    statement = select(ApiTrace).where(
+        ApiTrace.id == trace_id,
+        ApiTrace.owner_provider == owner_provider,
+        ApiTrace.owner_provider_user_id == owner_provider_user_id,
+        ApiTrace.metadata_expires_at > now,
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
+
+
+def list_trace_summaries(
+    db: Session,
+    *,
+    owner_provider: str,
+    owner_provider_user_id: str,
+    limit: int,
+    cursor: tuple[datetime, str] | None = None,
+    now: datetime | None = None,
+) -> tuple[list[TraceSummaryProjection], tuple[datetime, str] | None]:
+    projected_at = _as_utc(now or datetime.now(timezone.utc))
+    statement = select(ApiTrace).where(
+        ApiTrace.owner_provider == owner_provider,
+        ApiTrace.owner_provider_user_id == owner_provider_user_id,
+        ApiTrace.metadata_expires_at > projected_at,
+    )
+    if cursor:
+        cursor_created, cursor_id = cursor
+        statement = statement.where(
+            or_(
+                ApiTrace.created_at < cursor_created,
+                and_(ApiTrace.created_at == cursor_created, ApiTrace.id < cursor_id),
+            )
+        )
+    rows = list(
+        db.scalars(
+            statement.order_by(ApiTrace.created_at.desc(), ApiTrace.id.desc()).limit(
+                limit + 1
+            )
+        ).all()
+    )
+    has_more = len(rows) > limit
+    selected = rows[:limit]
+    items = [
+        TraceSummaryProjection(
+            trace_id=row.id,
+            surface=row.surface,
+            name=row.name,
+            status=row.status,
+            started_at=_as_utc(row.started_at),
+            completed_at=_as_utc(row.completed_at) if row.completed_at else None,
+            duration_ms=row.duration_ms,
+            payload_expired=row.payload_expired
+            or _as_utc(row.payload_expires_at) <= projected_at,
+        )
+        for row in selected
+    ]
+    next_cursor = None
+    if has_more and selected:
+        last = selected[-1]
+        next_cursor = (_as_utc(last.created_at), last.id)
+    return items, next_cursor
+
+
+def _event_projection(row: ApiTraceEvent, *, payload_expired: bool) -> TraceEventProjection:
+    return TraceEventProjection(
+        event_id=row.event_id,
+        span_id=row.span_id,
+        sequence=row.sequence,
+        name=row.name,
+        event_type=row.event_type,
+        status=row.status,
+        occurred_at=_as_utc(row.occurred_at),
+        attributes=(
+            dict(RETENTION_MARKER)
+            if payload_expired
+            else dict(row.attributes_json or {})
+        ),
+    )
+
+
+def get_trace_events(
+    db: Session,
+    *,
+    trace_id: str,
+    owner_provider: str,
+    owner_provider_user_id: str,
+    after_sequence: int = -1,
+    limit: int = 100,
+    now: datetime | None = None,
+) -> list[TraceEventProjection] | None:
+    projected_at = _as_utc(now or datetime.now(timezone.utc))
+    trace = _owned_trace(
+        db,
+        trace_id=trace_id,
+        owner_provider=owner_provider,
+        owner_provider_user_id=owner_provider_user_id,
+        now=projected_at,
+    )
+    if not trace:
+        return None
+    payload_expired = (
+        trace.payload_expired or _as_utc(trace.payload_expires_at) <= projected_at
+    )
+    rows = db.scalars(
+        select(ApiTraceEvent)
+        .where(
+            ApiTraceEvent.trace_id == trace.id,
+            ApiTraceEvent.sequence > after_sequence,
+        )
+        .order_by(ApiTraceEvent.sequence, ApiTraceEvent.event_id)
+        .limit(max(1, limit))
+    ).all()
+    return [_event_projection(row, payload_expired=payload_expired) for row in rows]
+
+
+def append_client_trace_event(
+    db: Session,
+    *,
+    trace_id: str,
+    owner_provider: str,
+    owner_provider_user_id: str,
+    event: ClientTraceEventInput,
+    settings: Settings,
+    now: datetime | None = None,
+) -> TraceEventProjection | None:
+    recorded_at = _as_utc(now or datetime.now(timezone.utc))
+    trace = _owned_trace(
+        db,
+        trace_id=trace_id,
+        owner_provider=owner_provider,
+        owner_provider_user_id=owner_provider_user_id,
+        now=recorded_at,
+        for_update=True,
+    )
+    if not trace:
+        return None
+    existing = db.scalar(
+        select(ApiTraceEvent).where(
+            ApiTraceEvent.trace_id == trace.id,
+            ApiTraceEvent.event_id == event.event_id,
+        )
+    )
+    payload_expired = (
+        trace.payload_expired or _as_utc(trace.payload_expires_at) <= recorded_at
+    )
+    if existing:
+        return _event_projection(existing, payload_expired=payload_expired)
+    if event.span_id and not db.scalar(
+        select(ApiTraceSpan.id).where(
+            ApiTraceSpan.trace_id == trace.id,
+            ApiTraceSpan.span_id == event.span_id,
+        )
+    ):
+        raise ValueError("span_id does not belong to this trace")
+    event_count = db.scalar(
+        select(func.count(ApiTraceEvent.id)).where(ApiTraceEvent.trace_id == trace.id)
+    ) or 0
+    if event_count >= max(1, settings.api_trace_max_events):
+        raise ValueError("trace event limit reached")
+    last_sequence = db.scalar(
+        select(func.max(ApiTraceEvent.sequence)).where(ApiTraceEvent.trace_id == trace.id)
+    )
+    sequence = (-1 if last_sequence is None else last_sequence) + 1
+    policy = _redaction_policy(settings)
+    row = ApiTraceEvent(
+        id=_row_id("event", trace.id, event.event_id),
+        trace_id=trace.id,
+        event_id=event.event_id,
+        span_id=event.span_id,
+        sequence=sequence,
+        name=safe_observability_text(event.name, max_length=128),
+        event_type=event.event_type,
+        status=event.status,
+        attributes_json=_payload(event.attributes, policy=policy, expired=payload_expired),
+        occurred_at=event.occurred_at,
+        created_at=recorded_at,
+    )
+    db.add(row)
+    trace.updated_at = recorded_at
+    db.commit()
+    db.refresh(row)
+    return _event_projection(row, payload_expired=payload_expired)

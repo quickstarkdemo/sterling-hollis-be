@@ -9,9 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api_traces.context import (
+    bind_provisional_trace_context,
+    provisional_trace_context,
+)
 from app.config import Settings, get_settings
 from app.observability.llm_otel import initialize_llm_otel
 from app.routers.admin_catalog import router as admin_catalog_router
+from app.routers.api_traces import router as api_traces_router
 from app.routers.admin_synthetic import router as admin_router
 from app.routers.catalog import router as catalog_router
 from app.routers.chat import router as chat_router
@@ -27,6 +32,28 @@ from app.services.auth.admin import require_catalog_admin
 
 
 OAI_SANDBOX_ORIGIN_RE = re.compile(r"^https://.*\.oaiusercontent\.com$")
+CORS_ALLOWED_HEADERS = [
+    "Accept",
+    "Authorization",
+    "Content-Type",
+    "Idempotency-Key",
+    "Last-Event-Id",
+    "MCP-Protocol-Version",
+    "MCP-Session-Id",
+    "traceparent",
+    "tracestate",
+    "X-Client-Request-Id",
+    "X-Requested-With",
+    "X-Trace-Surface",
+]
+CORS_EXPOSED_HEADERS = [
+    "traceparent",
+    "tracestate",
+    "X-Trace-Id",
+    "X-Trace-Span-Id",
+    "X-Trace-Capture",
+    "MCP-Session-Id",
+]
 
 DEMO_NETWORK_OUTAGE_EXEMPT_PREFIXES = (
     "/admin/demo/observability",
@@ -113,13 +140,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=_cors_allowed_origins(settings),
         allow_origin_regex=allow_origin_regex,
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=CORS_ALLOWED_HEADERS,
+        expose_headers=CORS_EXPOSED_HEADERS,
     )
     static_dir = Path(__file__).resolve().parent / "static" / "chatgpt-ui"
     product_image_dir = Path(settings.product_image_output_dir)
     product_image_dir.mkdir(parents=True, exist_ok=True)
     product_image_url_path = settings.product_image_url_path.rstrip("/") or "/product-images"
+
+    @app.middleware("http")
+    async def api_trace_context_middleware(request: Request, call_next):
+        if not settings.api_trace_capture_enabled or request.method == "OPTIONS":
+            return await call_next(request)
+        provisional = provisional_trace_context(
+            request.headers.get("traceparent"),
+            request.headers.get("tracestate"),
+        )
+        request.state.api_trace_provisional = provisional
+        with bind_provisional_trace_context(provisional):
+            response = await call_next(request)
+        response.headers["traceparent"] = provisional.traceparent
+        if provisional.tracestate:
+            response.headers["tracestate"] = provisional.tracestate
+        capture = getattr(request.state, "api_trace_capture", None)
+        if capture and capture.authorized:
+            response.headers["X-Trace-Id"] = provisional.trace_id
+            response.headers["X-Trace-Span-Id"] = provisional.span_id
+            response.headers["X-Trace-Capture"] = "active"
+        return response
 
     @app.middleware("http")
     async def demo_network_outage_middleware(request: Request, call_next):
@@ -153,6 +202,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     app.include_router(admin_catalog_router)
+    app.include_router(api_traces_router)
     if settings.enable_legacy_admin_routes:
         legacy_dependencies = (
             [Depends(require_catalog_admin)]

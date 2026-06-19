@@ -227,6 +227,14 @@ def test_duplicate_event_ids_are_idempotent(session_factory):
     assert span_count == 2
 
 
+def test_projection_rejects_duplicate_event_sequences():
+    payload = _projection(datetime(2026, 6, 19, 20, 0, tzinfo=timezone.utc)).model_dump()
+    payload["events"][1]["sequence"] = payload["events"][0]["sequence"]
+
+    with pytest.raises(ValueError, match="event sequence values must be unique"):
+        ApiTraceProjection(**payload)
+
+
 def test_payload_expiry_preserves_topology_then_metadata_expiry_deletes_trace(
     session_factory,
 ):

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TraceProjectionModel(BaseModel):
@@ -111,6 +113,62 @@ class ApiTraceProjection(TraceProjectionModel):
         ):
             if len(identifiers) != len(set(identifiers)):
                 raise ValueError(f"{label} values must be unique within a trace")
+        event_sequences = [item.sequence for item in self.events]
+        if len(event_sequences) != len(set(event_sequences)):
+            raise ValueError("event sequence values must be unique within a trace")
         if self.completed_at and self.completed_at < self.started_at:
             raise ValueError("trace completed_at must not precede started_at")
         return self
+
+
+class TraceSummaryProjection(TraceProjectionModel):
+    trace_id: str
+    surface: str
+    name: str
+    status: str
+    started_at: AwareDatetime
+    completed_at: AwareDatetime | None = None
+    duration_ms: int | None = None
+    payload_expired: bool = False
+
+
+class TraceListResponse(TraceProjectionModel):
+    items: list[TraceSummaryProjection]
+    next_cursor: str | None = None
+
+
+class TraceEventPage(TraceProjectionModel):
+    items: list[TraceEventProjection]
+    next_cursor: int
+
+
+ClientTraceEventType = Literal[
+    "ui.started",
+    "ui.completed",
+    "ui.failed",
+    "http.started",
+    "http.completed",
+    "http.failed",
+    "realtime.connected",
+    "realtime.disconnected",
+    "realtime.error",
+]
+
+
+class ClientTraceEventInput(TraceProjectionModel):
+    event_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    span_id: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    event_type: ClientTraceEventType
+    status: str | None = Field(default=None, max_length=32)
+    occurred_at: AwareDatetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("attributes")
+    @classmethod
+    def bound_input_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value, default=str, separators=(",", ":")).encode()) > 65_536:
+            raise ValueError("attributes payload exceeds 65536 bytes")
+        return value

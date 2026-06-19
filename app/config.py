@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     api_trace_max_links: int = 100
     api_trace_max_events: int = 250
     api_trace_max_artifacts: int = 50
+    api_trace_stream_poll_seconds: float = 0.5
+    api_trace_stream_keepalive_seconds: float = 15.0
     catalog_studio_media_allowed_hosts: str = ""
     catalog_studio_media_fetch_max_bytes: int = 8 * 1024 * 1024
     catalog_studio_media_fetch_timeout_seconds: float = 15.0
