@@ -99,6 +99,13 @@ def _context(draft: dict, *, mode: str, target_path: str | None = None) -> dict:
     return payload
 
 
+def _storewide_context() -> dict:
+    return {
+        "mode": "workbench",
+        "query_scopes": ["catalog", "inventory"],
+    }
+
+
 def test_v3_voice_reads_inventory_and_stages_only_the_server_pinned_field(monkeypatch):
     settings = Settings(
         _env_file=None,
@@ -366,3 +373,88 @@ def test_v3_voice_reads_inventory_and_stages_only_the_server_pinned_field(monkey
         assert "server-only-openai-key" not in persisted
         assert "ek_short_lived" not in persisted
         assert "raw_audio" not in persisted
+
+
+def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatch):
+    settings = Settings(
+        _env_file=None,
+        openai_api_key="server-only-openai-key",
+        catalog_studio_realtime_enabled=True,
+        catalog_studio_realtime_safety_identifier_secret="stable-voice-secret",
+    )
+    secrets = _FakeClientSecrets()
+
+    with _admin_catalog_client(monkeypatch) as (client, _sessions):
+        workflow = client.post(
+            "/api/admin/catalog/workflows",
+            json={
+                "title": "Store-wide catalog assistant",
+                "business_summary": "Ask bounded catalog and inventory questions.",
+            },
+            headers=_headers("storewide-voice-workflow"),
+        ).json()
+        payload = _v3_payload(title="Storewide Low Stock Coat")
+        payload["product"]["inventory"][0]["availability"] = "low stock"
+        payload["product"]["inventory"][0]["inventory_qty"] = 2
+        draft = client.post(
+            "/api/admin/catalog/v3/products/drafts",
+            json=payload,
+            headers=_headers("storewide-v3-draft"),
+        ).json()
+        published = client.post(
+            f"/api/admin/catalog/v3/products/{draft['product_id']}/publish",
+            json={"draft_id": draft["id"], "expected_version": 0},
+            headers=_headers("storewide-v3-publish"),
+        )
+        assert published.status_code == 200, published.text
+
+        client.app.dependency_overrides[get_catalog_realtime_service] = lambda: (
+            CatalogRealtimeService(settings, _fake_client(secrets))
+        )
+
+        text_query = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which stores have low stock across the catalog?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("storewide-text-query"),
+        )
+        assert text_query.status_code == 200, text_query.text
+        text_result = text_query.json()
+        assert text_result["mutation"] is False
+        assert "Storewide Low Stock Coat" in text_result["message"]
+        assert text_result["citations"][0]["kind"] == "inventory"
+        assert text_result["citations"][0]["value"]["store_name"] == "Dallas Downtown"
+
+        session = client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/realtime/sessions",
+            json=_storewide_context(),
+        )
+        assert session.status_code == 201, session.text
+        session_payload = session.json()
+        assert session_payload["tool_names"] == [
+            "read_catalog_summary",
+            "read_inventory_status",
+        ]
+        serialized_tools = repr(secrets.calls[-1]["session"]["tools"])
+        assert "draft_id" not in serialized_tools
+        assert "product_id" not in serialized_tools
+        assert "publish_catalog" not in serialized_tools
+        assert "update_inventory" not in serialized_tools
+
+        voice_query = client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/realtime/v3/tool-calls",
+            json={
+                "session_id": session_payload["session_id"],
+                "call_id": "call-storewide-low-stock",
+                "name": "read_inventory_status",
+                "arguments": {"question": "Which stores are low stock?"},
+            },
+            headers=_headers("storewide-voice-query"),
+        )
+        assert voice_query.status_code == 200, voice_query.text
+        voice_result = voice_query.json()
+        assert voice_result["mutation"] is False
+        assert "Storewide Low Stock Coat" in voice_result["message"]
+        assert voice_result["citations"][0]["value"]["inventory_qty"] == 2

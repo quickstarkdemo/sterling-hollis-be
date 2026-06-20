@@ -15,7 +15,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
@@ -136,6 +136,7 @@ from app.services.catalog_realtime import (
 )
 from app.services.catalog_voice_tools import (
     CatalogVoiceToolResult,
+    answer_catalog_question,
     execute_catalog_voice_tool,
 )
 from app.services.catalog_sources import (
@@ -218,6 +219,11 @@ class CatalogStudioCapabilities(BaseModel):
 class CatalogStudioSessionResponse(BaseModel):
     authorized: Literal[True] = True
     capabilities: CatalogStudioCapabilities
+
+
+class CatalogAssistantQueryRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    query_scopes: list[Literal["catalog", "inventory"]] | None = None
 
 
 @router.get(
@@ -1115,6 +1121,25 @@ def catalog_workflow_detail(
         principal=principal,
         developer=developer,
         settings=settings,
+    )
+
+
+@router.post(
+    "/catalog/assistant/query",
+    response_model=CatalogVoiceToolResult,
+    response_model_exclude_none=True,
+    summary="Answer a bounded read-only catalog assistant question",
+)
+def query_catalog_assistant(
+    request: CatalogAssistantQueryRequest,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+) -> CatalogVoiceToolResult:
+    _ = principal
+    return answer_catalog_question(
+        db,
+        question=request.question,
+        query_scopes=request.query_scopes,
     )
 
 

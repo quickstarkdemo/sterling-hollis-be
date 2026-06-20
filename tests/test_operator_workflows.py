@@ -58,6 +58,13 @@ from app.services.merchandising import merchandising_action_recommendations, mer
 from app.services.demo_customer import DEMO_CUSTOMER_ID
 
 
+class _FixedDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        fixed = cls(2026, 3, 14, tzinfo=timezone.utc)
+        return fixed if tz is None else fixed.astimezone(tz)
+
+
 class _DummyPineconeService:
     enabled = False
 
@@ -94,7 +101,11 @@ def test_style_constraints_normalize_fields():
 @contextmanager
 def _patched_runtime(monkeypatch):
     import app.mcp_server as mcp_server
+    import app.services.customer_value as customer_value_service
+    import app.services.executive as executive_service
     import app.services.apps_ui as apps_ui
+    import app.services.merchandising as merchandising_service
+    import app.services.product_performance as product_performance_service
     import app.services.recommendations as recommendations
 
     engine = create_engine(
@@ -106,6 +117,15 @@ def _patched_runtime(monkeypatch):
     monkeypatch.setattr(mcp_server, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(apps_ui, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(recommendations, "PineconeService", lambda: _DummyPineconeService())
+    for module in (
+        customer_value_service,
+        executive_service,
+        mcp_server,
+        merchandising_service,
+        product_performance_service,
+        recommendations,
+    ):
+        monkeypatch.setattr(module, "datetime", _FixedDateTime)
 
     session = TestingSessionLocal()
     try:

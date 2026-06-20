@@ -22,6 +22,7 @@ from app.models import (
     CatalogProduct,
     CatalogWorkflow,
     CatalogWorkflowEvent,
+    ProductInventory,
     Store,
 )
 from app.services.auth.clerk import AuthenticatedPrincipal
@@ -188,8 +189,10 @@ def _catalog_summary(db: Session) -> tuple[str, list[CatalogVoiceCitation]]:
 
 
 def _inventory_summary(
-    db: Session, product: ProductDraftV3
+    db: Session, product: ProductDraftV3 | None
 ) -> tuple[str, list[CatalogVoiceCitation]]:
+    if product is None:
+        return _catalog_inventory_summary(db)
     store_ids = {row.store_id for row in product.inventory}
     stores = {
         row.id: row
@@ -217,6 +220,68 @@ def _inventory_summary(
         return "No store is currently marked low stock for this product.", citations
     names = ", ".join(item.label for item in low)
     return f"Low stock is reported at {names}.", citations
+
+
+def _catalog_inventory_summary(db: Session) -> tuple[str, list[CatalogVoiceCitation]]:
+    rows = db.execute(
+        select(ProductInventory, CatalogProduct, Store)
+        .join(CatalogProduct, CatalogProduct.id == ProductInventory.catalog_product_id)
+        .join(Store, Store.id == ProductInventory.store_id)
+        .where(CatalogProduct.lifecycle_status == "published")
+        .order_by(
+            ProductInventory.inventory_qty.asc(),
+            Store.name.asc(),
+            CatalogProduct.title.asc(),
+        )
+        .limit(80)
+    ).all()
+    low_rows = [
+        (inventory, product, store)
+        for inventory, product, store in rows
+        if inventory.availability == "low stock" or int(inventory.inventory_qty or 0) <= 5
+    ][:8]
+    citations = [
+        CatalogVoiceCitation(
+            kind="inventory",
+            source_id=f"{product.id}:{inventory.store_id}:{inventory.size_key}",
+            label=f"{store.name}: {product.title}",
+            value={
+                "product_id": product.id,
+                "title": product.title,
+                "store_id": store.id,
+                "store_name": store.name,
+                "size": inventory.size,
+                "availability": inventory.availability,
+                "inventory_qty": inventory.inventory_qty,
+            },
+        )
+        for inventory, product, store in low_rows
+    ]
+    if not citations:
+        return "No low-stock inventory is currently reported across published products.", []
+    preview = "; ".join(
+        f"{item.value['store_name']} has {item.value['inventory_qty']} unit(s) of {item.value['title']}"
+        for item in citations[:3]
+    )
+    suffix = " More low-stock rows are cited." if len(citations) > 3 else ""
+    return f"Low stock appears across the catalog: {preview}.{suffix}", citations
+
+
+def answer_catalog_question(
+    db: Session,
+    *,
+    question: str,
+    query_scopes: list[Literal["catalog", "inventory"]] | None = None,
+) -> CatalogVoiceToolResult:
+    scopes = query_scopes or ["catalog", "inventory"]
+    if "inventory" in scopes and any(
+        token in question.casefold()
+        for token in ("stock", "inventory", "store", "unit", "available", "availability")
+    ):
+        message, citations = _catalog_inventory_summary(db)
+    else:
+        message, citations = _catalog_summary(db)
+    return CatalogVoiceToolResult(message=message, citations=citations)
 
 
 def _readiness_summary(
@@ -325,22 +390,35 @@ def execute_catalog_voice_tool(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This tool is unavailable in the active Realtime context.",
         )
-    revision, product = _validated_context_draft(
-        db,
-        workflow=workflow,
-        context=context,
-        principal=principal,
-    )
+    revision = None
+    product = None
+    if context.get("draft_id") and context.get("product_id"):
+        revision, product = _validated_context_draft(
+            db,
+            workflow=workflow,
+            context=context,
+            principal=principal,
+        )
 
     suggestion_set = None
     result_status: Literal["succeeded", "blocked"] = "succeeded"
     if request.name == "read_product_summary":
+        if product is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This Realtime session has no active product context.",
+            )
         message, citations = _product_summary(product)
     elif request.name == "read_catalog_summary":
         message, citations = _catalog_summary(db)
     elif request.name == "read_inventory_status":
         message, citations = _inventory_summary(db, product)
     elif request.name == "read_publish_readiness":
+        if revision is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This Realtime session has no active product context.",
+            )
         message, citations = _readiness_summary(
             db,
             revision=revision,

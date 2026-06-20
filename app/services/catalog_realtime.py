@@ -94,9 +94,9 @@ class CatalogRealtimeSessionContextRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     mode: Literal["workbench", "field"]
-    product_id: str = Field(min_length=1, max_length=64)
-    draft_id: str = Field(min_length=1, max_length=64)
-    expected_draft_version: int = Field(ge=1)
+    product_id: str | None = Field(default=None, min_length=1, max_length=64)
+    draft_id: str | None = Field(default=None, min_length=1, max_length=64)
+    expected_draft_version: int | None = Field(default=None, ge=1)
     target_path: str | None = Field(default=None, max_length=255)
     query_scopes: list[Literal["product", "catalog", "inventory", "readiness"]] = Field(
         default_factory=lambda: ["product", "catalog", "inventory", "readiness"],
@@ -105,7 +105,18 @@ class CatalogRealtimeSessionContextRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_mode(self):
+        has_product_context = any(
+            value is not None
+            for value in (self.product_id, self.draft_id, self.expected_draft_version)
+        )
+        if has_product_context and not all(
+            value is not None
+            for value in (self.product_id, self.draft_id, self.expected_draft_version)
+        ):
+            raise ValueError("product_id, draft_id, and expected_draft_version must be provided together")
         if self.mode == "field":
+            if not has_product_context:
+                raise ValueError("field mode requires product context")
             if not self.target_path:
                 raise ValueError("field mode requires target_path")
             validate_suggestion_target_path(self.target_path)
@@ -115,6 +126,10 @@ class CatalogRealtimeSessionContextRequest(BaseModel):
             raise ValueError("target_path is only valid for field mode")
         if self.mode == "workbench" and not self.query_scopes:
             raise ValueError("workbench mode requires at least one query scope")
+        if not has_product_context and not any(
+            scope in {"catalog", "inventory"} for scope in self.query_scopes
+        ):
+            raise ValueError("store-wide workbench mode requires catalog or inventory scope")
         if len(self.query_scopes) != len(set(self.query_scopes)):
             raise ValueError("query_scopes must be unique")
         return self
@@ -327,6 +342,19 @@ class CatalogRealtimeService:
         context: CatalogRealtimeSessionContextRequest,
         principal: AuthenticatedPrincipal,
     ) -> dict[str, Any]:
+        if context.product_id is None or context.draft_id is None:
+            return {
+                "mode": context.mode,
+                "product_id": None,
+                "draft_id": None,
+                "expected_draft_version": None,
+                "target_path": None,
+                "query_scopes": [
+                    scope
+                    for scope in context.query_scopes
+                    if scope in {"catalog", "inventory"}
+                ],
+            }
         revision = db.get(CatalogDraftRevision, context.draft_id)
         if (
             revision is None
@@ -378,7 +406,12 @@ class CatalogRealtimeService:
             "inventory": "read_inventory_status",
             "readiness": "read_publish_readiness",
         }
-        return [by_scope[scope] for scope in context.query_scopes]
+        allowed_scopes = (
+            context.query_scopes
+            if context.product_id and context.draft_id
+            else [scope for scope in context.query_scopes if scope in {"catalog", "inventory"}]
+        )
+        return [by_scope[scope] for scope in allowed_scopes]
 
     def _v3_session_config(
         self,
@@ -409,7 +442,7 @@ class CatalogRealtimeService:
                 description = {
                     "read_product_summary": "Read the active product summary.",
                     "read_catalog_summary": "Read a bounded catalog summary.",
-                    "read_inventory_status": "Read store inventory for the active product.",
+                    "read_inventory_status": "Read bounded store inventory for the active product or full catalog.",
                     "read_publish_readiness": "Read deterministic publish readiness.",
                 }[name]
             tools.append(
