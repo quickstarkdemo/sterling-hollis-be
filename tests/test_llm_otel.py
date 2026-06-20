@@ -175,3 +175,22 @@ def test_trace_chat_agent_evaluation_records_request_and_exception(monkeypatch):
     assert span.attributes["app.chat.current_product_id"] == "prod_1"
     assert span.attributes["error.type"] == "RuntimeError"
     assert isinstance(span.exceptions[0], RuntimeError)
+
+
+def test_chat_agent_attributes_include_app_trace_correlation(monkeypatch):
+    span = FakeSpan()
+    monkeypatch.setattr(
+        llm_otel,
+        "current_api_trace_correlation",
+        lambda: {"app.trace_id": "trace_2", "app.span_id": "span_2"},
+    )
+
+    llm_otel._set_chat_agent_request_attributes(
+        span,
+        message="Find shoes",
+        context=ChatContext(route="/"),
+        model="gpt-test",
+    )
+
+    assert span.attributes["app.trace_id"] == "trace_2"
+    assert span.attributes["app.span_id"] == "span_2"

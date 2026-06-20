@@ -10,7 +10,16 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from app.api_traces.operations import (
+    api_trace_database_operation,
+    api_trace_operation,
+    api_trace_session,
+    correlated_observability_kwargs,
+    current_api_trace_session,
+    link_api_trace_replay,
+)
 from app.catalog.schemas import CatalogProduct
+from app.config import get_settings
 from app.models import ChatMessage, ChatSession, ChatToolCall, ChatTurn
 from app.observability.genai_otel import suppress_genai_otel
 from app.services.auth.clerk import ChatIdentity
@@ -48,7 +57,7 @@ def _llmobs_annotate_safe(**kwargs) -> None:
     try:
         if not LLMObs.enabled:
             return
-        LLMObs.annotate(**kwargs)
+        LLMObs.annotate(**correlated_observability_kwargs(kwargs))
     except Exception:
         logger.debug("Failed to annotate Datadog LLMObs span", exc_info=True)
 
@@ -297,6 +306,18 @@ def _request_fingerprint(req: ChatRequest) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _trace_client_request_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+
+def _trace_route(value: str | None) -> str | None:
+    if not value:
+        return None
+    return value.split("?", 1)[0].split("#", 1)[0][:128]
+
+
 def _turn_metadata(
     *,
     turn_id: str,
@@ -408,7 +429,14 @@ def _complete_chat_turn(
     now = datetime.now(timezone.utc)
     turn.user_message_id = user_message.id if user_message else turn.user_message_id
     turn.assistant_message_id = assistant_message.id if assistant_message else turn.assistant_message_id
-    turn.response_json = response.model_dump(mode="json")
+    response_payload = response.model_dump(mode="json")
+    trace = current_api_trace_session()
+    if trace is not None:
+        response_payload["_api_trace"] = {
+            "trace_id": trace.trace_id,
+            "span_id": trace.server_span_id,
+        }
+    turn.response_json = response_payload
     turn.status = "completed"
     turn.updated_at = now
 
@@ -491,16 +519,22 @@ def _record_tool_output(
     input_json: dict,
     output_json: dict,
 ) -> None:
-    db.add(
-        ChatToolCall(
-            id=_id("tool"),
-            session_id=session_id,
-            message_id=message_id,
-            tool_name=name,
-            input_json=input_json,
-            output_json=output_json,
+    with api_trace_database_operation(
+        "Stage chat tool result",
+        attributes={"tool_name": name, "status": "pending"},
+    ) as trace_span:
+        db.add(
+            ChatToolCall(
+                id=_id("tool"),
+                session_id=session_id,
+                message_id=message_id,
+                tool_name=name,
+                input_json=input_json,
+                output_json=output_json,
+            )
         )
-    )
+        if trace_span is not None:
+            trace_span.annotate(status="staged")
 
 
 def _requires_auth(decision: TriageDecision, orchestration: ChatOrchestrationDecision) -> bool:
@@ -1097,10 +1131,23 @@ def _execute_selected_tool_response(
     return _general_response(req, identity, session, decision), f"allowed; unrecognized selected_tool={selected_tool}"
 
 
-def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatResponse:
-    original_context = summarize_context(req.context)
-    req = _normalize_context(db, req)
-    session = _persist_session(db, req, identity)
+def _handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatResponse:
+    with api_trace_database_operation(
+        "Resolve storefront chat context",
+        attributes={
+            "identity_status": identity.status,
+            "route": _trace_route(req.context.route),
+            "store_id": req.context.store_id,
+        },
+    ) as context_span:
+        original_context = summarize_context(req.context)
+        req = _normalize_context(db, req)
+        session = _persist_session(db, req, identity)
+        if context_span is not None:
+            context_span.annotate(
+                session_id=session.id,
+                context=summarize_context(req.context),
+            )
     now = datetime.now(timezone.utc)
     request_fingerprint = _request_fingerprint(req)
     completed_turn = _find_completed_turn_by_client_request(
@@ -1109,23 +1156,40 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
         client_request_id=req.client_request_id,
     )
     if completed_turn is not None:
-        response = _response_from_completed_turn(completed_turn, req=req)
-        replay_metadata = _turn_metadata(
-            turn_id=completed_turn.id,
-            req=req,
-            fingerprint=completed_turn.request_fingerprint,
-            duplicate_replay=True,
-        )
-        with suppress_genai_otel(), LLMObs.agent(name="sterling_hollis_chat", session_id=session.id) as root_span:
-            _annotate_duplicate_replay(
-                root_span=root_span,
+        with api_trace_operation(
+            "Replay completed chat turn",
+            "chat.replay",
+            attributes={
+                "client_request_id": _trace_client_request_id(
+                    req.client_request_id
+                ),
+                "turn_id": completed_turn.id,
+                "duplicate_replay": True,
+            },
+        ):
+            response = _response_from_completed_turn(completed_turn, req=req)
+            prior_trace = dict(completed_turn.response_json or {}).get("_api_trace")
+            if isinstance(prior_trace, dict):
+                link_api_trace_replay(
+                    linked_trace_id=prior_trace.get("trace_id"),
+                    linked_span_id=prior_trace.get("span_id"),
+                )
+            replay_metadata = _turn_metadata(
+                turn_id=completed_turn.id,
                 req=req,
-                session=session,
-                identity=identity,
-                response=response,
-                metadata=replay_metadata,
+                fingerprint=completed_turn.request_fingerprint,
+                duplicate_replay=True,
             )
-            _llmobs_export_span_safe(root_span)
+            with suppress_genai_otel(), LLMObs.agent(name="sterling_hollis_chat", session_id=session.id) as root_span:
+                _annotate_duplicate_replay(
+                    root_span=root_span,
+                    req=req,
+                    session=session,
+                    identity=identity,
+                    response=response,
+                    metadata=replay_metadata,
+                )
+                _llmobs_export_span_safe(root_span)
         return response
 
     possible_duplicate = False
@@ -1197,7 +1261,16 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 )
 
             with LLMObs.workflow(name="chat_history", session_id=session.id) as history_span:
-                history = _recent_history(db, session.id)
+                with api_trace_database_operation(
+                    "Load recent chat history",
+                    attributes={"session_id": session.id},
+                ) as history_trace_span:
+                    history = _recent_history(db, session.id)
+                    if history_trace_span is not None:
+                        history_trace_span.annotate(
+                            history_count=len(history),
+                            status="loaded",
+                        )
                 _llmobs_annotate_safe(
                     span=history_span,
                     output_data={
@@ -1209,7 +1282,22 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 )
 
             with LLMObs.tool(name="chat_safety_guard", session_id=session.id) as safety_span:
-                safety_decision = evaluate_chat_safety(req.message, history=history)
+                with api_trace_operation(
+                    "Evaluate chat safety",
+                    "chat.safety",
+                    attributes={"history_count": len(history)},
+                ) as safety_trace_span:
+                    safety_decision = evaluate_chat_safety(req.message, history=history)
+                    if safety_trace_span is not None:
+                        safety_trace_span.status = (
+                            "blocked" if safety_decision.intercepted else "succeeded"
+                        )
+                        safety_trace_span.annotate(
+                            blocked=safety_decision.intercepted,
+                            source=safety_decision.source,
+                            decision=safety_decision.action,
+                            category=safety_decision.category,
+                        )
                 _llmobs_annotate_safe(
                     span=safety_span,
                     input_data={
@@ -1290,20 +1378,30 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     )
 
                 with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
-                    assistant = _persist_message(
-                        db,
-                        session.id,
-                        "assistant",
-                        response.message,
-                        _assistant_message_payload(response, turn_metadata),
-                    )
-                    _complete_chat_turn(
-                        turn,
-                        response=response,
-                        user_message=user_message,
-                        assistant_message=assistant,
-                    )
-                    db.commit()
+                    with api_trace_database_operation(
+                        "Commit safety-blocked chat turn",
+                        attributes={
+                            "turn_id": turn.id,
+                            "blocked": True,
+                            "status": "pending",
+                        },
+                    ) as persist_trace_span:
+                        assistant = _persist_message(
+                            db,
+                            session.id,
+                            "assistant",
+                            response.message,
+                            _assistant_message_payload(response, turn_metadata),
+                        )
+                        _complete_chat_turn(
+                            turn,
+                            response=response,
+                            user_message=user_message,
+                            assistant_message=assistant,
+                        )
+                        db.commit()
+                        if persist_trace_span is not None:
+                            persist_trace_span.annotate(status="committed")
                     _llmobs_annotate_safe(
                         span=persist_assistant_span,
                         input_data={"conversation_id": session.id, "role": "assistant"},
@@ -1314,16 +1412,29 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 strands_tool_calls = []
                 using_strands = False
                 strands_selected_tool: str | None = None
-                orchestration = _strands_candidate_decision(req, identity)
-                if orchestration is None:
-                    orchestration = evaluate_chat(
-                        req.message,
-                        req.context,
-                        history=history,
-                        session_id=session.id,
-                    )
-                else:
-                    using_strands = True
+                with api_trace_operation(
+                    "Route storefront chat turn",
+                    "chat.routing",
+                    attributes={"history_count": len(history)},
+                ) as routing_trace_span:
+                    orchestration = _strands_candidate_decision(req, identity)
+                    if orchestration is None:
+                        orchestration = evaluate_chat(
+                            req.message,
+                            req.context,
+                            history=history,
+                            session_id=session.id,
+                        )
+                    else:
+                        using_strands = True
+                    if routing_trace_span is not None:
+                        routing_trace_span.annotate(
+                            intent=orchestration.decision.intent,
+                            route=orchestration.decision.route,
+                            selected_agent=orchestration.selected_agent,
+                            selected_tool=orchestration.selected_tool,
+                            source=orchestration.evaluator_source,
+                        )
                 if not using_strands and _should_run_pairing_route_policy(req):
                     with LLMObs.task(name="pairing_route_policy", session_id=session.id) as policy_span:
                         before_tool = orchestration.selected_tool
@@ -1385,7 +1496,24 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 selected_tool = orchestration.selected_tool
 
                 with LLMObs.tool(name="auth_gate", session_id=session.id) as auth_span:
-                    will_block = bool(auth_required and identity.status != "authenticated_customer")
+                    with api_trace_operation(
+                        "Authorize selected chat tool",
+                        "chat.authorization",
+                        attributes={
+                            "selected_tool": selected_tool,
+                            "auth_required": auth_required,
+                            "identity_status": identity.status,
+                        },
+                    ) as auth_trace_span:
+                        will_block = bool(
+                            auth_required
+                            and identity.status != "authenticated_customer"
+                        )
+                        if auth_trace_span is not None:
+                            auth_trace_span.status = (
+                                "blocked" if will_block else "succeeded"
+                            )
+                            auth_trace_span.annotate(blocked=will_block)
                     _llmobs_annotate_safe(
                         span=auth_span,
                         input_data={
@@ -1446,15 +1574,34 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                         )
 
                         if using_strands:
-                            strands_result = run_storefront_shopping_agent(
-                                db,
-                                req=req,
-                                identity=identity,
-                                session=session,
-                                decision=decision,
-                                frame=frame,
-                                history=history,
-                            )
+                            with api_trace_operation(
+                                "Run storefront shopping agent",
+                                "chat.agent",
+                                attributes={
+                                    "selected_agent": "StorefrontShoppingAgent",
+                                    "selected_tool": selected_tool,
+                                    "intent": decision.intent,
+                                },
+                            ) as agent_trace_span:
+                                strands_result = run_storefront_shopping_agent(
+                                    db,
+                                    req=req,
+                                    identity=identity,
+                                    session=session,
+                                    decision=decision,
+                                    frame=frame,
+                                    history=history,
+                                )
+                                if agent_trace_span is not None:
+                                    agent_trace_span.status = (
+                                        "failed"
+                                        if strands_result.error
+                                        else "succeeded"
+                                    )
+                                    agent_trace_span.annotate(
+                                        error_code=strands_result.error,
+                                        tool_count=len(strands_result.tool_calls),
+                                    )
                             strands_tool_calls = strands_result.tool_calls
                             if strands_result.response is not None:
                                 response = strands_result.response
@@ -1462,17 +1609,31 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                 auth_decision = "allowed; strands public storefront orchestration"
                             else:
                                 fallback_tool = decision.tool if decision.tool in STRANDS_PUBLIC_TOOLS else "chat_response"
-                                response, auth_decision = _execute_selected_tool_response(
-                                    db,
-                                    req,
-                                    identity,
-                                    session,
-                                    decision,
-                                    replace(orchestration, selected_tool=fallback_tool),
-                                    frame,
-                                    auth_required=False,
-                                    selected_tool=fallback_tool,
-                                )
+                                with api_trace_operation(
+                                    "Run deterministic chat fallback",
+                                    "chat.fallback",
+                                    attributes={
+                                        "selected_tool": fallback_tool,
+                                        "error_code": strands_result.error,
+                                        "fallback": True,
+                                    },
+                                ) as fallback_trace_span:
+                                    response, auth_decision = _execute_selected_tool_response(
+                                        db,
+                                        req,
+                                        identity,
+                                        session,
+                                        decision,
+                                        replace(orchestration, selected_tool=fallback_tool),
+                                        frame,
+                                        auth_required=False,
+                                        selected_tool=fallback_tool,
+                                    )
+                                    if fallback_trace_span is not None:
+                                        fallback_trace_span.annotate(
+                                            route=response.route,
+                                            card_count=len(response.cards),
+                                        )
                                 response.tool_trace.append(
                                     ChatToolTrace(
                                         name="StrandsAgent",
@@ -1481,17 +1642,38 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                                 )
                                 strands_selected_tool = fallback_tool
                         else:
-                            response, auth_decision = _execute_selected_tool_response(
-                                db,
-                                req,
-                                identity,
-                                session,
-                                decision,
-                                orchestration,
-                                frame,
-                                auth_required=auth_required,
-                                selected_tool=selected_tool,
-                            )
+                            with api_trace_operation(
+                                f"Execute {selected_tool}",
+                                "chat.tool",
+                                attributes={
+                                    "selected_agent": orchestration.selected_agent,
+                                    "selected_tool": selected_tool,
+                                    "auth_required": auth_required,
+                                },
+                            ) as tool_trace_span:
+                                response, auth_decision = _execute_selected_tool_response(
+                                    db,
+                                    req,
+                                    identity,
+                                    session,
+                                    decision,
+                                    orchestration,
+                                    frame,
+                                    auth_required=auth_required,
+                                    selected_tool=selected_tool,
+                                )
+                                if tool_trace_span is not None:
+                                    tool_trace_span.status = (
+                                        "blocked"
+                                        if response.route == "blocked"
+                                        else "succeeded"
+                                    )
+                                    tool_trace_span.annotate(
+                                        route=response.route,
+                                        intent=response.intent,
+                                        card_count=len(response.cards),
+                                        decision=auth_decision,
+                                    )
 
                         demo_reconciliation = _run_demo_available_to_promise_reconciliation(
                             db,
@@ -1577,38 +1759,51 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                     )
 
                 with LLMObs.tool(name="persist_assistant_message", session_id=session.id) as persist_assistant_span:
-                    assistant = _persist_message(
-                        db,
-                        session.id,
-                        "assistant",
-                        response.message,
-                        _assistant_message_payload(response, turn_metadata),
-                    )
-
-                    for call in (
-                        db.query(ChatToolCall)
-                        .filter(
-                            ChatToolCall.session_id == session.id,
-                            ChatToolCall.message_id.is_(None),
+                    with api_trace_database_operation(
+                        "Commit completed chat turn",
+                        attributes={
+                            "turn_id": turn.id,
+                            "selected_tool": response.selected_tool,
+                            "status": "pending",
+                        },
+                    ) as persist_trace_span:
+                        assistant = _persist_message(
+                            db,
+                            session.id,
+                            "assistant",
+                            response.message,
+                            _assistant_message_payload(response, turn_metadata),
                         )
-                        .all()
-                    ):
-                        call.message_id = assistant.id
-                    persist_strands_tool_calls(
-                        db,
-                        session_id=session.id,
-                        message_id=assistant.id,
-                        tool_calls=strands_tool_calls,
-                        make_id=_id,
-                    )
 
-                    _complete_chat_turn(
-                        turn,
-                        response=response,
-                        user_message=user_message,
-                        assistant_message=assistant,
-                    )
-                    db.commit()
+                        for call in (
+                            db.query(ChatToolCall)
+                            .filter(
+                                ChatToolCall.session_id == session.id,
+                                ChatToolCall.message_id.is_(None),
+                            )
+                            .all()
+                        ):
+                            call.message_id = assistant.id
+                        persist_strands_tool_calls(
+                            db,
+                            session_id=session.id,
+                            message_id=assistant.id,
+                            tool_calls=strands_tool_calls,
+                            make_id=_id,
+                        )
+
+                        _complete_chat_turn(
+                            turn,
+                            response=response,
+                            user_message=user_message,
+                            assistant_message=assistant,
+                        )
+                        db.commit()
+                        if persist_trace_span is not None:
+                            persist_trace_span.annotate(
+                                status="committed",
+                                tool_count=len(strands_tool_calls),
+                            )
                     _llmobs_annotate_safe(
                         span=persist_assistant_span,
                         input_data={"conversation_id": session.id, "role": "assistant"},
@@ -1693,3 +1888,44 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
         safety_decision=safety_decision,
     )
     return response
+
+
+def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatResponse:
+    settings = get_settings()
+    with api_trace_session(
+        settings=settings,
+        name="Storefront chat turn",
+        attributes={
+            "identity_status": identity.status,
+            "trigger_type": req.trigger_type,
+            "route": _trace_route(req.context.route),
+            "store_id": req.context.store_id,
+            "client_request_id": _trace_client_request_id(req.client_request_id),
+        },
+    ) as trace:
+        response = _handle_chat(db, req, identity)
+        with api_trace_operation(
+            "Prepare storefront chat response",
+            "ui.response",
+            attributes={
+                "route": response.route,
+                "intent": response.intent,
+                "selected_agent": response.selected_agent,
+                "selected_tool": response.selected_tool,
+                "card_count": len(response.cards),
+                "duplicate_replay": response.duplicate_replay,
+            },
+        ):
+            pass
+        if trace is not None:
+            trace.status = "blocked" if response.route == "blocked" else "succeeded"
+            trace.annotate(
+                route=response.route,
+                intent=response.intent,
+                selected_agent=response.selected_agent,
+                selected_tool=response.selected_tool,
+                card_count=len(response.cards),
+                duplicate_replay=response.duplicate_replay,
+                turn_id=response.turn_id,
+            )
+        return response

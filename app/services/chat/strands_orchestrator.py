@@ -5,6 +5,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.api_traces.operations import (
+    api_trace_database_operation,
+    api_trace_operation,
+    correlated_observability_kwargs,
+)
 from app.catalog.schemas import CatalogProduct
 from app.models import ChatSession, ChatToolCall
 from app.services.auth.clerk import ChatIdentity
@@ -61,7 +66,7 @@ def _llmobs_annotate_safe(**kwargs) -> None:
     try:
         if not LLMObs.enabled:
             return
-        LLMObs.annotate(**kwargs)
+        LLMObs.annotate(**correlated_observability_kwargs(kwargs))
     except Exception:
         pass
 
@@ -398,7 +403,21 @@ def run_storefront_shopping_agent(
     captured: list[CapturedToolCall] = []
 
     def record_tool_call(name: str, input_json: dict[str, Any], output_json: dict[str, Any]) -> None:
-        captured.append(CapturedToolCall(name=name, input_json=input_json, output_json=output_json))
+        with api_trace_operation(
+            f"Invoke {name}",
+            "chat.tool",
+            attributes={
+                "tool_name": name,
+                "result_count": len(output_json.get("product_ids") or []),
+            },
+        ):
+            captured.append(
+                CapturedToolCall(
+                    name=name,
+                    input_json=input_json,
+                    output_json=output_json,
+                )
+            )
 
     try:
         tools = build_storefront_tools(db, req, frame, record_tool_call)
@@ -514,13 +533,19 @@ def run_storefront_shopping_agent(
 
 def persist_strands_tool_calls(db: Session, *, session_id: str, message_id: str, tool_calls: list[CapturedToolCall], make_id) -> None:
     for call in tool_calls:
-        db.add(
-            ChatToolCall(
-                id=make_id("tool"),
-                session_id=session_id,
-                message_id=message_id,
-                tool_name=call.name,
-                input_json=call.input_json,
-                output_json=call.output_json,
+        with api_trace_database_operation(
+            "Stage agent tool result",
+            attributes={"tool_name": call.name, "status": "pending"},
+        ) as trace_span:
+            db.add(
+                ChatToolCall(
+                    id=make_id("tool"),
+                    session_id=session_id,
+                    message_id=message_id,
+                    tool_name=call.name,
+                    input_json=call.input_json,
+                    output_json=call.output_json,
+                )
             )
-        )
+            if trace_span is not None:
+                trace_span.annotate(status="staged")
