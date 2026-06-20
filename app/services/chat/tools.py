@@ -6,6 +6,12 @@ import re
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from app.api_traces.operations import (
+    api_trace_database_operation,
+    api_trace_operation,
+    api_trace_storage_operation,
+    correlated_observability_kwargs,
+)
 from app.catalog.schemas import CatalogProduct, ProductRecommendationRequest, ProductSort
 from app.catalog.service import ProductFilters, get_product_detail, list_products, product_to_catalog, recommend_products, related_products
 from app.models import CatalogProduct as CatalogProductModel
@@ -20,7 +26,7 @@ def _llmobs_annotate_safe(**kwargs) -> None:
     try:
         if not LLMObs.enabled:
             return
-        LLMObs.annotate(**kwargs)
+        LLMObs.annotate(**correlated_observability_kwargs(kwargs))
     except Exception:
         pass
 
@@ -398,7 +404,21 @@ def _semantic_vector_cards(
         )
         return []
 
-    vector = embedding_service.embed_text(query)
+    with api_trace_operation(
+        "Create catalog search embedding",
+        "openai.embeddings",
+        service="openai",
+        attributes={
+            "model": embedding_service.model,
+            "input": {"size": len(query)},
+        },
+    ) as embedding_trace_span:
+        vector = embedding_service.embed_text(query)
+        if embedding_trace_span is not None:
+            embedding_trace_span.annotate(
+                output={"vector_dimension": len(vector)},
+                status="completed",
+            )
 
     pinecone_filter = (
         {"category": {"$in": target_categories}}
@@ -406,12 +426,28 @@ def _semantic_vector_cards(
         else None
     )
 
-    matches = pinecone.query(
-        namespace=pinecone.settings.pinecone_catalog_namespace,
-        vector=vector,
-        top_k=max(limit * 10, 50),
-        filters=pinecone_filter,
-    )
+    with api_trace_storage_operation(
+        "Retrieve semantic catalog candidates",
+        service="pinecone",
+        attributes={
+            "operation": "vector_search",
+            "input": {
+                "vector_dimension": len(vector),
+                "category": target_categories,
+            },
+        },
+    ) as retrieval_trace_span:
+        matches = pinecone.query(
+            namespace=pinecone.settings.pinecone_catalog_namespace,
+            vector=vector,
+            top_k=max(limit * 10, 50),
+            filters=pinecone_filter,
+        )
+        if retrieval_trace_span is not None:
+            retrieval_trace_span.annotate(
+                result={"match_count": len(matches)},
+                status="completed",
+            )
 
     product_ids = [
         str(
@@ -421,11 +457,17 @@ def _semantic_vector_cards(
         for match in matches
     ]
 
-    cards = _ordered_catalog_cards(
-        db,
-        product_ids,
-        store_id=store_id,
-    )
+    with api_trace_database_operation(
+        "Hydrate semantic catalog candidates",
+        attributes={"candidate_count": len(product_ids), "store_id": store_id},
+    ) as hydration_trace_span:
+        cards = _ordered_catalog_cards(
+            db,
+            product_ids,
+            store_id=store_id,
+        )
+        if hydration_trace_span is not None:
+            hydration_trace_span.annotate(result_count=len(cards))
 
     result_cards = _filter_cards(
         cards,
@@ -451,6 +493,22 @@ def _semantic_vector_cards(
     )
 
     return result_cards
+
+
+def _traced_catalog_cards(db: Session, **filters) -> list[CatalogProduct]:
+    with api_trace_database_operation(
+        "Query catalog products",
+        attributes={
+            "category": filters.get("category"),
+            "store_id": filters.get("store_id"),
+            "price_max": filters.get("max_price"),
+            "color": filters.get("color"),
+        },
+    ) as trace_span:
+        cards = catalog_cards(db, **filters)
+        if trace_span is not None:
+            trace_span.annotate(result_count=len(cards))
+        return cards
 
 
 
@@ -496,7 +554,7 @@ def _sql_search_cards(
         category_cards: list[CatalogProduct] = []
         for color in color_attempts:
             category_cards.extend(
-                catalog_cards(
+                _traced_catalog_cards(
                     db,
                     category=category,
                     store_id=store_id,
@@ -508,7 +566,7 @@ def _sql_search_cards(
             )
         if not category_cards and colors:
             category_cards.extend(
-                catalog_cards(
+                _traced_catalog_cards(
                     db,
                     category=category,
                     store_id=store_id,

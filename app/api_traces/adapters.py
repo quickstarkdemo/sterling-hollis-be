@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.orm import Session
@@ -12,6 +10,12 @@ from sqlalchemy.orm import Session
 from app.api_traces.context import (
     TraceCaptureContext,
     current_trace_capture_context,
+)
+from app.api_traces.operations import (
+    _compact_attributes,
+    _stable_hex,
+    new_openai_client_request_id,
+    openai_request_ids,
 )
 from app.api_traces.schemas import (
     ApiTraceProjection,
@@ -34,27 +38,6 @@ class _PendingRecording:
     settings: Settings
     context: TraceCaptureContext
     projection: ApiTraceProjection
-
-
-def _stable_hex(*parts: object, length: int) -> str:
-    value = ":".join(str(part) for part in parts)
-    return hashlib.sha256(value.encode()).hexdigest()[:length]
-
-
-def new_openai_client_request_id(capability: str) -> str:
-    label = "".join(char for char in capability.casefold() if char.isalnum())[:16]
-    return f"sh-{label or 'openai'}-{uuid4().hex}"
-
-
-def openai_request_ids(response: Any) -> tuple[str | None, str | None]:
-    response_id = getattr(response, "id", None)
-    provider_request_id = getattr(response, "_request_id", None) or getattr(
-        response, "request_id", None
-    )
-    return (
-        str(response_id) if response_id else None,
-        str(provider_request_id) if provider_request_id else None,
-    )
 
 
 def current_image_trace_lineage() -> tuple[str | None, str | None]:
@@ -103,12 +86,6 @@ def _event_type(event: CatalogWorkflowEvent) -> str:
         "workflow": "catalog.workflow",
     }.get(event.capability, "catalog.workflow")
     return f"{namespace}.{event.status}"
-
-
-def _compact_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value for key, value in attributes.items() if value not in (None, {}, [])
-    }
 
 
 def _event_attributes(event: CatalogWorkflowEvent) -> dict[str, Any]:

@@ -6,6 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.api_traces.operations import (
+    api_trace_operation,
+    correlated_observability_kwargs,
+    new_openai_client_request_id,
+    openai_request_ids,
+)
 from app.config import get_settings
 from app.services.chat.agents import (
     CHAT_AGENT_NAMES,
@@ -41,7 +47,7 @@ def _llmobs_annotate_safe(**kwargs) -> None:
     try:
         if not LLMObs.enabled:
             return
-        LLMObs.annotate(**kwargs)
+        LLMObs.annotate(**correlated_observability_kwargs(kwargs))
     except Exception:
         logger.debug("Failed to annotate Datadog LLMObs span", exc_info=True)
 
@@ -169,14 +175,33 @@ def _run_chat_intake_llm(prompt: str, *, model: str) -> ChatEvaluation:
 
     settings = get_settings()
     client = OpenAI(api_key=settings.openai_api_key)
-    completion = client.beta.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        response_format=ChatEvaluation,
-    )
+    client_request_id = new_openai_client_request_id("chat-intake")
+    with api_trace_operation(
+        "OpenAI structured chat routing",
+        "openai.chat.completions",
+        service="openai",
+        attributes={
+            "endpoint": "/v1/chat/completions",
+            "model": model,
+            "client_request_id": client_request_id,
+        },
+    ) as trace_span:
+        completion = client.beta.chat.completions.parse(
+            model=model,
+            messages=[
+                {"role": "system", "content": INTAKE_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            response_format=ChatEvaluation,
+            extra_headers={"X-Client-Request-Id": client_request_id},
+        )
+        response_id, provider_request_id = openai_request_ids(completion)
+        if trace_span is not None:
+            trace_span.annotate(
+                response_id=response_id,
+                provider_request_id=provider_request_id,
+                status="completed",
+            )
     parsed = completion.choices[0].message.parsed
     if not isinstance(parsed, ChatEvaluation):
         raise RuntimeError("OpenAI chat intake returned no parsed ChatEvaluation.")

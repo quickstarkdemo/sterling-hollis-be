@@ -146,3 +146,18 @@ def test_genai_span_records_exceptions(monkeypatch):
     assert recorded.attributes["gen_ai.operation.name"] == "embedding"
     assert recorded.attributes["error.type"] == "RuntimeError"
     assert isinstance(recorded.exceptions[0], RuntimeError)
+
+
+def test_genai_span_attaches_app_trace_correlation_when_available(monkeypatch):
+    tracer = _install_fake_tracer(monkeypatch)
+    monkeypatch.setattr(
+        genai_otel,
+        "current_api_trace_correlation",
+        lambda: {"app.trace_id": "trace_1", "app.span_id": "span_1"},
+    )
+
+    with genai_otel.genai_tool_span("catalog_lookup"):
+        pass
+
+    assert tracer.spans[0].attributes["app.trace_id"] == "trace_1"
+    assert tracer.spans[0].attributes["app.span_id"] == "span_1"

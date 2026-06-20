@@ -7,6 +7,7 @@ import logging
 import os
 from typing import Any, Callable, Iterator, Mapping, MutableMapping, TypeVar
 
+from app.api_traces.operations import current_api_trace_correlation
 from app.services.chat.schemas import ChatContext
 
 
@@ -131,6 +132,8 @@ def _set_chat_agent_request_attributes(span: Any, *, message: str, context: Chat
     _span_set_attribute(span, "app.chat.store_id", context.store_id)
     _span_set_attribute(span, "app.chat.category", context.category)
     _span_set_attribute(span, "app.chat.current_product_id", _current_product_id(context))
+    for key, value in current_api_trace_correlation().items():
+        _span_set_attribute(span, key, value)
     _span_add_event(
         span,
         GENAI_DETAILS_EVENT,

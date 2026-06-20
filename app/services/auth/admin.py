@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 import re
 
 from fastapi import Depends, HTTPException, Request, status
@@ -12,7 +13,11 @@ from app.api_traces.context import (
     provisional_trace_context,
 )
 from app.config import Settings, get_settings
-from app.services.auth.clerk import AuthenticatedPrincipal, require_clerk_principal
+from app.services.auth.clerk import (
+    AuthenticatedPrincipal,
+    ChatIdentity,
+    require_clerk_principal,
+)
 
 
 def _normalized_csv(raw: str | None) -> set[str]:
@@ -138,6 +143,43 @@ async def bind_catalog_trace_capture(
         requested_surface
         if _TRACE_SURFACE_RE.fullmatch(requested_surface)
         else "catalog-studio"
+    )
+    context = TraceCaptureContext.authorized_for(
+        owner_provider=principal.provider,
+        owner_provider_user_id=principal.provider_user_id,
+        surface=surface,
+        provisional=provisional,
+    )
+    request.state.api_trace_capture = context
+    with bind_trace_capture_context(context):
+        yield context
+
+
+@contextmanager
+def bind_chat_trace_capture(
+    request: Request,
+    *,
+    identity: ChatIdentity,
+    settings: Settings,
+) -> Iterator[TraceCaptureContext | None]:
+    """Opt in authorized developer chat requests without restricting public chat."""
+
+    provisional = getattr(request.state, "api_trace_provisional", None)
+    principal = identity.principal
+    if (
+        not settings.api_trace_capture_enabled
+        or not isinstance(provisional, ProvisionalTraceContext)
+        or not provisional.remote_parent_valid
+        or principal is None
+        or not principal_is_catalog_admin(principal, settings)
+    ):
+        yield None
+        return
+    requested_surface = request.headers.get("x-trace-surface", "storefront-chat").strip().lower()
+    surface = (
+        requested_surface
+        if _TRACE_SURFACE_RE.fullmatch(requested_surface)
+        else "storefront-chat"
     )
     context = TraceCaptureContext.authorized_for(
         owner_provider=principal.provider,

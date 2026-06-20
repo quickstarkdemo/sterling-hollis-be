@@ -9,6 +9,8 @@ import json
 import logging
 from typing import Any, Callable, Iterator, Mapping, ParamSpec, TypeVar, cast
 
+from app.api_traces.operations import current_api_trace_correlation
+
 logger = logging.getLogger(__name__)
 
 GENAI_DETAILS_EVENT = "gen_ai.client.inference.operation.details"
@@ -207,6 +209,7 @@ def genai_span(
     with span_context as span:
         set_span_attributes(span, {"gen_ai.operation.name": operation})
         set_span_attributes(span, attributes)
+        set_span_attributes(span, current_api_trace_correlation())
         try:
             yield span
         except Exception as exc:
