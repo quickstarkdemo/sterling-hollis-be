@@ -36,6 +36,10 @@ from app.catalog.ai_schemas import (
 )
 from app.catalog.references import normalized_brand_name
 from app.catalog.workflow_schemas import WorkflowEventInput
+from app.api_traces.adapters import (
+    new_openai_client_request_id,
+    openai_request_ids,
+)
 from app.config import Settings
 from app.models import (
     CatalogAdminMutation,
@@ -550,6 +554,7 @@ def _store_failure(
     principal: AuthenticatedPrincipal,
     settings: Settings,
     error: CatalogAICommandError,
+    client_request_id: str | None = None,
 ) -> None:
     prefix = _event_prefix(mutation.idempotency_key)
     mutation.response_json = {
@@ -573,7 +578,10 @@ def _store_failure(
             business_summary=error.detail,
             error_code=error.code,
             retryable=error.retryable,
-            request_payload={"input": {"action": "create_or_refine_draft"}},
+            request_payload={
+                "client_request_id": client_request_id,
+                "input": {"action": "create_or_refine_draft"},
+            },
             response_payload={"status": "failed", "error_code": error.code},
         ),
     )
@@ -588,6 +596,7 @@ def _record_failure(
     principal: AuthenticatedPrincipal,
     settings: Settings,
     error: CatalogAICommandError,
+    client_request_id: str | None = None,
 ) -> CatalogAICommandError:
     mutation_key = mutation.idempotency_key
     db.rollback()
@@ -599,6 +608,7 @@ def _record_failure(
         principal=principal,
         settings=settings,
         error=error,
+        client_request_id=client_request_id,
     )
     return error
 
@@ -647,6 +657,8 @@ def _store_blocked(
     settings: Settings,
     model: str,
     request_id: str | None,
+    client_request_id: str,
+    response_id: str | None,
     usage: dict[str, int],
     moderation: dict[str, Any],
     duration_ms: int,
@@ -674,8 +686,16 @@ def _store_blocked(
             request_id=request_id,
             duration_ms=duration_ms,
             moderation=moderation,
-            request_payload={"input": {"action": "moderate_draft"}},
-            response_payload={"status": "blocked", "moderation": moderation},
+            request_payload={
+                "client_request_id": client_request_id,
+                "input": {"action": "moderate_draft"},
+            },
+            response_payload={
+                "status": "blocked",
+                "moderation": moderation,
+                "response_id": response_id,
+                "provider_request_id": request_id,
+            },
         ),
     )
     append_workflow_event(
@@ -695,8 +715,15 @@ def _store_blocked(
             duration_ms=duration_ms,
             usage=usage,
             moderation=moderation,
-            request_payload={"input": {"action": "create_or_refine_draft"}},
-            response_payload={"status": "blocked"},
+            request_payload={
+                "client_request_id": client_request_id,
+                "input": {"action": "create_or_refine_draft"},
+            },
+            response_payload={
+                "status": "blocked",
+                "response_id": response_id,
+                "provider_request_id": request_id,
+            },
         ),
     )
     mutation.response_json = {
@@ -718,6 +745,8 @@ def _store_success(
     proposal: CatalogAIProductProposal,
     model: str,
     request_id: str | None,
+    client_request_id: str,
+    response_id: str | None,
     usage: dict[str, int],
     moderation: dict[str, Any],
     duration_ms: int,
@@ -822,6 +851,7 @@ def _store_success(
             moderation=moderation,
             draft_id=revision.id,
             request_payload={
+                "client_request_id": client_request_id,
                 "input": {
                     "action": "refine_draft" if current_revision else "create_draft",
                     "draft_id": command.current_draft_id,
@@ -829,6 +859,8 @@ def _store_success(
             },
             response_payload={
                 "status": "ready",
+                "response_id": response_id,
+                "provider_request_id": request_id,
                 "draft_id": revision.id,
                 "draft_version": draft_version,
                 "product": product.model_dump(mode="json"),
@@ -886,6 +918,7 @@ def execute_catalog_ai_command(
         return replay
 
     started = time.monotonic()
+    client_request_id = new_openai_client_request_id("responses")
     try:
         _, _, current_product = _server_catalog_context(db, current_revision)
         references = _catalog_reference_context(db)
@@ -912,11 +945,15 @@ def execute_catalog_ai_command(
                 safety_identifier=_safety_identifier(principal),
                 store=False,
                 timeout=settings.catalog_studio_responses_timeout_seconds,
+                extra_headers={"X-Client-Request-Id": client_request_id},
             )
+            response_id, provider_request_id = openai_request_ids(response)
             set_span_attributes(
                 span,
                 {
-                    "gen_ai.response.id": getattr(response, "id", None),
+                    "gen_ai.response.id": response_id,
+                    "gen_ai.response.request_id": provider_request_id,
+                    "gen_ai.request.client_id": client_request_id,
                     "gen_ai.response.model": getattr(response, "model", None),
                 },
             )
@@ -940,7 +977,7 @@ def execute_catalog_ai_command(
         response_model = str(
             getattr(response, "model", None) or settings.catalog_studio_responses_model
         )
-        request_id = getattr(response, "id", None)
+        request_id = provider_request_id or response_id
         usage = _usage(response)
         if moderation["flagged"]:
             return _store_blocked(
@@ -951,6 +988,8 @@ def execute_catalog_ai_command(
                 settings=settings,
                 model=response_model,
                 request_id=request_id,
+                client_request_id=client_request_id,
+                response_id=response_id,
                 usage=usage,
                 moderation=moderation,
                 duration_ms=duration_ms,
@@ -973,6 +1012,8 @@ def execute_catalog_ai_command(
             proposal=proposal,
             model=response_model,
             request_id=request_id,
+            client_request_id=client_request_id,
+            response_id=response_id,
             usage=usage,
             moderation=moderation,
             duration_ms=duration_ms,
@@ -985,6 +1026,7 @@ def execute_catalog_ai_command(
             principal=principal,
             settings=settings,
             error=exc,
+            client_request_id=client_request_id,
         )
     except HTTPException as exc:
         error = CatalogAICommandError(
@@ -1000,6 +1042,7 @@ def execute_catalog_ai_command(
             principal=principal,
             settings=settings,
             error=error,
+            client_request_id=client_request_id,
         ) from exc
     except Exception as exc:
         raise _record_failure(
@@ -1009,6 +1052,7 @@ def execute_catalog_ai_command(
             principal=principal,
             settings=settings,
             error=_provider_failure(exc),
+            client_request_id=client_request_id,
         ) from exc
 
 
@@ -1333,6 +1377,7 @@ def _store_suggestion_failure(
     principal: AuthenticatedPrincipal,
     settings: Settings,
     error: CatalogAICommandError,
+    client_request_id: str | None = None,
 ) -> None:
     mutation.response_json = {
         "state": "failed",
@@ -1356,6 +1401,7 @@ def _store_suggestion_failure(
             error_code=error.code,
             retryable=error.retryable,
             request_payload={
+                "client_request_id": client_request_id,
                 "input": {
                     "action": "generate_product_suggestions",
                     "draft_id": command.draft_id,
@@ -1378,6 +1424,7 @@ def _record_suggestion_failure(
     principal: AuthenticatedPrincipal,
     settings: Settings,
     error: CatalogAICommandError,
+    client_request_id: str | None = None,
 ) -> CatalogAICommandError:
     mutation_key = mutation.idempotency_key
     db.rollback()
@@ -1389,6 +1436,7 @@ def _record_suggestion_failure(
         principal=principal,
         settings=settings,
         error=error,
+        client_request_id=client_request_id,
     )
     return error
 
@@ -1454,6 +1502,7 @@ def execute_catalog_ai_suggestion_command(
         return replay
 
     started = time.monotonic()
+    client_request_id = new_openai_client_request_id("responses")
     try:
         provider = _resolve_client(settings, client)
         with genai_llm_span(
@@ -1482,11 +1531,15 @@ def execute_catalog_ai_suggestion_command(
                 safety_identifier=_safety_identifier(principal),
                 store=False,
                 timeout=settings.catalog_studio_responses_timeout_seconds,
+                extra_headers={"X-Client-Request-Id": client_request_id},
             )
+            response_id, provider_request_id = openai_request_ids(response)
             set_span_attributes(
                 span,
                 {
-                    "gen_ai.response.id": getattr(response, "id", None),
+                    "gen_ai.response.id": response_id,
+                    "gen_ai.response.request_id": provider_request_id,
+                    "gen_ai.request.client_id": client_request_id,
                     "gen_ai.response.model": getattr(response, "model", None),
                 },
             )
@@ -1511,7 +1564,7 @@ def execute_catalog_ai_suggestion_command(
         response_model = str(
             getattr(response, "model", None) or settings.catalog_studio_responses_model
         )
-        request_id = getattr(response, "id", None)
+        request_id = provider_request_id or response_id
         usage = _usage(response)
         if moderation["flagged"]:
             result = CatalogAISuggestionCommandResult(
@@ -1535,8 +1588,15 @@ def execute_catalog_ai_suggestion_command(
                     duration_ms=duration_ms,
                     usage=usage,
                     moderation=moderation,
-                    request_payload={"input": {"action": "generate_product_suggestions"}},
-                    response_payload={"status": "blocked"},
+                    request_payload={
+                        "client_request_id": client_request_id,
+                        "input": {"action": "generate_product_suggestions"},
+                    },
+                    response_payload={
+                        "status": "blocked",
+                        "response_id": response_id,
+                        "provider_request_id": request_id,
+                    },
                 ),
             )
             mutation.response_json = {
@@ -1607,6 +1667,7 @@ def execute_catalog_ai_suggestion_command(
                 usage=usage,
                 moderation=moderation,
                 request_payload={
+                    "client_request_id": client_request_id,
                     "input": {
                         "action": "generate_product_suggestions",
                         "draft_id": command.draft_id,
@@ -1618,6 +1679,8 @@ def execute_catalog_ai_suggestion_command(
                 },
                 response_payload={
                     "status": "succeeded",
+                    "response_id": response_id,
+                    "provider_request_id": request_id,
                     "suggestion_set_id": suggestion_set.id if suggestion_set else None,
                     "suggestion_count": len(proposal.suggestions),
                     "unknown_count": len(proposal.unknown_fields),
@@ -1638,6 +1701,7 @@ def execute_catalog_ai_suggestion_command(
             principal=principal,
             settings=settings,
             error=exc,
+            client_request_id=client_request_id,
         )
     except HTTPException as exc:
         provider_output_invalid = exc.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -1662,6 +1726,7 @@ def execute_catalog_ai_suggestion_command(
             principal=principal,
             settings=settings,
             error=error,
+            client_request_id=client_request_id,
         ) from exc
     except Exception as exc:
         raise _record_suggestion_failure(
@@ -1671,4 +1736,5 @@ def execute_catalog_ai_suggestion_command(
             principal=principal,
             settings=settings,
             error=_suggestion_provider_failure(exc),
+            client_request_id=client_request_id,
         ) from exc

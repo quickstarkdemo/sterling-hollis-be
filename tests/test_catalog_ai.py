@@ -205,6 +205,7 @@ def _response(
 ):
     return SimpleNamespace(
         id="resp_catalog_123",
+        _request_id="req_provider_123",
         model="gpt-5.5-2026-05-01",
         status=status,
         output_parsed=proposal,
@@ -303,9 +304,14 @@ def test_valid_instruction_saves_one_moderated_draft_and_safe_events(db):
     assert call["max_output_tokens"] == 2500
     assert call["text_format"] is CatalogAIProductProposal
     assert call["safety_identifier"] != _principal().provider_user_id
+    assert call["extra_headers"]["X-Client-Request-Id"].startswith("sh-responses-")
     assert private_instruction in json.dumps(call["input"])
     assert catalog_brand_id_for_name("Sterling Hollis") in json.dumps(call["input"])
     assert "Dallas Downtown" in json.dumps(call["input"])
+    assert events[-1].request_id == "req_provider_123"
+    assert events[-1].request_json["client_request_id"].startswith("sh-responses-")
+    assert events[-1].response_json["response_id"] == "resp_catalog_123"
+    assert events[-1].response_json["provider_request_id"] == "req_provider_123"
 
 
 def test_unknown_ai_brand_requires_explicit_add_brand(db):

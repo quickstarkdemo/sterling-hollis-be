@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.api_traces.service import ApiTraceRecorder
 from app.catalog.admin_schemas import ProductDraft
 from app.config import Settings, get_settings
 from app.models import (
@@ -142,7 +143,15 @@ def _enqueue_variant_set(client, workflow_id: str, draft_id: str, key: str):
     )
 
 
-def _enqueue(client, workflow_id: str, draft_id: str, key: str, **overrides):
+def _enqueue(
+    client,
+    workflow_id: str,
+    draft_id: str,
+    key: str,
+    *,
+    traceparent: str | None = None,
+    **overrides,
+):
     payload = {
         "action": "generate",
         "draft_id": draft_id,
@@ -150,10 +159,18 @@ def _enqueue(client, workflow_id: str, draft_id: str, key: str, **overrides):
         "variant_index": 0,
         **overrides,
     }
+    headers = _headers(key)
+    if traceparent:
+        headers.update(
+            {
+                "traceparent": traceparent,
+                "x-trace-surface": "catalog-studio",
+            }
+        )
     return client.post(
         f"/api/admin/catalog/workflows/{workflow_id}/image-commands",
         json=payload,
-        headers=_headers(key),
+        headers=headers,
     )
 
 
@@ -181,8 +198,12 @@ def test_generate_approve_publish_and_index_catalog_image(monkeypatch, tmp_path)
         assert replay.status_code == 202
         assert replay.json()["id"] == job["id"]
 
-        result = _process(sessions, FakeImages())
+        fake_images = FakeImages()
+        result = _process(sessions, fake_images)
         assert result.status == "succeeded"
+        assert fake_images.generate_calls[0]["extra_headers"][
+            "X-Client-Request-Id"
+        ].startswith("sh-images-")
 
         detail = client.get(
             f"/api/admin/catalog/workflows/{workflow['id']}/image-jobs/{job['id']}"
@@ -203,6 +224,8 @@ def test_generate_approve_publish_and_index_catalog_image(monkeypatch, tmp_path)
                 )
             )
             assert event.request_id == "req_catalog_image_1"
+            assert event.request_json["client_request_id"].startswith("sh-images-")
+            assert event.response_json["provider_request_id"] == "req_catalog_image_1"
             assert event.usage_json["total_tokens"] == 112
             assert event.response_json["approval_status"] == "review"
             assert event.response_json["image_url"].startswith("https://catalog.example/")
@@ -885,14 +908,28 @@ def test_image_command_idempotency_conflict_and_retryable_provider_failure(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("PRODUCT_IMAGE_OUTPUT_DIR", str(tmp_path / "images"))
+    monkeypatch.setenv("API_TRACE_CAPTURE_ENABLED", "true")
 
     class RateLimitError(RuntimeError):
         status_code = 429
         code = "rate_limit_exceeded"
 
     with _admin_catalog_client(monkeypatch) as (client, sessions):
+        monkeypatch.setattr(
+            "app.api_traces.adapters.ApiTraceRecorder",
+            lambda *, settings: ApiTraceRecorder(
+                settings=settings,
+                session_factory=sessions,
+            ),
+        )
         draft, workflow = _draft_and_workflow(client)
-        queued = _enqueue(client, workflow["id"], draft["id"], "same-key")
+        queued = _enqueue(
+            client,
+            workflow["id"],
+            draft["id"],
+            "same-key",
+            traceparent=f"00-{'7' * 32}-{'8' * 16}-01",
+        )
         assert queued.status_code == 202
         conflict = _enqueue(
             client,
@@ -916,8 +953,17 @@ def test_image_command_idempotency_conflict_and_retryable_provider_failure(
             assert failed_event.error_code == "rate_limit_exceeded"
             assert failed_event.retryable is True
 
-        retry = _enqueue(client, workflow["id"], draft["id"], "timeout-retry")
+        retry = _enqueue(
+            client,
+            workflow["id"],
+            draft["id"],
+            "timeout-retry",
+            traceparent=f"00-{'9' * 32}-{'a' * 16}-01",
+        )
         assert retry.status_code == 202
+        with sessions() as db:
+            retry_job = db.get(ImageGenerationJob, retry.json()["id"])
+            assert retry_job.api_trace_retry_of_job_id == queued.json()["id"]
         timeout_result = _process(sessions, FakeImages(error=TimeoutError("timed out")))
         assert timeout_result.status == "failed"
         with sessions() as db:

@@ -203,6 +203,40 @@ def test_authorized_activation_binds_owner_to_validated_w3c_context():
         assert response.headers["x-trace-capture"] == "active"
 
 
+def test_catalog_workflow_route_activates_trace_capture(monkeypatch):
+    incoming_trace_id = "5" * 32
+    incoming_span_id = "6" * 16
+    with _trace_client() as (client, sessions, _, _):
+        monkeypatch.setattr(
+            "app.api_traces.adapters.ApiTraceRecorder",
+            lambda *, settings: ApiTraceRecorder(
+                settings=settings,
+                session_factory=sessions,
+            ),
+        )
+        response = client.post(
+            "/api/admin/catalog/workflows",
+            headers={
+                "Idempotency-Key": "trace-workflow-create",
+                "traceparent": f"00-{incoming_trace_id}-{incoming_span_id}-01",
+                "x-trace-surface": "catalog-studio",
+            },
+            json={
+                "title": "Trace the product workflow",
+                "business_summary": "Create an instrumented catalog workflow.",
+            },
+        )
+
+        assert response.status_code == 201
+        assert response.headers["x-trace-capture"] == "active"
+        assert response.headers["x-trace-id"] == incoming_trace_id
+        with sessions() as db:
+            trace = db.get(ApiTrace, incoming_trace_id)
+            assert trace is not None
+            assert trace.owner_provider_user_id == "owner_a"
+            assert trace.surface == "catalog-studio"
+
+
 def test_trace_headers_without_capture_activation_never_persist():
     with _trace_client() as (client, sessions, _, _):
         response = client.get(
