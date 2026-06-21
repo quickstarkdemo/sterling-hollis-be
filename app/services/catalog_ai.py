@@ -1230,13 +1230,21 @@ def _owned_source_assets(
     return [by_id[asset_id] for asset_id in source_asset_ids]
 
 
+_SOURCE_IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_MAX_SOURCE_TEXT_EXCERPT_CHARS = 4000
+
+
+def _source_asset_kind(asset: CatalogSourceAsset) -> str:
+    return "image" if asset.content_type in _SOURCE_IMAGE_CONTENT_TYPES else "document"
+
+
 def _source_asset_preview_bytes(settings: Settings, asset: CatalogSourceAsset) -> bytes:
     base = Path(str(settings.catalog_source_output_dir or "")).expanduser().resolve()
     candidate = (base / asset.preview_storage_key).resolve()
     if not candidate.is_relative_to(base):
         raise CatalogAICommandError(
             code="source_asset_unavailable",
-            detail="A selected supplier source image is unavailable.",
+            detail="A selected supplier source asset is unavailable.",
             status_code=status.HTTP_409_CONFLICT,
             retryable=False,
         )
@@ -1245,10 +1253,24 @@ def _source_asset_preview_bytes(settings: Settings, asset: CatalogSourceAsset) -
     except OSError as exc:
         raise CatalogAICommandError(
             code="source_asset_unavailable",
-            detail="A selected supplier source image is unavailable.",
+            detail="A selected supplier source asset is unavailable.",
             status_code=status.HTTP_409_CONFLICT,
             retryable=False,
         ) from exc
+
+
+def _source_asset_text_excerpt(settings: Settings, asset: CatalogSourceAsset) -> str:
+    content = _source_asset_preview_bytes(settings, asset)
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CatalogAICommandError(
+            code="source_asset_unavailable",
+            detail="A selected supplier source document is unavailable.",
+            status_code=status.HTTP_409_CONFLICT,
+            retryable=False,
+        ) from exc
+    return text.strip()[:_MAX_SOURCE_TEXT_EXCERPT_CHARS]
 
 
 def _suggestion_current_draft_payload(product: ProductDraftV3) -> dict[str, Any]:
@@ -1287,16 +1309,19 @@ def _suggestion_provider_input(
     source_assets: list[CatalogSourceAsset],
     settings: Settings,
 ) -> list[dict[str, Any]]:
-    source_manifest = [
-        {
+    source_manifest = []
+    for asset in source_assets:
+        manifest_item = {
             "asset_id": asset.id,
+            "asset_kind": _source_asset_kind(asset),
             "content_type": asset.content_type,
             "width": asset.width,
             "height": asset.height,
             "checksum_sha256": asset.checksum_sha256,
         }
-        for asset in source_assets
-    ]
+        if asset.content_type not in _SOURCE_IMAGE_CONTENT_TYPES:
+            manifest_item["text_excerpt"] = _source_asset_text_excerpt(settings, asset)
+        source_manifest.append(manifest_item)
     payload = {
         "presenter_instruction": command.instruction,
         "input_origin": command.input_origin,
@@ -1311,6 +1336,8 @@ def _suggestion_provider_input(
         }
     ]
     for asset in source_assets:
+        if asset.content_type not in _SOURCE_IMAGE_CONTENT_TYPES:
+            continue
         encoded = base64.b64encode(_source_asset_preview_bytes(settings, asset)).decode(
             "ascii"
         )

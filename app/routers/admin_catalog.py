@@ -142,7 +142,7 @@ from app.services.catalog_voice_tools import (
 from app.services.catalog_sources import (
     create_source_bundle,
     get_source_bundle,
-    get_source_preview_path,
+    get_source_preview,
     list_source_bundles,
     promote_source_asset,
     remove_source_asset,
@@ -314,7 +314,7 @@ def catalog_source_asset_preview(
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
-    preview_path = get_source_preview_path(
+    preview_path, media_type = get_source_preview(
         db,
         bundle_id=bundle_id,
         asset_id=asset_id,
@@ -323,7 +323,7 @@ def catalog_source_asset_preview(
     )
     return FileResponse(
         preview_path,
-        media_type="image/jpeg",
+        media_type=media_type,
         headers={
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",

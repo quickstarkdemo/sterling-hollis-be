@@ -102,6 +102,45 @@ def _prepare_grounded_draft(client):
     return workflow, draft, asset_id
 
 
+def _prepare_document_grounded_draft(client):
+    workflow = client.post(
+        "/api/admin/catalog/workflows",
+        json={
+            "title": "Ground supplier document facts",
+            "business_summary": "Prepare reviewable document-backed suggestions.",
+        },
+        headers=_headers("document-grounded-workflow"),
+    ).json()
+    bundle = client.post(
+        "/api/admin/catalog/source-bundles",
+        data={"title": "Supplier coat package"},
+        files=[
+            (
+                "files",
+                (
+                    "specs.txt",
+                    b"Material: cashmere blend\nCare: dry clean only\nPrivate note: LOTUS",
+                    "text/plain",
+                ),
+            )
+        ],
+    ).json()
+    asset_id = bundle["assets"][0]["id"]
+    payload = _v3_payload(title="Document Grounded Supplier Coat")
+    payload["product"]["metadata"] = {
+        "supplier": {"storage_key": "private/supplier/specs.txt"}
+    }
+    payload["product"]["source_references"] = [
+        {"bundle_id": bundle["id"], "asset_ids": [asset_id]}
+    ]
+    draft = client.post(
+        "/api/admin/catalog/v3/products/drafts",
+        json=payload,
+        headers=_headers("document-grounded-v3-draft"),
+    ).json()
+    return workflow, draft, asset_id
+
+
 def test_supplier_analysis_creates_evidence_backed_pending_suggestions(monkeypatch, tmp_path):
     monkeypatch.setenv("CATALOG_SOURCE_OUTPUT_DIR", str(tmp_path / "private-sources"))
     proposal = CatalogAISuggestionProposal(
@@ -230,6 +269,66 @@ def test_supplier_analysis_creates_evidence_backed_pending_suggestions(monkeypat
         assert "ORCHID" not in persisted
         assert "data:image" not in persisted
         assert "resp_grounded_123" in persisted
+
+
+def test_supplier_analysis_uses_document_excerpts_as_private_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("CATALOG_SOURCE_OUTPUT_DIR", str(tmp_path / "private-sources"))
+    proposal = CatalogAISuggestionProposal(
+        suggestions=[
+            CatalogAIFieldProposal(
+                target_path="/material",
+                proposed_value="Cashmere blend",
+                evidence_asset_ids=["placeholder_asset"],
+                certainty_class="observed",
+            )
+        ],
+        unknown_fields=[],
+    )
+    fake_client = _FakeClient(_response(proposal))
+    service_settings = Settings(
+        _env_file=None,
+        catalog_source_output_dir=str(tmp_path / "private-sources"),
+    )
+
+    with _admin_catalog_client(monkeypatch) as (client, _sessions):
+        workflow, draft, asset_id = _prepare_document_grounded_draft(client)
+        proposal.suggestions[0].evidence_asset_ids = [asset_id]
+        client.app.dependency_overrides[get_catalog_suggestion_ai_service] = lambda: (
+            CatalogAISuggestionService(service_settings, fake_client)
+        )
+
+        created = client.post(
+            f"/api/admin/catalog/v3/products/{draft['product_id']}/ai-suggestion-sets",
+            json={
+                "draft_id": draft["id"],
+                "expected_draft_version": 1,
+                "workflow_id": workflow["id"],
+                "instruction": "Use the supplier document only.",
+                "input_origin": "supplier_analysis",
+                "source_asset_ids": [asset_id],
+                "target_paths": ["/material"],
+            },
+            headers=_headers("generate-document-grounded-suggestions"),
+        )
+
+        assert created.status_code == 201, created.text
+        result = created.json()
+        assert result["suggestion_set"]["suggestions"][0]["evidence_asset_ids"] == [asset_id]
+        provider_call = fake_client.responses.calls[0]
+        serialized_input = json.dumps(provider_call["input"])
+        assert "input_image" not in serialized_input
+        assert "text_excerpt" in serialized_input
+        assert "Material: cashmere blend" in serialized_input
+        assert asset_id in serialized_input
+        assert "storage_key" not in serialized_input
+        assert "private/supplier" not in serialized_input
+
+        timeline = client.get(
+            f"/api/admin/catalog/workflows/{workflow['id']}",
+            params={"developer": True},
+        )
+        assert timeline.status_code == 200
+        assert "Private note: LOTUS" not in timeline.text
 
 
 def test_moderation_block_and_provider_timeout_never_create_suggestions(monkeypatch, tmp_path):

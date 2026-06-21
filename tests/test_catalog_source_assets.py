@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from io import BytesIO
 from pathlib import Path
+import zipfile
 
 import pytest
 from PIL import Image
@@ -24,6 +25,20 @@ def _image_bytes(
 ) -> bytes:
     buffer = BytesIO()
     Image.new("RGB", size, color=color).save(buffer, format=image_format)
+    return buffer.getvalue()
+
+
+def _docx_bytes(text: str) -> bytes:
+    body = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>"
+        f"{text}"
+        "</w:t></w:r></w:p></w:body></w:document>"
+    )
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "")
+        archive.writestr("word/document.xml", body)
     return buffer.getvalue()
 
 
@@ -107,6 +122,84 @@ def test_upload_list_detail_and_private_previews_are_owner_scoped(monkeypatch, t
             [("other.jpg", _image_bytes(), "image/jpeg")],
             draft_revision_id=draft["id"],
         ).status_code == 404
+
+
+def test_upload_mixed_package_extracts_documents_and_rejects_bad_siblings(
+    monkeypatch, tmp_path
+):
+    source_dir = tmp_path / "private-sources"
+    monkeypatch.setenv("CATALOG_SOURCE_OUTPUT_DIR", str(source_dir))
+    with _admin_catalog_client(monkeypatch) as (client, _sessions):
+        draft_response = client.post(
+            "/api/admin/catalog/v2/products/drafts",
+            json=_snapshot_v2(title="Mixed Supplier Package Coat"),
+            headers=_headers("mixed-source-draft"),
+        )
+        assert draft_response.status_code == 201
+        draft = draft_response.json()
+
+        response = _upload_bundle(
+            client,
+            [
+                ("front.jpg", _image_bytes(color="navy"), "image/jpeg"),
+                (
+                    "specs.txt",
+                    b"Material: wool blend\nColor: navy\nPrivate wholesale note: internal only",
+                    "text/plain",
+                ),
+                (
+                    "fit.docx",
+                    _docx_bytes("Fit: relaxed. Care: dry clean only."),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ),
+                ("legacy.gif", _image_bytes(image_format="GIF"), "image/gif"),
+            ],
+        )
+
+        assert response.status_code == 201, response.text
+        bundle = response.json()
+        assert [asset["asset_kind"] for asset in bundle["assets"]] == [
+            "image",
+            "document",
+            "document",
+        ]
+        assert [asset["original_filename"] for asset in bundle["assets"]] == [
+            "front.jpg",
+            "specs.txt",
+            "fit.docx",
+        ]
+        assert bundle["rejected_assets"] == [
+            {
+                "original_filename": "legacy.gif",
+                "content_type": "image/gif",
+                "status": "rejected",
+                "reason": "Unsupported image type. Use JPEG, PNG, or WebP.",
+            }
+        ]
+        assert all(asset["storage_provider"] == "local_private" for asset in bundle["assets"])
+        assert "storage_key" not in response.text
+        assert str(source_dir).lower() not in response.text.lower()
+
+        text_asset = bundle["assets"][1]
+        preview = client.get(text_asset["preview_url"])
+        assert preview.status_code == 200
+        assert preview.headers["content-type"].startswith("text/plain")
+        assert preview.headers["cache-control"] == "private, no-store"
+        assert "Material: wool blend" in preview.text
+        assert text_asset["width"] == 1
+        assert text_asset["height"] == 1
+
+        blocked_promotion = client.post(
+            f"/api/admin/catalog/source-bundles/{bundle['id']}/assets/{text_asset['id']}/promote",
+            json={"draft_id": draft["id"], "expected_draft_version": 1},
+            headers=_headers("promote-document-source"),
+        )
+        assert blocked_promotion.status_code == 422
+        assert "only image source assets" in blocked_promotion.json()["detail"].lower()
+
+        detail = client.get(f"/api/admin/catalog/source-bundles/{bundle['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["rejected_assets"] == []
 
 
 def test_upload_rejects_invalid_or_dangerous_images_before_persistence(monkeypatch, tmp_path):

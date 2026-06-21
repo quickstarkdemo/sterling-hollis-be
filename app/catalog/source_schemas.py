@@ -14,7 +14,15 @@ class CatalogSourceAssetResponse(BaseModel):
     id: str
     display_order: int = Field(ge=0)
     original_filename: str
-    content_type: Literal["image/jpeg", "image/png", "image/webp"]
+    asset_kind: Literal["image", "document"] = "image"
+    content_type: Literal[
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "text/plain",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]
     byte_size: int = Field(gt=0)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
@@ -26,6 +34,13 @@ class CatalogSourceAssetResponse(BaseModel):
     created_at: datetime
 
 
+class CatalogSourceRejectedAssetResponse(BaseModel):
+    original_filename: str
+    content_type: str | None = None
+    status: Literal["rejected"] = "rejected"
+    reason: str
+
+
 class CatalogSourceBundleResponse(BaseModel):
     id: str
     title: str
@@ -33,6 +48,7 @@ class CatalogSourceBundleResponse(BaseModel):
     draft_revision_id: str | None = None
     status: Literal["active"]
     assets: list[CatalogSourceAssetResponse]
+    rejected_assets: list[CatalogSourceRejectedAssetResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
