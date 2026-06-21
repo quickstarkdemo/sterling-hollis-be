@@ -114,6 +114,8 @@ user ID before it is sent as an OpenAI safety identifier.
 | Setting | Default | Required when | Secret |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | empty | Any OpenAI-backed Catalog Studio capability is enabled | yes |
+| `CONTENT_MODERATION_MODEL` | `omni-moderation-latest` | Review or customer chat content gates are enabled | no |
+| `CONTENT_MODERATION_TIMEOUT_SECONDS` | `10` | Optional shared content moderation override | no |
 | `CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS` | empty | Email allowlisting is used | no |
 | `CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS` | empty | Clerk subject allowlisting is used | no |
 | `CATALOG_STUDIO_ADMIN_CLAIM_PATH` | empty | A custom Clerk admin claim is used | no |
@@ -164,6 +166,12 @@ user ID before it is sent as an OpenAI safety identifier.
 | `PRODUCT_IMAGE_REQUEST_TIMEOUT_SECONDS` | `300` | Optional image override | no |
 | `PRODUCT_IMAGE_JOB_STALE_SECONDS` | `900` | Optional worker recovery override | no |
 | `IMAGE_JOB_ADMIN_STALE_RECOVERY_SECONDS` | `60` | Optional admin recovery override | no |
+
+The shared content moderation gateway uses the standalone OpenAI Moderation API
+for customer reviews and chat gates. It is separate from Catalog Studio's
+Responses inline moderation (`CATALOG_STUDIO_MODERATION_MODEL`) and from any
+Datadog AI Guard controls; its metadata records provider outcome and category
+flags without storing raw submitted text.
 
 `GET /api/admin/session` reports configuration readiness without contacting a
 provider or returning values. Realtime reports `feature_disabled`,

@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     chat_orchestration_model: str = "gpt-5.4-mini"
     chat_orchestration_min_confidence: float = 0.55
     chat_orchestration_mode: Literal["deterministic", "strands_product"] = "deterministic"
+    content_moderation_model: str = "omni-moderation-latest"
+    content_moderation_timeout_seconds: float = 10.0
     demo_observability_enabled: bool = False
     demo_observability_mode: Literal["off", "latency", "error", "latency_and_error", "network_outage"] = "off"
     demo_observability_latency_seconds: float = 8.0

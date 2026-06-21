@@ -84,6 +84,18 @@ def test_catalog_studio_trace_limits_load_from_env(monkeypatch):
     get_settings.cache_clear()
 
 
+def test_shared_content_moderation_settings_load_from_env(monkeypatch):
+    monkeypatch.setenv("CONTENT_MODERATION_MODEL", "omni-moderation-test")
+    monkeypatch.setenv("CONTENT_MODERATION_TIMEOUT_SECONDS", "4.5")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.content_moderation_model == "omni-moderation-test"
+    assert settings.content_moderation_timeout_seconds == 4.5
+    get_settings.cache_clear()
+
+
 def test_api_trace_capture_defaults_off_and_loads_independent_retention(monkeypatch):
     assert Settings(_env_file=None).api_trace_capture_enabled is False
 
