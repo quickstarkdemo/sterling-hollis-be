@@ -23,6 +23,14 @@ from app.config import get_settings
 from app.models import ChatMessage, ChatSession, ChatToolCall, ChatTurn
 from app.observability.genai_otel import suppress_genai_otel
 from app.services.auth.clerk import ChatIdentity
+from app.services.capabilities import Surface
+from app.services.capability_executor import (
+    CapabilityExecutionContext,
+    CapabilityExecutionResult,
+    chat_capability_id_for_tool,
+    execute_capability,
+    personas_for_chat_identity,
+)
 from app.services.chat.context import summarize_context
 from app.services.chat.evaluator import ChatOrchestrationDecision, evaluate_chat
 from app.services.chat.intent_frame import ChatIntentFrame, build_chat_intent_frame
@@ -1131,6 +1139,57 @@ def _execute_selected_tool_response(
     return _general_response(req, identity, session, decision), f"allowed; unrecognized selected_tool={selected_tool}"
 
 
+def _chat_actor_id(identity: ChatIdentity) -> str | None:
+    if identity.principal is not None:
+        return f"{identity.principal.provider}:{identity.principal.provider_user_id}"
+    return identity.customer_id
+
+
+def _chat_capability_context(
+    *,
+    capability_id: str,
+    identity: ChatIdentity,
+    session: ChatSession,
+    selected_tool: str,
+    selected_agent: str | None,
+    auth_required: bool,
+    intent: str,
+    route: str,
+) -> CapabilityExecutionContext:
+    return CapabilityExecutionContext(
+        capability_id=capability_id,
+        personas=personas_for_chat_identity(identity),
+        surface=Surface.CHAT,
+        selected_tool=selected_tool,
+        selected_agent=selected_agent,
+        actor_id=_chat_actor_id(identity),
+        session_id=session.id,
+        attributes={
+            "auth_required": auth_required,
+            "identity_status": identity.status,
+            "intent": intent,
+            "route": route,
+        },
+    )
+
+
+def _apply_capability_execution_metadata(
+    response: ChatResponse,
+    execution: CapabilityExecutionResult,
+) -> ChatResponse:
+    final_capability_id = execution.capability.id
+    response.capability_id = final_capability_id
+    response.capability_surface = execution.surface.value
+    response.persona = execution.persona.value
+    response.tool_trace.append(
+        ChatToolTrace(
+            name="capability",
+            decision=f"capability_id={final_capability_id}; surface={execution.surface.value}; persona={execution.persona.value}",
+        )
+    )
+    return response
+
+
 def _handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatResponse:
     with api_trace_database_operation(
         "Resolve storefront chat context",
@@ -1583,15 +1642,28 @@ def _handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatR
                                     "intent": decision.intent,
                                 },
                             ) as agent_trace_span:
-                                strands_result = run_storefront_shopping_agent(
-                                    db,
-                                    req=req,
-                                    identity=identity,
-                                    session=session,
-                                    decision=decision,
-                                    frame=frame,
-                                    history=history,
+                                capability_execution = execute_capability(
+                                    _chat_capability_context(
+                                        capability_id=chat_capability_id_for_tool(decision.tool),
+                                        identity=identity,
+                                        session=session,
+                                        selected_tool=decision.tool,
+                                        selected_agent="StorefrontShoppingAgent",
+                                        auth_required=False,
+                                        intent=decision.intent,
+                                        route=decision.route,
+                                    ),
+                                    lambda: run_storefront_shopping_agent(
+                                        db,
+                                        req=req,
+                                        identity=identity,
+                                        session=session,
+                                        decision=decision,
+                                        frame=frame,
+                                        history=history,
+                                    ),
                                 )
+                                strands_result = capability_execution.output
                                 if agent_trace_span is not None:
                                     agent_trace_span.status = (
                                         "failed"
@@ -1605,6 +1677,10 @@ def _handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatR
                             strands_tool_calls = strands_result.tool_calls
                             if strands_result.response is not None:
                                 response = strands_result.response
+                                response = _apply_capability_execution_metadata(
+                                    response,
+                                    capability_execution,
+                                )
                                 strands_selected_tool = response.selected_tool
                                 auth_decision = "allowed; strands public storefront orchestration"
                             else:
@@ -1618,16 +1694,33 @@ def _handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatR
                                         "fallback": True,
                                     },
                                 ) as fallback_trace_span:
-                                    response, auth_decision = _execute_selected_tool_response(
-                                        db,
-                                        req,
-                                        identity,
-                                        session,
-                                        decision,
-                                        replace(orchestration, selected_tool=fallback_tool),
-                                        frame,
-                                        auth_required=False,
-                                        selected_tool=fallback_tool,
+                                    fallback_execution = execute_capability(
+                                        _chat_capability_context(
+                                            capability_id=chat_capability_id_for_tool(fallback_tool),
+                                            identity=identity,
+                                            session=session,
+                                            selected_tool=fallback_tool,
+                                            selected_agent=orchestration.selected_agent,
+                                            auth_required=False,
+                                            intent=decision.intent,
+                                            route=decision.route,
+                                        ),
+                                        lambda: _execute_selected_tool_response(
+                                            db,
+                                            req,
+                                            identity,
+                                            session,
+                                            decision,
+                                            replace(orchestration, selected_tool=fallback_tool),
+                                            frame,
+                                            auth_required=False,
+                                            selected_tool=fallback_tool,
+                                        ),
+                                    )
+                                    response, auth_decision = fallback_execution.output
+                                    response = _apply_capability_execution_metadata(
+                                        response,
+                                        fallback_execution,
                                     )
                                     if fallback_trace_span is not None:
                                         fallback_trace_span.annotate(
@@ -1651,16 +1744,36 @@ def _handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatR
                                     "auth_required": auth_required,
                                 },
                             ) as tool_trace_span:
-                                response, auth_decision = _execute_selected_tool_response(
-                                    db,
-                                    req,
-                                    identity,
-                                    session,
-                                    decision,
-                                    orchestration,
-                                    frame,
-                                    auth_required=auth_required,
-                                    selected_tool=selected_tool,
+                                execution_capability_id = chat_capability_id_for_tool(selected_tool)
+                                if auth_required and identity.status != "authenticated_customer":
+                                    execution_capability_id = "shopper.chat.turn"
+                                capability_execution = execute_capability(
+                                    _chat_capability_context(
+                                        capability_id=execution_capability_id,
+                                        identity=identity,
+                                        session=session,
+                                        selected_tool=selected_tool,
+                                        selected_agent=orchestration.selected_agent,
+                                        auth_required=auth_required,
+                                        intent=decision.intent,
+                                        route=decision.route,
+                                    ),
+                                    lambda: _execute_selected_tool_response(
+                                        db,
+                                        req,
+                                        identity,
+                                        session,
+                                        decision,
+                                        orchestration,
+                                        frame,
+                                        auth_required=auth_required,
+                                        selected_tool=selected_tool,
+                                    ),
+                                )
+                                response, auth_decision = capability_execution.output
+                                response = _apply_capability_execution_metadata(
+                                    response,
+                                    capability_execution,
                                 )
                                 if tool_trace_span is not None:
                                     tool_trace_span.status = (

@@ -167,6 +167,13 @@ def route_capability_for(path: str, method: str) -> RouteCapability | None:
             AuthPosture.CATALOG_ADMIN_CLERK,
             current_frontend_contract=True,
         )
+    if path == "/api/admin/catalog/assistant/query":
+        return RouteCapability(
+            "catalog_admin.assistant.query",
+            ApiSurface.CATALOG_ADMIN,
+            AuthPosture.CATALOG_ADMIN_CLERK,
+            current_frontend_contract=True,
+        )
     if path.startswith("/api/admin/catalog"):
         return RouteCapability(
             "catalog_admin.catalog.manage",

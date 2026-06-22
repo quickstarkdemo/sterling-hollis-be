@@ -3151,6 +3151,15 @@ components:
             - order_status
             - chat_response
             - null
+        capability_id:
+          type: string
+          nullable: true
+        capability_surface:
+          type: string
+          nullable: true
+        persona:
+          type: string
+          nullable: true
         requires_followup:
           type: boolean
           default: false

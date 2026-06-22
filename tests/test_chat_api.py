@@ -848,12 +848,62 @@ def test_strands_product_mode_uses_storefront_agent_for_catalog_search(monkeypat
     payload = response.json()
     assert payload["selected_agent"] == "StorefrontShoppingAgent"
     assert payload["selected_tool"] == "semantic_catalog_search"
+    assert payload["capability_id"] == "public.catalog.search"
+    assert payload["capability_surface"] == "chat"
+    assert payload["persona"] == "shopper"
     assert payload["route"] == "semantic_catalog_search"
     assert payload["cards"]
     assert any(trace["name"] == "StrandsAgent" for trace in payload["tool_trace"])
+    assert any(
+        trace["name"] == "capability" and "capability_id=public.catalog.search" in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
     assert captured["frame"].query == "moisturizer"
     assert captured["history"] == []
     assert [call.tool_name for call in stored_calls] == ["semantic_catalog_search"]
+
+
+def test_strands_product_mode_does_not_trust_private_primary_tool_metadata(monkeypatch):
+    def fake_run_storefront_shopping_agent(db, *, req, identity, session, decision, frame, history):
+        cards = catalog_cards(db, store_id=req.context.store_id, query="moisturizer", limit=1)
+        return StrandsRunResult(
+            response=_strands_response(
+                session.id,
+                identity.status,
+                message="I found a moisturizer that fits.",
+                intent="catalog_search",
+                route="semantic_catalog_search",
+                cards=cards,
+                selected_tool="customer_recommendations",
+            ),
+            tool_calls=[
+                CapturedToolCall(
+                    name="semantic_catalog_search",
+                    input_json={"query": "moisturizer"},
+                    output_json={"product_ids": [card.id for card in cards]},
+                )
+            ],
+        )
+
+    monkeypatch.setattr("app.services.chat.orchestrator.run_storefront_shopping_agent", fake_run_storefront_shopping_agent)
+    with _chat_client(monkeypatch) as (client, _):
+        _enable_strands_product(monkeypatch)
+        response = client.post(
+            "/api/chat",
+            json={
+                "message": "do you have a moisturizer under $150",
+                "context": {"page_type": "home", "route": "/", "store_id": "1001"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_tool"] == "customer_recommendations"
+    assert payload["capability_id"] == "public.catalog.search"
+    assert any(
+        trace["name"] == "capability" and "shopper.account.recommendations" not in trace["decision"]
+        for trace in payload["tool_trace"]
+    )
 
 
 def test_strands_product_mode_passes_recent_history(monkeypatch):
@@ -2089,6 +2139,9 @@ def test_chat_llmobs_records_root_workflow_tool_spans_and_evaluations(monkeypatc
     assert response.status_code == 200
     payload = response.json()
     assert payload["turn_id"].startswith("turn_")
+    assert payload["capability_id"] == "public.catalog.search"
+    assert payload["capability_surface"] == "chat"
+    assert payload["persona"] == "shopper"
     assert payload["client_request_id"] is None
     assert payload["trigger_type"] == "user_submit"
     assert payload["duplicate_replay"] is False

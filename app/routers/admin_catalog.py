@@ -160,6 +160,12 @@ from app.services.auth.admin import (
     require_catalog_admin,
 )
 from app.services.auth.clerk import AuthenticatedPrincipal
+from app.services.capabilities import Surface
+from app.services.capability_executor import (
+    CapabilityExecutionContext,
+    execute_capability,
+    personas_for_catalog_admin,
+)
 
 
 router = APIRouter(
@@ -1135,12 +1141,28 @@ def query_catalog_assistant(
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
 ) -> CatalogVoiceToolResult:
-    _ = principal
-    return answer_catalog_question(
-        db,
-        question=request.question,
-        query_scopes=request.query_scopes,
+    execution = execute_capability(
+        CapabilityExecutionContext(
+            capability_id="catalog_admin.assistant.query",
+            personas=personas_for_catalog_admin(principal),
+            surface=Surface.ADMIN_ASSISTANT,
+            selected_tool="catalog_assistant_query",
+            selected_agent="CatalogStudioAssistant",
+            actor_id=f"{principal.provider}:{principal.provider_user_id}",
+            attributes={"query_scopes": request.query_scopes or []},
+        ),
+        lambda: answer_catalog_question(
+            db,
+            question=request.question,
+            query_scopes=request.query_scopes,
+        ),
     )
+    result = execution.output
+    result.capability_id = execution.capability.id
+    result.capability_surface = execution.surface.value
+    result.persona = execution.persona.value
+    result.selected_tool = execution.selected_tool
+    return result
 
 
 @router.post(

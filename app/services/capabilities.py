@@ -48,7 +48,7 @@ class ApprovalMode(StrEnum):
     EXPLICIT_BOOLEAN = "explicit_boolean"
 
 
-REGISTRY_VERSION = "2026-06-22"
+REGISTRY_VERSION = "2026-06-22.2"
 
 
 @dataclass(frozen=True)
@@ -321,6 +321,18 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Clerk bearer token",
         "app.routers.admin_catalog.CatalogStudioSessionResponse",
         "app.routers.admin_catalog.catalog_studio_session",
+    ),
+    _capability(
+        "catalog_admin.assistant.query",
+        "Query Catalog Studio assistant",
+        "Answer bounded read-only Catalog Studio catalog and inventory questions.",
+        Operation.CATALOG_ADMIN,
+        SideEffect.READ,
+        (Persona.CATALOG_ADMIN,),
+        (Surface.REST, Surface.ADMIN_ASSISTANT),
+        "app.routers.admin_catalog.CatalogAssistantQueryRequest",
+        "app.services.catalog_voice_tools.CatalogVoiceToolResult",
+        "app.routers.admin_catalog.query_catalog_assistant",
     ),
     _capability(
         "catalog_admin.catalog.manage",

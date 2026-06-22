@@ -79,6 +79,10 @@ class CatalogVoiceToolResult(BaseModel):
     mutation: Literal[False] = False
     citations: list[CatalogVoiceCitation] = Field(default_factory=list)
     suggestion_set: CatalogSuggestionSetResponse | None = None
+    capability_id: str | None = None
+    capability_surface: str | None = None
+    persona: str | None = None
+    selected_tool: str | None = None
 
 
 def _owned_workflow(
