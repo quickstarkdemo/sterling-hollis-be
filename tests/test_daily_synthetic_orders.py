@@ -392,3 +392,24 @@ def test_daily_synthetic_orders_admin_endpoint_runs_catchup(sessions):
         assert response.inserted_orders == 8
         assert response.metrics_refreshed > 0
         assert db.scalar(select(func.count()).select_from(Order).where(Order.seed_run_id == response.run_id)) == 8
+
+
+def test_daily_synthetic_orders_mcp_tool_runs_catchup(monkeypatch, sessions):
+    import app.mcp_server as mcp_server
+
+    with sessions() as db:
+        _add_source_data(db)
+
+    monkeypatch.setattr(mcp_server, "SessionLocal", sessions)
+
+    response = mcp_server.fashion_generate_daily_orders(
+        from_date="2026-06-20",
+        through_date="2026-06-20",
+        base_orders=8,
+        min_orders=8,
+        max_orders=8,
+    )
+
+    assert response.run_id == "daily_orders_20260620_20260620"
+    assert response.inserted_orders == 8
+    assert response.metrics_refreshed > 0
