@@ -2376,6 +2376,65 @@ def test_workspace_refactor_removes_legacy_tools_and_resources(monkeypatch):
         assert "ui://widgets/merch/board.html" not in resources
 
 
+def test_mcp_persona_bundles_scope_tool_visibility(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        bundle_tools = {
+            path: set(server._tool_manager._tools)
+            for path, server in mcp_server.mounted_mcp_servers()
+        }
+
+        assert bundle_tools["/mcp/public"] == {
+            "fashion_catalog_search",
+            "fashion_catalog_product_detail",
+            "fashion_get_product_feed",
+        }
+        assert bundle_tools["/mcp/shopper"] == bundle_tools["/mcp/public"]
+        assert "fashion_lookup_customer" not in bundle_tools["/mcp/shopper"]
+        assert "fashion_exec_overview" not in bundle_tools["/mcp/shopper"]
+        assert "fashion_send_customer_email_draft" not in bundle_tools["/mcp/shopper"]
+
+        associate_tools = bundle_tools["/mcp/associate"]
+        assert "fashion_prepare_customer_email_draft" in associate_tools
+        assert "fashion_update_customer_email_draft" in associate_tools
+        assert "fashion_get_customer_email_draft" in associate_tools
+        assert "fashion_send_customer_email_draft" not in associate_tools
+        assert "fashion_exec_overview" not in associate_tools
+
+        associate_send_tools = bundle_tools["/mcp/associate-send"]
+        assert "fashion_send_customer_email_draft" in associate_send_tools
+        assert "fashion_send_customer_sms" in associate_send_tools
+
+        executive_tools = bundle_tools["/mcp/executive"]
+        assert "fashion_exec_overview" in executive_tools
+        assert "fashion_exec_send_strategy_packet_email" not in executive_tools
+
+        executive_send_tools = bundle_tools["/mcp/executive-send"]
+        assert "fashion_exec_send_strategy_packet_email" in executive_send_tools
+        assert "fashion_exec_campaign_autopilot_send" in executive_send_tools
+
+
+def test_mcp_tool_capability_metadata_is_registered(monkeypatch):
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+
+        mounted_servers = dict(mcp_server.mounted_mcp_servers())
+        public_tools = mounted_servers["/mcp/public"]._tool_manager._tools
+        assert public_tools["fashion_catalog_search"].meta["x-sterling/capability_id"] == "public.catalog.search"
+        assert (
+            public_tools["fashion_catalog_product_detail"].meta["x-sterling/capability_id"]
+            == "public.catalog.product_detail"
+        )
+        assert public_tools["fashion_get_product_feed"].meta["x-sterling/capability_id"] == "public.catalog.feed"
+
+        associate_send_tools = mounted_servers["/mcp/associate-send"]._tool_manager._tools
+        assert (
+            associate_send_tools["fashion_send_customer_email_draft"].meta["x-sterling/capability_id"]
+            == "associate.customer.email.send"
+        )
+
+
 def test_mcp_catalog_discovery_exposes_only_published_normalized_products(monkeypatch):
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)

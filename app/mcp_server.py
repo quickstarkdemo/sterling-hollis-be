@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 import csv
+from dataclasses import dataclass
 import hashlib
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -137,6 +139,13 @@ from app.schemas import (
     VectorStatusResponse,
 )
 from app.services.apps_ui import render_widget_html
+from app.services.capabilities import (
+    Persona,
+    REGISTRY_VERSION,
+    Surface,
+    capability_allowed_for_personas,
+    get_capability,
+)
 from app.services.communications import (
     customer_message_history,
     get_customer_email_draft,
@@ -204,16 +213,334 @@ def _split_csv(raw: str) -> list[str]:
 
 
 settings = get_settings()
-mcp = FastMCP(
-    "fashion_db_mcp",
-    json_response=True,
-    streamable_http_path="/",
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=_split_csv(settings.mcp_allowed_hosts),
-        allowed_origins=_split_csv(settings.mcp_allowed_origins),
+
+
+def _new_mcp_server(name: str) -> FastMCP:
+    return FastMCP(
+        name,
+        json_response=True,
+        streamable_http_path="/",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_split_csv(settings.mcp_allowed_hosts),
+            allowed_origins=_split_csv(settings.mcp_allowed_origins),
+        ),
+    )
+
+
+mcp = _new_mcp_server("fashion_db_mcp")
+
+
+@dataclass(frozen=True)
+class McpBundleDefinition:
+    name: str
+    path: str
+    personas: tuple[Persona, ...]
+    tool_names: frozenset[str]
+    resource_prefixes: tuple[str, ...] = ()
+
+
+MCP_PUBLIC_TOOL_NAMES = frozenset(
+    {
+        "fashion_catalog_search",
+        "fashion_catalog_product_detail",
+        "fashion_get_product_feed",
+    }
+)
+
+
+MCP_ASSOCIATE_TOOL_NAMES = MCP_PUBLIC_TOOL_NAMES | frozenset(
+    {
+        "fashion_resolve_store",
+        "fashion_resolve_customer",
+        "fashion_lookup_customer",
+        "fashion_find_customers",
+        "fashion_customer_recommendations",
+        "fashion_store_associate_recommend",
+        "fashion_customer_value_summary",
+        "fashion_render_customer_search_workspace",
+        "fashion_open_customer_workspace",
+        "fashion_open_customer_workspace_with_email_draft",
+        "fashion_prepare_customer_sms",
+        "fashion_update_customer_sms_draft",
+        "fashion_prepare_customer_email_draft",
+        "fashion_update_customer_email_draft",
+        "fashion_get_customer_email_draft",
+        "fashion_customer_message_history",
+    }
+)
+
+
+MCP_ASSOCIATE_SEND_TOOL_NAMES = MCP_ASSOCIATE_TOOL_NAMES | frozenset(
+    {
+        "fashion_send_customer_sms",
+        "fashion_send_customer_email_draft",
+        "fashion_send_customer_recommendations_email",
+    }
+)
+
+
+MCP_MERCHANDISER_TOOL_NAMES = MCP_PUBLIC_TOOL_NAMES | frozenset(
+    {
+        "fashion_merchandising_recommendations",
+        "fashion_render_merch_workspace",
+        "fashion_open_merch_workspace",
+        "fashion_render_unified_workspace",
+        "fashion_open_unified_workspace",
+        "fashion_merch_action_recommendations",
+        "fashion_merch_diagnostics",
+        "fashion_merch_trend_summary",
+        "fashion_merch_inventory_view",
+        "fashion_merch_product_mix_recommendations",
+        "fashion_merch_export_csv",
+        "fashion_merch_get_effective_strategy",
+        "fashion_merch_save_strategy_override",
+        "fashion_inventory_check_by_store",
+        "fashion_inventory_products",
+        "fashion_inventory_by_store",
+        "fashion_inventory_facets",
+        "fashion_product_margin_sales_opportunities",
+        "fashion_unified_inventory_view",
+        "fashion_unified_action_recommendations",
+        "fashion_unified_product_mix_recommendations",
+        "fashion_unified_export_csv",
+    }
+)
+
+
+MCP_EXECUTIVE_TOOL_NAMES = MCP_PUBLIC_TOOL_NAMES | MCP_MERCHANDISER_TOOL_NAMES | frozenset(
+    {
+        "fashion_render_exec_workspace",
+        "fashion_open_exec_workspace",
+        "fashion_exec_overview",
+        "fashion_exec_event_readiness_radar",
+        "fashion_exec_what_if_simulator",
+        "fashion_exec_auto_optimize_strategy",
+        "fashion_exec_publish_strategy_packet",
+        "fashion_exec_get_strategy_packet",
+        "fashion_exec_prepare_strategy_packet_email",
+        "fashion_exec_export_csv",
+        "fashion_exec_campaign_autopilot_prepare",
+        "fashion_exec_get_campaign_autopilot_draft",
+        "fashion_unified_overview",
+    }
+)
+
+
+MCP_EXECUTIVE_SEND_TOOL_NAMES = MCP_EXECUTIVE_TOOL_NAMES | frozenset(
+    {
+        "fashion_exec_send_strategy_packet_email",
+        "fashion_exec_campaign_autopilot_send",
+    }
+)
+
+
+MCP_CATALOG_ADMIN_TOOL_NAMES = MCP_PUBLIC_TOOL_NAMES | frozenset(
+    {
+        "fashion_vector_status",
+        "fashion_latest_run",
+        "fashion_generate_synthetic",
+        "fashion_load_synthetic",
+        "fashion_index_products",
+        "fashion_start_index_products",
+        "fashion_get_index_job",
+        "fashion_list_index_jobs",
+        "fashion_get_run_report",
+    }
+)
+
+
+MCP_CUSTOMER_RESOURCE_PREFIXES = ("ui://widgets/customer-search/workspace",)
+MCP_MERCH_RESOURCE_PREFIXES = ("ui://widgets/merch/workspace", "ui://widgets/unified/workspace")
+MCP_EXEC_RESOURCE_PREFIXES = ("ui://widgets/exec/workspace", "ui://widgets/unified/workspace")
+MCP_UNIFIED_RESOURCE_PREFIX = "ui://widgets/unified/workspace"
+
+
+MCP_BUNDLE_DEFINITIONS: tuple[McpBundleDefinition, ...] = (
+    McpBundleDefinition(
+        name="public",
+        path="/mcp/public",
+        personas=(Persona.SHOPPER,),
+        tool_names=MCP_PUBLIC_TOOL_NAMES,
+        resource_prefixes=(MCP_UNIFIED_RESOURCE_PREFIX,),
+    ),
+    McpBundleDefinition(
+        name="shopper",
+        path="/mcp/shopper",
+        personas=(Persona.SHOPPER,),
+        tool_names=MCP_PUBLIC_TOOL_NAMES,
+        resource_prefixes=(MCP_UNIFIED_RESOURCE_PREFIX,),
+    ),
+    McpBundleDefinition(
+        name="associate",
+        path="/mcp/associate",
+        personas=(Persona.ASSOCIATE,),
+        tool_names=MCP_ASSOCIATE_TOOL_NAMES,
+        resource_prefixes=MCP_CUSTOMER_RESOURCE_PREFIXES,
+    ),
+    McpBundleDefinition(
+        name="associate-send",
+        path="/mcp/associate-send",
+        personas=(Persona.ASSOCIATE, Persona.SEND_CAPABLE),
+        tool_names=MCP_ASSOCIATE_SEND_TOOL_NAMES,
+        resource_prefixes=MCP_CUSTOMER_RESOURCE_PREFIXES,
+    ),
+    McpBundleDefinition(
+        name="merchandiser",
+        path="/mcp/merchandiser",
+        personas=(Persona.MERCHANDISER,),
+        tool_names=MCP_MERCHANDISER_TOOL_NAMES,
+        resource_prefixes=MCP_MERCH_RESOURCE_PREFIXES,
+    ),
+    McpBundleDefinition(
+        name="executive",
+        path="/mcp/executive",
+        personas=(Persona.EXECUTIVE,),
+        tool_names=MCP_EXECUTIVE_TOOL_NAMES,
+        resource_prefixes=MCP_EXEC_RESOURCE_PREFIXES,
+    ),
+    McpBundleDefinition(
+        name="executive-send",
+        path="/mcp/executive-send",
+        personas=(Persona.EXECUTIVE, Persona.SEND_CAPABLE),
+        tool_names=MCP_EXECUTIVE_SEND_TOOL_NAMES,
+        resource_prefixes=MCP_EXEC_RESOURCE_PREFIXES,
+    ),
+    McpBundleDefinition(
+        name="catalog-admin",
+        path="/mcp/catalog-admin",
+        personas=(Persona.CATALOG_ADMIN,),
+        tool_names=MCP_CATALOG_ADMIN_TOOL_NAMES,
+        resource_prefixes=(MCP_UNIFIED_RESOURCE_PREFIX,),
     ),
 )
+
+
+MCP_TOOL_CAPABILITY_IDS = {
+    "fashion_catalog_search": "public.catalog.search",
+    "fashion_catalog_product_detail": "public.catalog.product_detail",
+    "fashion_get_product_feed": "public.catalog.feed",
+    "fashion_lookup_customer": "associate.customer.lookup",
+    "fashion_find_customers": "associate.customer.lookup",
+    "fashion_resolve_customer": "associate.customer.lookup",
+    "fashion_customer_recommendations": "associate.customer.recommendations",
+    "fashion_store_associate_recommend": "associate.customer.recommendations",
+    "fashion_prepare_customer_email_draft": "associate.customer.email.prepare",
+    "fashion_update_customer_email_draft": "associate.customer.email.prepare",
+    "fashion_get_customer_email_draft": "associate.customer.email.prepare",
+    "fashion_send_customer_email_draft": "associate.customer.email.send",
+    "fashion_merch_save_strategy_override": "merch.strategy.override",
+    "fashion_exec_send_strategy_packet_email": "executive.strategy.email.send",
+    "fashion_vector_status": "operator_compatibility.admin",
+    "fashion_latest_run": "operator_compatibility.admin",
+    "fashion_generate_synthetic": "operator_compatibility.admin",
+    "fashion_load_synthetic": "operator_compatibility.admin",
+    "fashion_index_products": "operator_compatibility.admin",
+    "fashion_start_index_products": "operator_compatibility.admin",
+    "fashion_get_index_job": "operator_compatibility.admin",
+    "fashion_list_index_jobs": "operator_compatibility.admin",
+    "fashion_get_run_report": "operator_compatibility.admin",
+}
+
+
+def _resource_belongs_to_bundle(uri: str, prefixes: Iterable[str]) -> bool:
+    return any(uri.startswith(prefix) for prefix in prefixes)
+
+
+def _clone_mcp_server(definition: McpBundleDefinition) -> FastMCP:
+    bundle = _new_mcp_server(f"fashion_db_mcp_{definition.name}")
+    bundle._tool_manager._tools = {
+        name: tool
+        for name, tool in mcp._tool_manager._tools.items()
+        if name in definition.tool_names
+    }
+    bundle._resource_manager._resources = {
+        uri: resource
+        for uri, resource in mcp._resource_manager._resources.items()
+        if _resource_belongs_to_bundle(uri, definition.resource_prefixes)
+    }
+    return bundle
+
+
+def _validate_mcp_capability_map() -> None:
+    missing_tools = set().union(*(definition.tool_names for definition in MCP_BUNDLE_DEFINITIONS)) - set(
+        mcp._tool_manager._tools
+    )
+    if missing_tools:
+        raise ValueError(f"MCP bundle references unknown tools: {sorted(missing_tools)}")
+
+    for tool_name, capability_id in MCP_TOOL_CAPABILITY_IDS.items():
+        capability = get_capability(capability_id)
+        if Surface.MCP not in capability.surfaces:
+            raise ValueError(f"{capability_id} is mapped to {tool_name} but is not available on MCP")
+
+
+def _annotate_mcp_tools_with_capabilities() -> None:
+    for tool_name, capability_id in MCP_TOOL_CAPABILITY_IDS.items():
+        tool = mcp._tool_manager._tools.get(tool_name)
+        if tool is None:
+            continue
+        tool.meta = {
+            **(tool.meta or {}),
+            "x-sterling/capability_id": capability_id,
+            "x-sterling/capability_version": REGISTRY_VERSION,
+        }
+
+
+def mcp_tools_for_personas(personas: Iterable[Persona]) -> frozenset[str]:
+    allowed = set(MCP_PUBLIC_TOOL_NAMES)
+    persona_tuple = tuple(personas)
+    for tool_name, capability_id in MCP_TOOL_CAPABILITY_IDS.items():
+        capability = get_capability(capability_id)
+        if capability_allowed_for_personas(capability, persona_tuple):
+            allowed.add(tool_name)
+    for definition in MCP_BUNDLE_DEFINITIONS:
+        if set(definition.personas).issubset(set(persona_tuple)):
+            allowed.update(definition.tool_names)
+    if Persona.SEND_CAPABLE not in persona_tuple:
+        allowed.difference_update(
+            {
+                "fashion_send_customer_sms",
+                "fashion_send_customer_email_draft",
+                "fashion_send_customer_recommendations_email",
+                "fashion_exec_send_strategy_packet_email",
+                "fashion_exec_campaign_autopilot_send",
+            }
+        )
+    return frozenset(allowed)
+
+
+def build_mcp_server_for_personas(
+    name: str,
+    personas: Iterable[Persona],
+    *,
+    resource_prefixes: Iterable[str] = (),
+) -> FastMCP:
+    definition = McpBundleDefinition(
+        name=name,
+        path=f"/mcp/{name}",
+        personas=tuple(personas),
+        tool_names=mcp_tools_for_personas(personas),
+        resource_prefixes=tuple(resource_prefixes),
+    )
+    return _clone_mcp_server(definition)
+
+
+def build_mcp_bundle_servers() -> dict[str, FastMCP]:
+    _annotate_mcp_tools_with_capabilities()
+    _validate_mcp_capability_map()
+    return {definition.path: _clone_mcp_server(definition) for definition in MCP_BUNDLE_DEFINITIONS}
+
+
+_mcp_bundle_servers: dict[str, FastMCP] | None = None
+
+
+def mounted_mcp_servers() -> tuple[tuple[str, FastMCP], ...]:
+    global _mcp_bundle_servers
+    if _mcp_bundle_servers is None:
+        _mcp_bundle_servers = build_mcp_bundle_servers()
+    mcp_bundle_servers = _mcp_bundle_servers
+    return (*mcp_bundle_servers.items(), ("/mcp", mcp))
 
 
 _WIDGET_RESOURCE_META = {

@@ -26,7 +26,7 @@ def test_registry_is_internally_valid():
 
     ids = [capability.id for capability in list_capabilities()]
 
-    assert REGISTRY_VERSION == "2026-06-22.2"
+    assert REGISTRY_VERSION == "2026-06-22.3"
     assert len(ids) == len(set(ids))
     assert all(capability.operation for capability in list_capabilities())
     assert all(capability.input_schema for capability in list_capabilities())
@@ -41,6 +41,7 @@ def test_shopper_policy_excludes_operator_and_customer_lookup_capabilities():
 
     assert "public.catalog.search" in shopper_ids
     assert "public.catalog.product_detail" in shopper_ids
+    assert "public.catalog.feed" in shopper_ids
     assert "associate.customer.lookup" not in shopper_ids
     assert "catalog_admin.product.draft" not in shopper_ids
     assert "developer_trace.read" not in shopper_ids

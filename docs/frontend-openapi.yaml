@@ -27,7 +27,7 @@ paths:
       tags: [catalog-studio-admin]
       summary: Resolve Catalog Studio administrator session
       x-sterling-capability-id: catalog_admin.session
-      x-sterling-capability-version: "2026-06-22"
+      x-sterling-capability-version: "2026-06-22.3"
       x-sterling-api-surface: catalog_admin
       x-sterling-auth-posture: catalog_admin_clerk
       x-sterling-current-frontend-contract: true
@@ -1172,7 +1172,7 @@ paths:
       tags: [chat]
       summary: Storefront chat
       x-sterling-capability-id: shopper.chat.turn
-      x-sterling-capability-version: "2026-06-22"
+      x-sterling-capability-version: "2026-06-22.3"
       x-sterling-api-surface: public_shopper
       x-sterling-auth-posture: optional_clerk
       x-sterling-current-frontend-contract: true
@@ -1232,7 +1232,7 @@ paths:
       tags: [catalog]
       summary: Catalog entry point
       x-sterling-capability-id: public.catalog.search
-      x-sterling-capability-version: "2026-06-22"
+      x-sterling-capability-version: "2026-06-22.3"
       x-sterling-api-surface: public_shopper
       x-sterling-auth-posture: public
       x-sterling-current-frontend-contract: true
@@ -1363,7 +1363,7 @@ paths:
       tags: [catalog]
       summary: Product detail
       x-sterling-capability-id: public.catalog.product_detail
-      x-sterling-capability-version: "2026-06-22"
+      x-sterling-capability-version: "2026-06-22.3"
       x-sterling-api-surface: public_shopper
       x-sterling-auth-posture: public
       x-sterling-current-frontend-contract: true
@@ -1400,7 +1400,7 @@ paths:
       tags: [catalog]
       summary: Product search
       x-sterling-capability-id: public.catalog.search
-      x-sterling-capability-version: "2026-06-22"
+      x-sterling-capability-version: "2026-06-22.3"
       x-sterling-api-surface: public_shopper
       x-sterling-auth-posture: public
       x-sterling-current-frontend-contract: true
@@ -1427,7 +1427,7 @@ paths:
       tags: [recommendations]
       summary: Product recommendations
       x-sterling-capability-id: public.catalog.recommendations
-      x-sterling-capability-version: "2026-06-22"
+      x-sterling-capability-version: "2026-06-22.3"
       x-sterling-api-surface: public_shopper
       x-sterling-auth-posture: public
       x-sterling-current-frontend-contract: true

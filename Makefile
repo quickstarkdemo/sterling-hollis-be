@@ -60,7 +60,8 @@ reindex-latest:
 mcp-smoke:
 	set -euo pipefail; \
 	until curl -fsS $(API_URL)/health >/dev/null; do sleep 2; done; \
-	scripts/run_mcp_smoke.sh $(API_URL)/mcp
+	scripts/run_mcp_smoke.sh $(API_URL)/mcp; \
+	.venv/bin/python scripts/mcp_bundle_smoke.py $(API_URL)
 
 openapi:
 	.venv/bin/python scripts/export_openapi.py
