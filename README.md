@@ -305,6 +305,16 @@ customers, and products, applies the same luxury retail seasonality curve used
 by the full generator, and rewrites date-scoped daily IDs such as
 `daily_ord_20260621_00001` so reruns do not duplicate orders.
 
+Against a deployed API, use the equivalent admin catch-up endpoint:
+
+```bash
+curl -X POST https://sterling-hollis-be.quickstark.com/admin/synthetic/daily-orders \
+  -H 'Content-Type: application/json' \
+  -d '{"max_days":14,"dry_run":true}'
+```
+
+Change `dry_run` to `false` to append the planned orders.
+
 For production Compose, the `daily-synthetic-orders` service supplies these
 defaults and enables daily refresh. Set `SYNTHETIC_DAILY_ORDERS_ENABLED=false`
 in the deployment shell if a deployment should keep the scheduler container

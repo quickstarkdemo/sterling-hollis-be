@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
@@ -88,6 +88,48 @@ class SyntheticLoadRequest(BaseModel):
 class SyntheticLoadResponse(BaseModel):
     run_id: str
     loaded_rows: dict[str, int]
+
+
+class DailySyntheticOrdersRequest(BaseModel):
+    seed: int | None = None
+    from_date: date | None = None
+    through_date: date | None = None
+    max_days: int | None = Field(default=None, ge=1, le=366)
+    min_orders: int | None = Field(default=None, ge=0, le=10_000)
+    max_orders: int | None = Field(default=None, ge=0, le=10_000)
+    base_orders: int | None = Field(default=None, ge=1, le=10_000)
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def validate_order_bounds(self):
+        if (
+            self.min_orders is not None
+            and self.max_orders is not None
+            and self.min_orders > self.max_orders
+        ):
+            raise ValueError("min_orders must be less than or equal to max_orders")
+        return self
+
+
+class DailySyntheticOrderTargetDay(BaseModel):
+    date: date
+    orders: int
+
+
+class DailySyntheticOrdersResponse(BaseModel):
+    run_id: str | None
+    dry_run: bool
+    latest_order_date: date | None
+    requested_start_date: date | None
+    requested_through_date: date
+    target_days: list[DailySyntheticOrderTargetDay]
+    base_orders: int
+    planned_orders: int
+    inserted_orders: int
+    inserted_items: int
+    metrics_refreshed: int
+    validation_failures: int
+    skipped_reason: str | None = None
 
 
 class IndexProductsRequest(BaseModel):
