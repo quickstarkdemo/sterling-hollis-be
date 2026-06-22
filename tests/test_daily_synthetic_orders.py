@@ -366,3 +366,29 @@ def test_daily_synthetic_orders_cli_outputs_dry_run_json(monkeypatch, capsys, se
     assert '"dry_run": true' in out
     assert '"planned_orders": 8' in out
     assert '"inserted_orders": 0' in out
+
+
+def test_daily_synthetic_orders_admin_endpoint_runs_catchup(sessions):
+    from app.routers.admin_synthetic import generate_daily_orders
+    from app.schemas import DailySyntheticOrdersRequest
+
+    with sessions() as db:
+        _add_source_data(db)
+
+        response = generate_daily_orders(
+            DailySyntheticOrdersRequest(
+                from_date=date(2026, 6, 20),
+                through_date=date(2026, 6, 20),
+                base_orders=8,
+                min_orders=8,
+                max_orders=8,
+            ),
+            db,
+        )
+
+        assert response.run_id == "daily_orders_20260620_20260620"
+        assert response.dry_run is False
+        assert response.planned_orders == 8
+        assert response.inserted_orders == 8
+        assert response.metrics_refreshed > 0
+        assert db.scalar(select(func.count()).select_from(Order).where(Order.seed_run_id == response.run_id)) == 8

@@ -11,6 +11,9 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import Product, ProductEmbedding, SyntheticRun
 from app.schemas import (
+    DailySyntheticOrderTargetDay,
+    DailySyntheticOrdersRequest,
+    DailySyntheticOrdersResponse,
     DemoObservabilityLogSendResponse,
     DemoObservabilityMode,
     DemoObservabilityStateResponse,
@@ -34,6 +37,10 @@ from app.services.demo_observability import (
     reset_demo_observability_state,
     send_network_outage_snmp_trap_log,
     update_demo_observability_state,
+)
+from app.services.daily_synthetic_orders import (
+    DailyOrderGenerationOptions,
+    generate_daily_synthetic_orders,
 )
 from app.services.image_jobs import (
     enqueue_image_generation_job,
@@ -187,6 +194,46 @@ def load_synthetic(req: SyntheticLoadRequest, db: Session = Depends(get_db)):
     db.commit()
 
     return SyntheticLoadResponse(run_id=req.run_id, loaded_rows=loaded_rows)
+
+
+@router.post("/synthetic/daily-orders", response_model=DailySyntheticOrdersResponse)
+def generate_daily_orders(req: DailySyntheticOrdersRequest, db: Session = Depends(get_db)):
+    settings = get_settings()
+    try:
+        result = generate_daily_synthetic_orders(
+            db,
+            DailyOrderGenerationOptions(
+                seed=req.seed if req.seed is not None else settings.synthetic_daily_seed,
+                from_date=req.from_date,
+                through_date=req.through_date,
+                max_days=req.max_days if req.max_days is not None else settings.synthetic_daily_max_catchup_days,
+                min_orders=req.min_orders if req.min_orders is not None else settings.synthetic_daily_min_orders,
+                max_orders=req.max_orders if req.max_orders is not None else settings.synthetic_daily_max_orders,
+                base_orders=req.base_orders if req.base_orders is not None else settings.synthetic_daily_base_orders,
+                dry_run=req.dry_run,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return DailySyntheticOrdersResponse(
+        run_id=result.run_id,
+        dry_run=result.dry_run,
+        latest_order_date=result.latest_order_date,
+        requested_start_date=result.requested_start_date,
+        requested_through_date=result.requested_through_date,
+        target_days=[
+            DailySyntheticOrderTargetDay(date=day.target_date, orders=day.order_count)
+            for day in result.target_days
+        ],
+        base_orders=result.base_orders,
+        planned_orders=result.planned_orders,
+        inserted_orders=result.inserted_orders,
+        inserted_items=result.inserted_items,
+        metrics_refreshed=result.metrics_refreshed,
+        validation_failures=result.validation_failures,
+        skipped_reason=result.skipped_reason,
+    )
 
 
 @router.post("/synthetic/index-products", response_model=IndexProductsResponse)
