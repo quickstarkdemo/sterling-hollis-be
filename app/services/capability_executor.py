@@ -13,6 +13,10 @@ from app.services.capabilities import (
     capability_allowed_for_personas,
     get_capability,
 )
+from app.services.capability_tracing import (
+    annotate_capability_span,
+    capability_trace_attributes,
+)
 
 
 T = TypeVar("T")
@@ -103,28 +107,20 @@ def execute_capability(
         with api_trace_operation(
             "Execute capability",
             "capability.execute",
-            attributes={
-                "capability_id": capability.id,
-                "persona": persona.value,
-                "surface": context.surface.value,
-                "selected_tool": context.selected_tool,
-                "selected_agent": context.selected_agent,
-                "actor_id": context.actor_id,
-                "session_id": context.session_id,
-                **dict(context.attributes),
-            },
+            attributes=capability_trace_attributes(
+                capability=capability,
+                persona=persona,
+                surface=context.surface,
+                selected_tool=context.selected_tool,
+                selected_agent=context.selected_agent,
+                actor_id=context.actor_id,
+                session_id=context.session_id,
+                approval_state=context.approval_state,
+                attributes=context.attributes,
+            ),
         ) as trace_span:
             output = handler()
-            if trace_span is not None:
-                trace_span.annotate(
-                    capability_id=capability.id,
-                    persona=persona.value,
-                    surface=context.surface.value,
-                    selected_tool=context.selected_tool,
-                    selected_agent=context.selected_agent,
-                    result_type=type(output).__name__,
-                    status=status,
-                )
+            annotate_capability_span(trace_span, output=output, status=status)
     except Exception:
         status = "failed"
         raise

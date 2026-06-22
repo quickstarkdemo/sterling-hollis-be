@@ -10,6 +10,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api_traces.context import TraceCaptureContext, bind_trace_capture_context
+from app.api_traces.operations import api_trace_session
+from app.config import Settings
 from app.database import Base
 from app.models import (
     CatalogProduct,
@@ -1303,6 +1306,31 @@ def test_exec_auto_optimize_strategy_is_deterministic(monkeypatch):
 def test_exec_strategy_packet_lifecycle_and_email_gate(monkeypatch):
     import app.services.executive as executive_service
 
+    recorded = []
+
+    class FakeRecorder:
+        def __init__(self, *, settings):
+            self.settings = settings
+
+        def record(self, *, context, projection):
+            recorded.append(projection)
+            return True
+
+    monkeypatch.setattr("app.api_traces.operations.ApiTraceRecorder", FakeRecorder)
+    trace_settings = Settings(
+        _env_file=None,
+        database_url="postgresql+psycopg://postgres:postgres@localhost:5432/productdb",
+        api_trace_capture_enabled=True,
+    )
+    trace_context = TraceCaptureContext(
+        owner_provider="clerk",
+        owner_provider_user_id="owner_a",
+        surface="mcp",
+        authorized=True,
+        trace_id="3" * 32,
+        span_id="4" * 16,
+    )
+
     with _patched_runtime(monkeypatch) as (session, mcp_server):
         _seed_data(session)
         _set_strategy_flags(monkeypatch, mcp_server, exec_auto=True, packet=True)
@@ -1363,10 +1391,25 @@ def test_exec_strategy_packet_lifecycle_and_email_gate(monkeypatch):
         with pytest.raises(ValueError):
             mcp_server.fashion_exec_send_strategy_packet_email(packet_id=packet.packet_id, approved=False)
 
-        sent = mcp_server.fashion_exec_send_strategy_packet_email(packet_id=packet.packet_id, approved=True)
+        with bind_trace_capture_context(trace_context), api_trace_session(
+            settings=trace_settings,
+            name="MCP strategy email send",
+        ):
+            sent = mcp_server.fashion_exec_send_strategy_packet_email(packet_id=packet.packet_id, approved=True)
         assert sent.packet_id == packet.packet_id
         assert sent.email_status.value == "sent"
         assert sent.provider_message_id == "SES_STRAT_001"
+
+        send_span = next(span for span in recorded[0].spans if span.operation == "capability.execute")
+        assert send_span.attributes["capability_id"] == "executive.strategy.email.send"
+        assert send_span.attributes["surface"] == "mcp"
+        assert send_span.attributes["persona"] == "executive"
+        assert send_span.attributes["selected_tool"] == "fashion_exec_send_strategy_packet_email"
+        assert send_span.attributes["approval_required"] is True
+        assert send_span.attributes["approval_field"] == "approved"
+        assert send_span.attributes["approval_granted"] is True
+        assert send_span.attributes["result_type"] == "ExecutiveStrategyPacketEmailSendResponse"
+        assert "manager@example.com" not in str(send_span.attributes)
 
         fetched = mcp_server.fashion_exec_get_strategy_packet(packet.packet_id)
         assert fetched.email_status.value == "sent"
@@ -2433,6 +2476,53 @@ def test_mcp_tool_capability_metadata_is_registered(monkeypatch):
             associate_send_tools["fashion_send_customer_email_draft"].meta["x-sterling/capability_id"]
             == "associate.customer.email.send"
         )
+
+
+def test_mcp_public_catalog_tool_records_unified_capability_trace(monkeypatch):
+    recorded = []
+
+    class FakeRecorder:
+        def __init__(self, *, settings):
+            self.settings = settings
+
+        def record(self, *, context, projection):
+            recorded.append(projection)
+            return True
+
+    monkeypatch.setattr("app.api_traces.operations.ApiTraceRecorder", FakeRecorder)
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+psycopg://postgres:postgres@localhost:5432/productdb",
+        api_trace_capture_enabled=True,
+    )
+    context = TraceCaptureContext(
+        owner_provider="clerk",
+        owner_provider_user_id="owner_a",
+        surface="mcp",
+        authorized=True,
+        trace_id="1" * 32,
+        span_id="2" * 16,
+    )
+
+    with _patched_runtime(monkeypatch) as (session, mcp_server):
+        _seed_data(session)
+        backfill_catalog_from_legacy_products(session, run_id="run_test")
+        with bind_trace_capture_context(context), api_trace_session(settings=settings, name="MCP catalog search"):
+            result = mcp_server.fashion_catalog_search(store_id="1001", limit=3)
+
+    assert result.structuredContent["payload"]["count"] >= 1
+    span = next(span for span in recorded[0].spans if span.operation == "capability.execute")
+    assert span.attributes["capability_id"] == "public.catalog.search"
+    assert span.attributes["capability_operation"] == "catalog"
+    assert span.attributes["capability_side_effect"] == "read"
+    assert span.attributes["surface"] == "mcp"
+    assert span.attributes["persona"] == "shopper"
+    assert span.attributes["selected_tool"] == "fashion_catalog_search"
+    assert span.attributes["selected_agent"] == "FastMCP"
+    assert span.attributes["approval_required"] is False
+    assert span.attributes["result_type"] == "CallToolResult"
+    assert span.attributes["result_count"] >= 1
+    assert "query" not in span.attributes
 
 
 def test_mcp_catalog_discovery_exposes_only_published_normalized_products(monkeypatch):

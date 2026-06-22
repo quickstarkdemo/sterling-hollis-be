@@ -425,6 +425,15 @@ All trace lookup failures return `404` without revealing whether another owner
 has the identifier. Disabled capture returns `503`; `/api/admin/session` reports
 the safe `api_traces` capability reason `feature_disabled`.
 
+Capability executions across chat, admin assistant, and MCP use
+`operation=capability.execute` spans. Those spans share the same core attributes:
+`capability_id`, `capability_operation`, `capability_side_effect`, `persona`,
+`surface`, `selected_tool`, `selected_agent`, `approval_required`,
+`approval_granted`, `result_type`, and `result_count`. Span `duration_ms` remains
+the performance timing source. The attributes intentionally record counts and
+stable routing identifiers rather than customer, recipient, or draft payload
+content; exported traces still pass through the configured redaction policy.
+
 ## Catalog Studio Supplier Sources
 
 Supplier handoff images are private authoring evidence, not public product
