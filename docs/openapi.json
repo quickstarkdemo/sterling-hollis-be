@@ -457,6 +457,209 @@
         "title": "AdminProductResponseV3",
         "type": "object"
       },
+      "AdminProductReviewListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminProductReviewResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AdminProductReviewListResponse",
+        "type": "object"
+      },
+      "AdminProductReviewResponse": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewActionResponse"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "author_display_name": {
+            "title": "Author Display Name",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "external_review_id": {
+            "title": "External Review Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "moderation": {
+            "$ref": "#/components/schemas/ReviewModerationResponse"
+          },
+          "product_id": {
+            "title": "Product Id",
+            "type": "string"
+          },
+          "rating": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rating",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "submitted_at": {
+            "format": "date-time",
+            "title": "Submitted At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "source",
+          "external_review_id",
+          "author_display_name",
+          "body",
+          "rating",
+          "submitted_at",
+          "moderation"
+        ],
+        "title": "AdminProductReviewResponse",
+        "type": "object"
+      },
+      "ApiTraceProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/TraceArtifactProjection"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TraceEventProjection"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/TraceLinkProjection"
+            },
+            "title": "Links",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "payload_expired": {
+            "default": false,
+            "title": "Payload Expired",
+            "type": "boolean"
+          },
+          "projection_version": {
+            "const": "1.0",
+            "default": "1.0",
+            "title": "Projection Version",
+            "type": "string"
+          },
+          "root_span_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Root Span Id",
+            "type": "string"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSpanProjection"
+            },
+            "title": "Spans",
+            "type": "array"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "surface": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Surface",
+            "type": "string"
+          },
+          "trace_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "truncation": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Truncation",
+            "type": "object"
+          }
+        },
+        "required": [
+          "trace_id",
+          "surface",
+          "name",
+          "root_span_id",
+          "status",
+          "started_at"
+        ],
+        "title": "ApiTraceProjection",
+        "type": "object"
+      },
       "ArchiveRequest": {
         "properties": {
           "expected_version": {
@@ -739,6 +942,69 @@
         "title": "CatalogAICommandRequest",
         "type": "object"
       },
+      "CatalogAIDirectSuggestionCommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "expected_draft_version": {
+            "minimum": 1.0,
+            "title": "Expected Draft Version",
+            "type": "integer"
+          },
+          "input_origin": {
+            "enum": [
+              "supplier_analysis",
+              "typed_action"
+            ],
+            "title": "Input Origin",
+            "type": "string"
+          },
+          "instruction": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "source_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Source Asset Ids",
+            "type": "array"
+          },
+          "target_paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 40,
+            "minItems": 1,
+            "title": "Target Paths",
+            "type": "array"
+          },
+          "workflow_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "expected_draft_version",
+          "workflow_id",
+          "instruction",
+          "input_origin",
+          "target_paths"
+        ],
+        "title": "CatalogAIDirectSuggestionCommandRequest",
+        "type": "object"
+      },
       "CatalogAIDraftResult": {
         "properties": {
           "base_version": {
@@ -782,6 +1048,79 @@
           "product"
         ],
         "title": "CatalogAIDraftResult",
+        "type": "object"
+      },
+      "CatalogAISuggestionCommandResult": {
+        "properties": {
+          "follow_up_questions": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogAIUnknownField"
+            },
+            "title": "Follow Up Questions",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "succeeded",
+              "blocked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suggestion_set": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogSuggestionSetResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "message"
+        ],
+        "title": "CatalogAISuggestionCommandResult",
+        "type": "object"
+      },
+      "CatalogAIUnknownField": {
+        "additionalProperties": false,
+        "description": "An unresolved fact that must remain outside canonical product state.",
+        "properties": {
+          "question": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "target_path": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Target Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_path",
+          "question"
+        ],
+        "title": "CatalogAIUnknownField",
         "type": "object"
       },
       "CatalogAIWorkflowResponse": {
@@ -828,6 +1167,39 @@
           "workflow"
         ],
         "title": "CatalogAIWorkflowResponse",
+        "type": "object"
+      },
+      "CatalogAssistantQueryRequest": {
+        "properties": {
+          "query_scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "catalog",
+                    "inventory"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Scopes"
+          },
+          "question": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "CatalogAssistantQueryRequest",
         "type": "object"
       },
       "CatalogCapabilityStatus": {
@@ -1761,6 +2133,88 @@
         "title": "CatalogProduct",
         "type": "object"
       },
+      "CatalogRealtimeSessionContextRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Id"
+          },
+          "expected_draft_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Draft Version"
+          },
+          "mode": {
+            "enum": [
+              "workbench",
+              "field"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product Id"
+          },
+          "query_scopes": {
+            "items": {
+              "enum": [
+                "product",
+                "catalog",
+                "inventory",
+                "readiness"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Query Scopes",
+            "type": "array"
+          },
+          "target_path": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Path"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "CatalogRealtimeSessionContextRequest",
+        "type": "object"
+      },
       "CatalogRealtimeSessionResponse": {
         "properties": {
           "client_secret": {
@@ -1776,13 +2230,38 @@
             "title": "Model",
             "type": "string"
           },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
           "tool_names": {
             "items": {
-              "enum": [
-                "create_catalog_draft",
-                "refine_catalog_draft"
-              ],
-              "type": "string"
+              "anyOf": [
+                {
+                  "enum": [
+                    "create_catalog_draft",
+                    "refine_catalog_draft"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    "read_product_summary",
+                    "read_catalog_summary",
+                    "read_inventory_status",
+                    "read_publish_readiness",
+                    "propose_product_field"
+                  ],
+                  "type": "string"
+                }
+              ]
             },
             "title": "Tool Names",
             "type": "array"
@@ -1868,6 +2347,78 @@
         "title": "CatalogRealtimeToolCallRequest",
         "type": "object"
       },
+      "CatalogRealtimeV3ToolArguments": {
+        "additionalProperties": false,
+        "properties": {
+          "instruction": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instruction"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          }
+        },
+        "title": "CatalogRealtimeV3ToolArguments",
+        "type": "object"
+      },
+      "CatalogRealtimeV3ToolCallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "$ref": "#/components/schemas/CatalogRealtimeV3ToolArguments"
+          },
+          "call_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Call Id",
+            "type": "string"
+          },
+          "name": {
+            "enum": [
+              "read_product_summary",
+              "read_catalog_summary",
+              "read_inventory_status",
+              "read_publish_readiness",
+              "propose_product_field"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "call_id",
+          "name",
+          "arguments"
+        ],
+        "title": "CatalogRealtimeV3ToolCallRequest",
+        "type": "object"
+      },
       "CatalogReferenceData": {
         "properties": {
           "availability": {
@@ -1910,6 +2461,15 @@
       },
       "CatalogSourceAssetResponse": {
         "properties": {
+          "asset_kind": {
+            "default": "image",
+            "enum": [
+              "image",
+              "document"
+            ],
+            "title": "Asset Kind",
+            "type": "string"
+          },
           "byte_size": {
             "exclusiveMinimum": 0.0,
             "title": "Byte Size",
@@ -1925,7 +2485,10 @@
             "enum": [
               "image/jpeg",
               "image/png",
-              "image/webp"
+              "image/webp",
+              "text/plain",
+              "application/pdf",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             ],
             "title": "Content Type",
             "type": "string"
@@ -2060,6 +2623,13 @@
             "title": "Id",
             "type": "string"
           },
+          "rejected_assets": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogSourceRejectedAssetResponse"
+            },
+            "title": "Rejected Assets",
+            "type": "array"
+          },
           "status": {
             "const": "active",
             "title": "Status",
@@ -2134,8 +2704,46 @@
         "title": "CatalogSourcePromotionResponse",
         "type": "object"
       },
+      "CatalogSourceRejectedAssetResponse": {
+        "properties": {
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "rejected",
+            "default": "rejected",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "original_filename",
+          "reason"
+        ],
+        "title": "CatalogSourceRejectedAssetResponse",
+        "type": "object"
+      },
       "CatalogStudioCapabilities": {
         "properties": {
+          "api_traces": {
+            "$ref": "#/components/schemas/CapabilityStatus"
+          },
           "catalog": {
             "$ref": "#/components/schemas/CatalogCapabilityStatus"
           },
@@ -2161,6 +2769,7 @@
           "image_generation",
           "realtime",
           "worker_storage",
+          "api_traces",
           "catalog"
         ],
         "title": "CatalogStudioCapabilities",
@@ -2602,6 +3211,84 @@
           "price_max"
         ],
         "title": "CatalogVariant",
+        "type": "object"
+      },
+      "CatalogVoiceCitation": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "product",
+              "catalog",
+              "inventory",
+              "readiness"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "kind",
+          "source_id",
+          "label",
+          "value"
+        ],
+        "title": "CatalogVoiceCitation",
+        "type": "object"
+      },
+      "CatalogVoiceToolResult": {
+        "properties": {
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogVoiceCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "mutation": {
+            "const": false,
+            "default": false,
+            "title": "Mutation",
+            "type": "boolean"
+          },
+          "status": {
+            "default": "succeeded",
+            "enum": [
+              "succeeded",
+              "blocked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suggestion_set": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogSuggestionSetResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "CatalogVoiceToolResult",
         "type": "object"
       },
       "CatalogWorkflowResponse": {
@@ -3194,6 +3881,81 @@
           "decision"
         ],
         "title": "ChatToolTrace",
+        "type": "object"
+      },
+      "ClientTraceEventInput": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "event_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_type": {
+            "enum": [
+              "ui.started",
+              "ui.completed",
+              "ui.failed",
+              "http.started",
+              "http.completed",
+              "http.failed",
+              "realtime.connected",
+              "realtime.disconnected",
+              "realtime.error"
+            ],
+            "title": "Event Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "event_id",
+          "name",
+          "event_type"
+        ],
+        "title": "ClientTraceEventInput",
         "type": "object"
       },
       "CustomerRecommendationRequest": {
@@ -4733,6 +5495,13 @@
           "price_min": {
             "title": "Price Min",
             "type": "number"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/PublicProductReview"
+            },
+            "title": "Reviews",
+            "type": "array"
           },
           "title": {
             "title": "Title",
@@ -6407,101 +7176,6 @@
         "title": "ProductRecommendation",
         "type": "object"
       },
-      "ProductRecommendationRequest": {
-        "properties": {
-          "brand": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Brand"
-          },
-          "budget_max": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Budget Max"
-          },
-          "budget_min": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Budget Min"
-          },
-          "category": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Category"
-          },
-          "customer_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Customer Id"
-          },
-          "include_preorder": {
-            "default": true,
-            "title": "Include Preorder",
-            "type": "boolean"
-          },
-          "occasion": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Occasion"
-          },
-          "store_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Store Id"
-          },
-          "top_k": {
-            "default": 12,
-            "maximum": 50.0,
-            "minimum": 1.0,
-            "title": "Top K",
-            "type": "integer"
-          }
-        },
-        "title": "ProductRecommendationRequest",
-        "type": "object"
-      },
       "ProductRecommendationResponse": {
         "properties": {
           "recommendations": {
@@ -6626,6 +7300,150 @@
         "title": "ProductSpecificationDraft",
         "type": "object"
       },
+      "PublicProductRecommendationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "budget_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Max"
+          },
+          "budget_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Min"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "include_preorder": {
+            "default": true,
+            "title": "Include Preorder",
+            "type": "boolean"
+          },
+          "occasion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occasion"
+          },
+          "store_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Id"
+          },
+          "top_k": {
+            "default": 12,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          }
+        },
+        "title": "PublicProductRecommendationRequest",
+        "type": "object"
+      },
+      "PublicProductReview": {
+        "properties": {
+          "author_display_name": {
+            "title": "Author Display Name",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "merchant_responded_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Responded At"
+          },
+          "merchant_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Response"
+          },
+          "rating": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Rating",
+            "type": "integer"
+          },
+          "submitted_at": {
+            "format": "date-time",
+            "title": "Submitted At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "author_display_name",
+          "body",
+          "rating",
+          "submitted_at"
+        ],
+        "title": "PublicProductReview",
+        "type": "object"
+      },
       "PublishRequest": {
         "properties": {
           "draft_id": {
@@ -6697,6 +7515,258 @@
           "strategy"
         ],
         "title": "RecommendedProduct",
+        "type": "object"
+      },
+      "ReviewActionResponse": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_provider_user_id": {
+            "title": "Actor Provider User Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expected_version": {
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "resulting_version": {
+            "title": "Resulting Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "expected_version",
+          "resulting_version",
+          "actor_provider_user_id",
+          "created_at"
+        ],
+        "title": "ReviewActionResponse",
+        "type": "object"
+      },
+      "ReviewAssistRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "ReviewAssistRequest",
+        "type": "object"
+      },
+      "ReviewDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "approve",
+              "flag",
+              "reject",
+              "save_response",
+              "publish_response"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "response_text": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Text"
+          }
+        },
+        "required": [
+          "action",
+          "expected_version",
+          "reason"
+        ],
+        "title": "ReviewDecisionRequest",
+        "type": "object"
+      },
+      "ReviewModerationResponse": {
+        "properties": {
+          "ai_categories": {
+            "items": {
+              "enum": [
+                "product_quality",
+                "fit",
+                "shipping",
+                "service",
+                "spam",
+                "abuse",
+                "safety",
+                "other"
+              ],
+              "type": "string"
+            },
+            "title": "Ai Categories",
+            "type": "array"
+          },
+          "ai_provider_metadata": {
+            "additionalProperties": true,
+            "title": "Ai Provider Metadata",
+            "type": "object"
+          },
+          "ai_suggested_action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approve",
+                  "flag",
+                  "reject"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Suggested Action"
+          },
+          "ai_theme_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Theme Summary"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "decision_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Reason"
+          },
+          "response_draft": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Draft"
+          },
+          "response_published": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Published"
+          },
+          "response_published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Published At"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "approved",
+              "flagged",
+              "rejected"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "state"
+        ],
+        "title": "ReviewModerationResponse",
         "type": "object"
       },
       "RunReportResponse": {
@@ -7006,6 +8076,411 @@
           }
         },
         "title": "SyntheticVolumes",
+        "type": "object"
+      },
+      "TraceArtifactProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "artifact_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Artifact Type",
+            "type": "string"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "artifact_type",
+          "name"
+        ],
+        "title": "TraceArtifactProjection",
+        "type": "object"
+      },
+      "TraceEventPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TraceEventProjection"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "TraceEventPage",
+        "type": "object"
+      },
+      "TraceEventProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "event_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Event Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 0.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "event_id",
+          "sequence",
+          "name",
+          "event_type",
+          "occurred_at"
+        ],
+        "title": "TraceEventProjection",
+        "type": "object"
+      },
+      "TraceLinkProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "link_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Link Id",
+            "type": "string"
+          },
+          "linked_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked Span Id"
+          },
+          "linked_trace_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Linked Trace Id",
+            "type": "string"
+          },
+          "relationship": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Relationship",
+            "type": "string"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          }
+        },
+        "required": [
+          "link_id",
+          "linked_trace_id",
+          "relationship"
+        ],
+        "title": "TraceLinkProjection",
+        "type": "object"
+      },
+      "TraceListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSummaryProjection"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TraceListResponse",
+        "type": "object"
+      },
+      "TraceSpanProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "operation": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Operation",
+            "type": "string"
+          },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Span Id"
+          },
+          "service": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Service",
+            "type": "string"
+          },
+          "span_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Span Id",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "span_id",
+          "name",
+          "operation",
+          "service",
+          "status",
+          "started_at"
+        ],
+        "title": "TraceSpanProjection",
+        "type": "object"
+      },
+      "TraceSummaryProjection": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "payload_expired": {
+            "default": false,
+            "title": "Payload Expired",
+            "type": "boolean"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "surface": {
+            "title": "Surface",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "surface",
+          "name",
+          "status",
+          "started_at"
+        ],
+        "title": "TraceSummaryProjection",
         "type": "object"
       },
       "ValidationError": {
@@ -7815,6 +9290,16 @@
         "summary": "Demo Observability State",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       },
       "post": {
@@ -7854,6 +9339,16 @@
         "summary": "Set Demo Observability State",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -7875,6 +9370,16 @@
         "summary": "Send Demo Network Outage Log",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -7896,6 +9401,16 @@
         "summary": "Reset Demo Observability",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -7915,6 +9430,16 @@
         "summary": "Trigger Demo Observability Error",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -7956,6 +9481,16 @@
         "summary": "Generate Product Images",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8017,6 +9552,16 @@
         "summary": "Image Generation Jobs",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8059,6 +9604,16 @@
         "summary": "Image Generation Job",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8108,6 +9663,16 @@
         "summary": "Seed Load Entity",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8158,6 +9723,16 @@
         "summary": "Seed Finalize",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8199,6 +9774,16 @@
         "summary": "Generate Synthetic",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8240,6 +9825,16 @@
         "summary": "Index Products",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8281,6 +9876,16 @@
         "summary": "Load Synthetic",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8323,6 +9928,16 @@
         "summary": "Run Report",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8366,6 +9981,72 @@
         "summary": "Vector Status",
         "tags": [
           "admin"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.admin",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/assistant/query": {
+      "post": {
+        "operationId": "query_catalog_assistant_api_admin_catalog_assistant_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogAssistantQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogVoiceToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Answer a bounded read-only catalog assistant question",
+        "tags": [
+          "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8499,6 +10180,16 @@
         "summary": "Search products across administrative lifecycle states",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8558,6 +10249,16 @@
         "summary": "Create a private catalog product draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8605,6 +10306,16 @@
         "summary": "Inspect catalog lifecycle and revision history",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8673,6 +10384,16 @@
         "summary": "Archive a published catalog product",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.publish",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8741,6 +10462,16 @@
         "summary": "Stage a private revision of a catalog product",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8809,6 +10540,247 @@
         "summary": "Atomically publish an approved catalog draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.publish",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/products/{product_id}/reviews": {
+      "get": {
+        "operationId": "list_catalog_product_reviews_api_admin_catalog_products__product_id__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProductReviewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "List private product review moderation state",
+        "tags": [
+          "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/products/{product_id}/reviews/{review_id}/assist": {
+      "post": {
+        "operationId": "assist_catalog_product_review_api_admin_catalog_products__product_id__reviews__review_id__assist_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewAssistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProductReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Generate a reviewable moderation and response proposal",
+        "tags": [
+          "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/products/{product_id}/reviews/{review_id}/decisions": {
+      "post": {
+        "operationId": "decide_catalog_product_review_api_admin_catalog_products__product_id__reviews__review_id__decisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true,
+            "schema": {
+              "title": "Review Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProductReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Record a versioned product review moderation decision",
+        "tags": [
+          "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8877,6 +10849,16 @@
         "summary": "Start a private revision from the current published snapshot",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8903,6 +10885,16 @@
         "summary": "List owned private supplier source bundles",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       },
       "post": {
@@ -8947,6 +10939,16 @@
         "summary": "Upload private supplier images for catalog authoring",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -8994,6 +10996,16 @@
         "summary": "Read an owned private supplier source bundle",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9043,6 +11055,16 @@
         "summary": "Remove an unattached private supplier source image",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9092,6 +11114,16 @@
         "summary": "Read an authorized bounded supplier image preview",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9169,6 +11201,16 @@
         "summary": "Promote a private supplier source into approved draft media",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9228,6 +11270,16 @@
         "summary": "Add a canonical catalog brand",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9361,6 +11413,16 @@
         "summary": "Search canonical products across lifecycle states",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9420,6 +11482,16 @@
         "summary": "Create a canonical product-level catalog draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9467,6 +11539,16 @@
         "summary": "Inspect canonical product-level authoring state",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9535,6 +11617,16 @@
         "summary": "Archive a canonical product",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.publish",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9603,6 +11695,16 @@
         "summary": "Stage a canonical product-level revision",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9671,6 +11773,16 @@
         "summary": "Publish a canonical product-level draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.publish",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9739,6 +11851,16 @@
         "summary": "Start a canonical product-level revision",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9765,6 +11887,16 @@
         "summary": "List canonical catalog authoring references",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9824,6 +11956,16 @@
         "summary": "Create a structured catalog authoring draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9871,6 +12013,94 @@
         "summary": "Inspect structured product authoring state",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/v3/products/{product_id}/ai-suggestion-sets": {
+      "post": {
+        "operationId": "generate_catalog_suggestion_set_v3_api_admin_catalog_v3_products__product_id__ai_suggestion_sets_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogAIDirectSuggestionCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogAISuggestionCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Generate grounded, reviewable product field suggestions",
+        "tags": [
+          "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9939,6 +12169,16 @@
         "summary": "Stage a structured catalog authoring revision",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -9995,6 +12235,16 @@
         "summary": "Preview a structured product without private source references",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10051,6 +12301,16 @@
         "summary": "Evaluate blocking and recommended catalog readiness checks",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10119,6 +12379,16 @@
         "summary": "Publish a ready structured catalog draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.publish",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10187,6 +12457,16 @@
         "summary": "Start a structured catalog product revision",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10234,6 +12514,16 @@
         "summary": "List private reviewable product suggestions",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       },
       "post": {
@@ -10300,6 +12590,16 @@
         "summary": "Create reviewable product field suggestions",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10377,6 +12677,16 @@
         "summary": "Accept, reject, or supersede product field suggestions",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10436,6 +12746,16 @@
         "summary": "Start a sanitized OpenAI catalog workflow",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10495,6 +12815,16 @@
         "summary": "Read a Catalog Studio workflow timeline",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10563,6 +12893,16 @@
         "summary": "Generate or refine a moderated product draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10620,6 +12960,16 @@
         "summary": "Append a sanitized OpenAI workflow event",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10688,6 +13038,16 @@
         "summary": "Generate or refine an image for the current catalog draft",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10744,6 +13104,16 @@
         "summary": "Read a Catalog Studio image job",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10810,6 +13180,16 @@
         "summary": "Approve a generated image for catalog publication",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10878,6 +13258,16 @@
         "summary": "Generate coherent images for the remaining catalog variants",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -10934,6 +13324,16 @@
         "summary": "Read aggregate and child status for a catalog image variant set",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11002,6 +13402,16 @@
         "summary": "Create a product media variation from the approved core image",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11070,6 +13480,16 @@
         "summary": "Set main, reorder, remove, or restore product media",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11087,6 +13507,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CatalogRealtimeSessionContextRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "content": {
@@ -11117,6 +13554,16 @@
         "summary": "Create a workflow-bound Realtime voice session",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.catalog.manage",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11185,6 +13632,94 @@
         "summary": "Execute an approved Realtime catalog draft tool call",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/catalog/workflows/{workflow_id}/realtime/v3/tool-calls": {
+      "post": {
+        "operationId": "execute_catalog_realtime_v3_tool_call_api_admin_catalog_workflows__workflow_id__realtime_v3_tool_calls_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogRealtimeV3ToolCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogVoiceToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Execute a bounded Realtime product query or field proposal",
+        "tags": [
+          "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.product.draft",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11211,6 +13746,431 @@
         "summary": "Catalog Studio Session",
         "tags": [
           "catalog-studio-admin"
+        ],
+        "x-sterling-api-surface": "catalog_admin",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "catalog_admin.session",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "catalog_admin"
+        ]
+      }
+    },
+    "/api/admin/traces": {
+      "get": {
+        "operationId": "list_api_traces_api_admin_traces_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "List Api Traces",
+        "tags": [
+          "admin-api-traces"
+        ],
+        "x-sterling-api-surface": "developer_trace",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "developer_trace.read",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "developer_trace"
+        ]
+      }
+    },
+    "/api/admin/traces/{trace_id}": {
+      "get": {
+        "operationId": "get_api_trace_api_admin_traces__trace_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._:-]+$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiTraceProjection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Get Api Trace",
+        "tags": [
+          "admin-api-traces"
+        ],
+        "x-sterling-api-surface": "developer_trace",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "developer_trace.read",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "developer_trace"
+        ]
+      }
+    },
+    "/api/admin/traces/{trace_id}/events": {
+      "get": {
+        "operationId": "catch_up_api_trace_events_api_admin_traces__trace_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._:-]+$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_sequence",
+            "required": false,
+            "schema": {
+              "default": -1,
+              "minimum": -1,
+              "title": "After Sequence",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 250,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Catch Up Api Trace Events",
+        "tags": [
+          "admin-api-traces"
+        ],
+        "x-sterling-api-surface": "developer_trace",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "developer_trace.read",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "developer_trace"
+        ]
+      },
+      "post": {
+        "operationId": "ingest_api_trace_event_api_admin_traces__trace_id__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._:-]+$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientTraceEventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceEventProjection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Ingest Api Trace Event",
+        "tags": [
+          "admin-api-traces"
+        ],
+        "x-sterling-api-surface": "developer_trace",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "developer_trace.read",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "developer_trace"
+        ]
+      }
+    },
+    "/api/admin/traces/{trace_id}/export": {
+      "get": {
+        "operationId": "export_api_trace_api_admin_traces__trace_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._:-]+$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Export Api Trace",
+        "tags": [
+          "admin-api-traces"
+        ],
+        "x-sterling-api-surface": "developer_trace",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "developer_trace.read",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "developer_trace"
+        ]
+      }
+    },
+    "/api/admin/traces/{trace_id}/stream": {
+      "get": {
+        "operationId": "stream_api_trace_events_api_admin_traces__trace_id__stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._:-]+$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_sequence",
+            "required": false,
+            "schema": {
+              "default": -1,
+              "minimum": -1,
+              "title": "After Sequence",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ClerkBearer": []
+          }
+        ],
+        "summary": "Stream Api Trace Events",
+        "tags": [
+          "admin-api-traces"
+        ],
+        "x-sterling-api-surface": "developer_trace",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "developer_trace.read",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "developer_trace"
         ]
       }
     },
@@ -11334,6 +14294,20 @@
         "summary": "Catalog Index",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -11356,6 +14330,20 @@
         "summary": "Catalog Categories",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -11511,6 +14499,20 @@
         "summary": "Catalog Products",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -11533,6 +14535,20 @@
         "summary": "Categories",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -11687,6 +14703,20 @@
         "summary": "Category Products",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -11728,6 +14758,17 @@
         "summary": "Chat",
         "tags": [
           "chat"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "optional_clerk",
+        "x-sterling-capability-id": "shopper.chat.turn",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "authenticated_shopper"
         ]
       }
     },
@@ -11754,6 +14795,16 @@
         "summary": "Clerk Demo Observability State",
         "tags": [
           "demo"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "operator_compatibility.demo_observability",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       },
       "post": {
@@ -11798,6 +14849,16 @@
         "summary": "Set Clerk Demo Observability State",
         "tags": [
           "demo"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "operator_compatibility.demo_observability",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11824,6 +14885,16 @@
         "summary": "Send Clerk Demo Network Outage Log",
         "tags": [
           "demo"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "operator_compatibility.demo_observability",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11850,6 +14921,16 @@
         "summary": "Reset Clerk Demo Observability",
         "tags": [
           "demo"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "catalog_admin_clerk",
+        "x-sterling-capability-id": "operator_compatibility.demo_observability",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "catalog_admin"
         ]
       }
     },
@@ -11891,6 +14972,20 @@
         "summary": "Image Analysis",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.image_recommendations",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12118,6 +15213,20 @@
         "summary": "Products",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12178,6 +15287,20 @@
         "summary": "Product Detail",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.product_detail",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12232,6 +15355,20 @@
         "summary": "Product Related",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.recommendations",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12273,6 +15410,20 @@
         "summary": "Image Recommendations",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.image_recommendations",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12283,7 +15434,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProductRecommendationRequest"
+                "$ref": "#/components/schemas/PublicProductRecommendationRequest"
               }
             }
           },
@@ -12314,6 +15465,20 @@
         "summary": "Product Recommendations",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.recommendations",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12468,6 +15633,20 @@
         "summary": "Search Products",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12511,6 +15690,20 @@
         "summary": "Store Categories",
         "tags": [
           "catalog"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "public",
+        "x-sterling-capability-id": "public.catalog.search",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "associate",
+          "merchandiser",
+          "executive",
+          "catalog_admin"
         ]
       }
     },
@@ -12570,6 +15763,17 @@
         "summary": "Openai Product Feed",
         "tags": [
           "recommendations"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.product_feed",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "merchandiser",
+          "catalog_admin"
         ]
       }
     },
@@ -12631,6 +15835,17 @@
         "summary": "Recommend Customer",
         "tags": [
           "recommendations"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.recommendations",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "associate",
+          "merchandiser"
         ]
       }
     },
@@ -12672,6 +15887,17 @@
         "summary": "Recommend Merchandising",
         "tags": [
           "recommendations"
+        ],
+        "x-sterling-api-surface": "operator_compatibility",
+        "x-sterling-auth-posture": "local_or_protected_operator",
+        "x-sterling-capability-id": "operator_compatibility.recommendations",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-22",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-personas": [
+          "associate",
+          "merchandiser"
         ]
       }
     }

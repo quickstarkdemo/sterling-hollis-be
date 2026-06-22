@@ -268,3 +268,14 @@ def test_product_search_and_recommendations_do_not_require_embeddings(monkeypatc
     payload = recs.json()
     assert payload["strategy"] == "sql_catalog_rules"
     assert [row["product"]["title"] for row in payload["recommendations"]] == ["Valentino Rose Dress"]
+
+
+def test_public_product_recommendations_reject_customer_id(monkeypatch):
+    with _catalog_client(monkeypatch) as client:
+        response = client.post(
+            "/api/recommendations/products",
+            json={"store_id": "1001", "customer_id": "cust_1", "top_k": 3},
+        )
+
+    assert response.status_code == 422
+    assert "customer_id" in response.text

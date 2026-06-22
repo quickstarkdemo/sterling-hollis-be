@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.catalog.review_schemas import PublicProductReview
 from app.schemas import StyleConstraints
@@ -128,6 +128,11 @@ class ProductDetailResponse(CatalogProduct):
     reviews: list[PublicProductReview] = Field(default_factory=list)
 
 
+def _validate_budget_range(budget_min: float | None, budget_max: float | None) -> None:
+    if budget_min is not None and budget_max is not None and budget_min > budget_max:
+        raise ValueError("budget_min cannot be greater than budget_max")
+
+
 class ProductRecommendationRequest(BaseModel):
     store_id: str | None = None
     customer_id: str | None = None
@@ -141,9 +146,38 @@ class ProductRecommendationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_budget(self) -> "ProductRecommendationRequest":
-        if self.budget_min is not None and self.budget_max is not None and self.budget_min > self.budget_max:
-            raise ValueError("budget_min cannot be greater than budget_max")
+        _validate_budget_range(self.budget_min, self.budget_max)
         return self
+
+
+class PublicProductRecommendationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: str | None = None
+    category: str | None = None
+    brand: str | None = None
+    occasion: str | None = None
+    budget_min: float | None = None
+    budget_max: float | None = None
+    include_preorder: bool = True
+    top_k: int = Field(default=12, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_budget(self) -> "PublicProductRecommendationRequest":
+        _validate_budget_range(self.budget_min, self.budget_max)
+        return self
+
+    def to_service_request(self) -> ProductRecommendationRequest:
+        return ProductRecommendationRequest(
+            store_id=self.store_id,
+            category=self.category,
+            brand=self.brand,
+            occasion=self.occasion,
+            budget_min=self.budget_min,
+            budget_max=self.budget_max,
+            include_preorder=self.include_preorder,
+            top_k=self.top_k,
+        )
 
 
 class RecommendedProduct(BaseModel):

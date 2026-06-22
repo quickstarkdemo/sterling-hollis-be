@@ -26,6 +26,13 @@ paths:
     get:
       tags: [catalog-studio-admin]
       summary: Resolve Catalog Studio administrator session
+      x-sterling-capability-id: catalog_admin.session
+      x-sterling-capability-version: "2026-06-22"
+      x-sterling-api-surface: catalog_admin
+      x-sterling-auth-posture: catalog_admin_clerk
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: rest
       description: >
         Verifies the Clerk session and server-side administrator policy, then
         returns configuration-only capability flags without probing providers
@@ -1164,6 +1171,13 @@ paths:
     post:
       tags: [chat]
       summary: Storefront chat
+      x-sterling-capability-id: shopper.chat.turn
+      x-sterling-capability-version: "2026-06-22"
+      x-sterling-api-surface: public_shopper
+      x-sterling-auth-posture: optional_clerk
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: rest
       description: >
         Stable retail chat endpoint for product questions, catalog search,
         related products, store contact information, approved service answers,
@@ -1217,6 +1231,13 @@ paths:
     get:
       tags: [catalog]
       summary: Catalog entry point
+      x-sterling-capability-id: public.catalog.search
+      x-sterling-capability-version: "2026-06-22"
+      x-sterling-api-surface: public_shopper
+      x-sterling-auth-posture: public
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: rest
       parameters:
         - $ref: "#/components/parameters/Category"
         - $ref: "#/components/parameters/Brand"
@@ -1341,6 +1362,13 @@ paths:
     get:
       tags: [catalog]
       summary: Product detail
+      x-sterling-capability-id: public.catalog.product_detail
+      x-sterling-capability-version: "2026-06-22"
+      x-sterling-api-surface: public_shopper
+      x-sterling-auth-posture: public
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: rest
       parameters:
         - $ref: "#/components/parameters/ProductId"
         - $ref: "#/components/parameters/StoreIdQuery"
@@ -1371,6 +1399,13 @@ paths:
     get:
       tags: [catalog]
       summary: Product search
+      x-sterling-capability-id: public.catalog.search
+      x-sterling-capability-version: "2026-06-22"
+      x-sterling-api-surface: public_shopper
+      x-sterling-auth-posture: public
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: rest
       parameters:
         - $ref: "#/components/parameters/SearchQueryRequired"
         - $ref: "#/components/parameters/StoreIdQuery"
@@ -1391,12 +1426,19 @@ paths:
     post:
       tags: [recommendations]
       summary: Product recommendations
+      x-sterling-capability-id: public.catalog.recommendations
+      x-sterling-capability-version: "2026-06-22"
+      x-sterling-api-surface: public_shopper
+      x-sterling-auth-posture: public
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: rest
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ProductRecommendationRequest"
+              $ref: "#/components/schemas/PublicProductRecommendationRequest"
       responses:
         "200":
           description: Recommended product cards.
@@ -3574,13 +3616,11 @@ components:
           type: string
         count:
           type: integer
-    ProductRecommendationRequest:
+    PublicProductRecommendationRequest:
       type: object
+      additionalProperties: false
       properties:
         store_id:
-          type: string
-          nullable: true
-        customer_id:
           type: string
           nullable: true
         category:

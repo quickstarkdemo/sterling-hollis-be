@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from app.services.capabilities import (
@@ -93,3 +95,12 @@ def test_send_grant_must_be_combined_with_actor_persona():
 def test_unknown_capability_raises_clear_error():
     with pytest.raises(ValueError, match="Unknown capability"):
         get_capability("missing.capability")
+
+
+def test_catalog_admin_session_capability_references_resolvable_symbols():
+    capability = get_capability("catalog_admin.session")
+
+    for dotted_path in (capability.output_schema, capability.service_handler):
+        module_name, symbol_name = dotted_path.rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        assert getattr(module, symbol_name)
