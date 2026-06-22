@@ -149,6 +149,28 @@ The backend capability registry is the source of truth for persona access:
 `docs/capability-map.md` links each registered capability to its REST paths,
 agent tools, MCP tools, input/output schemas, personas, and approval policy.
 
+## Catalog Studio Route Generations
+
+Catalog Studio product authoring has one recommended generation:
+`/api/admin/catalog/v3/products/*`. OpenAPI marks those operations with
+`x-sterling-contract-status: current` and `x-sterling-admin-generation: v3`.
+
+Compatibility routes remain live for older clients, but OpenAPI marks them with
+`x-sterling-contract-status: compatibility`,
+`x-sterling-current-frontend-contract: false`, and an
+`x-sterling-migration-target`:
+
+| Compatibility family | Use instead |
+| --- | --- |
+| `/api/admin/catalog/products/*` product draft/revision/publish reads and writes | `/api/admin/catalog/v3/products/*` |
+| `/api/admin/catalog/v2/products/*` product draft/revision/publish reads and writes | `/api/admin/catalog/v3/products/*` |
+| `/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls` | `/api/admin/catalog/workflows/{workflow_id}/realtime/v3/tool-calls` |
+
+The v2 reference endpoints remain current for editor bootstrap:
+`GET /api/admin/catalog/v2/references` and `POST /api/admin/catalog/v2/brands`.
+Source bundles, workflow orchestration, image/media commands, review moderation,
+and assistant query routes are current non-product-generation surfaces.
+
 ## Admin/Operations Endpoints Useful During Buildout
 
 These are legacy operator controls for local scripts, maintenance, and
@@ -585,11 +607,12 @@ Trusted fixtures can be imported with:
 python scripts/seed_product_reviews.py --product-id <catalog-product-id>
 ```
 
-### Canonical product-level v2 contract
+### Product-level v2 compatibility projection
 
-New merchandising clients use `/api/admin/catalog/v2/products`. The v2 draft
-contains product-level price, link, color, material, gender, season, media, and
-store inventory. It never returns `variants`, `variant_axes`,
+Current product authoring clients should use `/api/admin/catalog/v3/products`.
+The `/api/admin/catalog/v2/products` routes remain as a compatibility projection
+for product-level price, link, color, material, gender, season, media, and store
+inventory. They never return `variants`, `variant_axes`,
 `primary_variant_index`, objective weights, or variant-owned inventory.
 
 Load `GET /api/admin/catalog/v2/references` once per editor session for sorted,
@@ -601,7 +624,8 @@ create a duplicate. V2 drafts must send the selected `brand_id` together with
 its returned display `brand`, and every inventory `store_id` must exist in the
 reference response.
 
-The v2 lifecycle mirrors the existing optimistic, idempotent workflow:
+The v2 compatibility lifecycle mirrors the existing optimistic, idempotent
+workflow, but new writes should target the v3 lifecycle above:
 
 - `GET /api/admin/catalog/v2/products` lists lifecycle state.
 - `POST /api/admin/catalog/v2/products/drafts` creates a private product draft.
