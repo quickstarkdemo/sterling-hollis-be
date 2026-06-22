@@ -239,7 +239,8 @@ Compose starts:
 - `api`
 - `index-worker`
 - `daily-synthetic-orders` (disabled by default until
-  `SYNTHETIC_DAILY_ORDERS_ENABLED=true`)
+  `SYNTHETIC_DAILY_ORDERS_ENABLED=true`; enabled containers run one startup
+  catch-up before the daily schedule)
 
 The API waits for Postgres, runs `alembic upgrade head`, serves FastAPI, mounts
 `/mcp` when `ENABLE_MCP_ADAPTER=true`, and mounts `/ui-assets` when
@@ -304,11 +305,14 @@ customers, and products, applies the same luxury retail seasonality curve used
 by the full generator, and rewrites date-scoped daily IDs such as
 `daily_ord_20260621_00001` so reruns do not duplicate orders.
 
-For production Compose, the `daily-synthetic-orders` service is included but
-disabled by default. Set these in `deploy/runtime.env` to enable daily refresh:
+For production Compose, the `daily-synthetic-orders` service supplies these
+defaults and enables daily refresh. Set `SYNTHETIC_DAILY_ORDERS_ENABLED=false`
+in the deployment shell if a deployment should keep the scheduler container
+running without mutating data:
 
 ```bash
 SYNTHETIC_DAILY_ORDERS_ENABLED=true
+SYNTHETIC_DAILY_RUN_ON_STARTUP=true
 SYNTHETIC_DAILY_RUN_HOUR_UTC=8
 SYNTHETIC_DAILY_MAX_CATCHUP_DAYS=14
 SYNTHETIC_DAILY_MIN_ORDERS=25
@@ -318,8 +322,10 @@ SYNTHETIC_DAILY_SEED=20260313
 ```
 
 Leave `SYNTHETIC_DAILY_BASE_ORDERS` empty to derive the neutral daily baseline
-from existing orders. Use a manual catch-up with a larger `--max-days` when the
-dataset is months stale, then let the scheduler keep it current.
+from existing orders. With `SYNTHETIC_DAILY_RUN_ON_STARTUP=true`, an enabled
+container performs one bounded catch-up immediately after startup and then keeps
+the daily schedule current. Use a manual catch-up with a larger `--max-days`
+when the dataset needs a wider one-time repair than the automatic cap.
 
 To create a standalone sample without the API:
 
@@ -718,8 +724,9 @@ Production defaults:
 - exposed host port: `8000`
 - Postgres: external instance, not a bundled container
 - transport: REST API and MCP served from the API container on port `8000`
-- daily order refresh: deployed but disabled until
-  `SYNTHETIC_DAILY_ORDERS_ENABLED=true`
+- daily order refresh: deployed and enabled by default in production Compose,
+  with `SYNTHETIC_DAILY_ORDERS_ENABLED=false` available as an emergency
+  stop/opt-out environment override
 
 Deploy flow:
 
