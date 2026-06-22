@@ -487,10 +487,23 @@ from `/product-images/...`.
 
 ## MCP and Apps SDK Widgets
 
-MCP endpoint:
+Full local MCP endpoint:
 
 ```text
 http://localhost:8000/mcp
+```
+
+Persona-scoped MCP endpoints:
+
+```text
+http://localhost:8000/mcp/public/
+http://localhost:8000/mcp/shopper/
+http://localhost:8000/mcp/associate/
+http://localhost:8000/mcp/associate-send/
+http://localhost:8000/mcp/merchandiser/
+http://localhost:8000/mcp/executive/
+http://localhost:8000/mcp/executive-send/
+http://localhost:8000/mcp/catalog-admin/
 ```
 
 Run the local MCP smoke test after the app is running:
@@ -519,14 +532,17 @@ Representative MCP tool groups:
 - Feed compatibility: OpenAI-style export from the normalized published
   catalog.
 
-Use `make mcp-smoke` or an MCP Inspector session to see the current full tool
-surface.
+Use `make mcp-smoke` or an MCP Inspector session to verify the full local tool
+surface plus the persona-scoped bundle boundaries. Public/shopper MCP clients
+only receive published catalog discovery and feed tools. Associate and executive
+send tools are only present on the matching `*-send` bundles, which should be
+exposed only behind an identity layer that grants send authority.
 
 ChatGPT cannot connect to `localhost`; remote ChatGPT Developer Mode usage needs
-the same `/mcp` endpoint exposed at a public HTTPS URL. Do not expose it as a
-bare public endpoint. Put an explicit identity layer in front of it, restrict
-which tools each actor can invoke, and separate read-only, operator, admin, and
-send-capable tools before using it outside a trusted local network. Set
+one of the scoped MCP endpoints exposed at a public HTTPS URL. Do not expose the
+full local `/mcp` endpoint publicly. Put an explicit identity layer in front of
+the persona endpoint, route each actor to the matching bundle, and expose the
+send-capable bundles only after explicit approval policy is in place. Set
 `PUBLIC_BASE_URL`, `MCP_ALLOWED_HOSTS`, and `MCP_ALLOWED_ORIGINS` for that
 deployment.
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 import re
 
@@ -122,16 +122,20 @@ def _demo_network_outage_should_block(path: str, *, product_image_path: str) -> 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     initialize_llm_otel()
-    fashion_mcp = None
+    fashion_mcps: tuple[tuple[str, object], ...] = ()
     if settings.enable_mcp_adapter:
-        from app.mcp_server import mcp as fashion_mcp
+        from app.mcp_server import mounted_mcp_servers
+
+        fashion_mcps = mounted_mcp_servers()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        if fashion_mcp is None:
+        if not fashion_mcps:
             yield
             return
-        async with fashion_mcp.session_manager.run():
+        async with AsyncExitStack() as stack:
+            for _, fashion_mcp in fashion_mcps:
+                await stack.enter_async_context(fashion_mcp.session_manager.run())
             yield
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
@@ -222,8 +226,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     if settings.enable_openai_apps_ui:
         app.mount("/ui-assets", StaticFiles(directory=static_dir), name="ui-assets")
-    if fashion_mcp is not None:
-        app.mount("/mcp", fashion_mcp.streamable_http_app())
+    for mount_path, fashion_mcp in fashion_mcps:
+        app.mount(mount_path, fashion_mcp.streamable_http_app())
     annotate_api_capability_routes(app)
     return app
 

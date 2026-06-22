@@ -48,7 +48,7 @@ class ApprovalMode(StrEnum):
     EXPLICIT_BOOLEAN = "explicit_boolean"
 
 
-REGISTRY_VERSION = "2026-06-22.2"
+REGISTRY_VERSION = "2026-06-22.3"
 
 
 @dataclass(frozen=True)
@@ -165,6 +165,24 @@ CAPABILITIES: tuple[Capability, ...] = (
         "app.catalog.schemas.PublicProductRecommendationRequest",
         "app.catalog.schemas.ProductRecommendationResponse",
         "app.catalog.service.recommend_products",
+    ),
+    _capability(
+        "public.catalog.feed",
+        "Read public product feed",
+        "Export normalized published catalog feed rows for public discovery clients.",
+        Operation.CATALOG,
+        SideEffect.READ,
+        (
+            Persona.SHOPPER,
+            Persona.ASSOCIATE,
+            Persona.MERCHANDISER,
+            Persona.EXECUTIVE,
+            Persona.CATALOG_ADMIN,
+        ),
+        (Surface.MCP,),
+        "store_id, limit",
+        "OpenAI product feed rows",
+        "app.mcp_server.fashion_get_product_feed",
     ),
     _capability(
         "public.catalog.image_recommendations",
@@ -365,7 +383,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         Operation.OPERATOR,
         SideEffect.ADMIN,
         (Persona.CATALOG_ADMIN,),
-        (Surface.REST,),
+        (Surface.REST, Surface.MCP),
         "legacy /admin request",
         "legacy operator response",
         "app.routers.admin_synthetic",
