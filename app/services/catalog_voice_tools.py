@@ -38,9 +38,25 @@ LOW_STOCK_THRESHOLD = 5
 INVENTORY_QUESTION_TOKENS = (
     "available",
     "availability",
+    "candidate",
+    "candidates",
+    "discount",
     "inventory",
+    "item",
+    "items",
     "low",
+    "markdown",
+    "merchandise",
+    "overstock",
+    "product",
+    "products",
+    "promote",
+    "recommend",
+    "recommendation",
     "risk",
+    "sale",
+    "sku",
+    "skus",
     "status",
     "stock",
     "store",
@@ -249,6 +265,28 @@ def _question_mentions_inventory(question: str) -> bool:
     return any(token in normalized for token in INVENTORY_QUESTION_TOKENS)
 
 
+def _question_requests_product_detail(question: str | None) -> bool:
+    normalized = _norm(question)
+    detail_tokens = (
+        "candidate",
+        "candidates",
+        "discount",
+        "item",
+        "items",
+        "markdown",
+        "overstock",
+        "product",
+        "products",
+        "promote",
+        "recommend",
+        "recommendation",
+        "sale",
+        "sku",
+        "skus",
+    )
+    return any(token in normalized for token in detail_tokens)
+
+
 def _mentioned_store_query(db: Session, question: str) -> str | None:
     normalized = _norm(question)
     if not normalized:
@@ -297,6 +335,78 @@ def _store_status_message(row: dict[str, Any]) -> str:
     return (
         f"{row['store_name']} has {row['low_stock_skus']}/{row['sku_count']} SKU(s) low or out of stock, "
         f"{row['units_in_stock']} unit(s) in stock, and {row['preorder_skus']} preorder SKU(s)."
+    )
+
+
+def _product_inventory_citation(product: Product, store: Store) -> CatalogVoiceCitation:
+    margin_pct = float(product.margin_pct or 0.0)
+    return CatalogVoiceCitation(
+        kind="inventory",
+        source_id=product.id,
+        label=f"{store.name}: {product.title}",
+        value={
+            "product_id": product.id,
+            "title": product.title,
+            "store_id": store.id,
+            "store_name": store.name,
+            "brand": product.brand,
+            "category": product.category,
+            "size": product.size,
+            "price": float(product.price) if product.price is not None else None,
+            "availability": product.availability,
+            "inventory_qty": int(product.inventory_qty or 0),
+            "margin_pct": margin_pct,
+            "objective_weight": float(product.objective_weight or 0.0),
+            "link": product.link,
+            "image_url": product.image_link,
+        },
+    )
+
+
+def _store_product_inventory_detail(
+    db: Session,
+    *,
+    store_id: str | None,
+    limit: int = 6,
+) -> list[CatalogVoiceCitation]:
+    query = select(Product, Store).join(Store, Store.id == Product.store_id)
+    if store_id:
+        query = query.where(Product.store_id == store_id)
+    products = db.execute(
+        query.order_by(
+            Product.inventory_qty.desc(),
+            Product.margin_pct.desc(),
+            Product.objective_weight.desc(),
+            Product.title.asc(),
+        ).limit(limit)
+    ).all()
+    return [_product_inventory_citation(product, store) for product, store in products]
+
+
+def _product_detail_message(
+    *,
+    store_name: str | None,
+    citations: list[CatalogVoiceCitation],
+    question: str | None,
+) -> str:
+    if not citations:
+        target = f" for {store_name}" if store_name else ""
+        return f"No product-level inventory rows were found{target}."
+    lead = citations[0].value
+    price = lead.get("price")
+    price_text = f"${price:.2f}" if isinstance(price, (int, float)) else "unpriced"
+    margin_pct = float(lead.get("margin_pct") or 0.0) * 100.0
+    discount_context = (
+        " A targeted 10% to 15% discount offer is a reasonable starting point for review because it has inventory to work through and cited margin headroom."
+        if "discount" in _norm(question) or "markdown" in _norm(question) or "sale" in _norm(question)
+        else ""
+    )
+    suffix = " Additional product-level candidates are cited." if len(citations) > 1 else ""
+    return (
+        f"{lead['store_name']}: the strongest product-level candidate is {lead['title']} "
+        f"({lead['brand']}, {lead['category']}) with {lead['inventory_qty']} unit(s), "
+        f"{margin_pct:.1f}% margin, {lead['availability']}, and price {price_text}."
+        f"{discount_context}{suffix}"
     )
 
 
@@ -440,6 +550,20 @@ def _catalog_inventory_summary(
     if store_query:
         try:
             resolved = resolve_store(db, store_query=store_query).resolved
+            if _question_requests_product_detail(question):
+                detail_citations = _store_product_inventory_detail(
+                    db,
+                    store_id=resolved.id,
+                    limit=6,
+                )
+                return (
+                    _product_detail_message(
+                        store_name=resolved.name,
+                        citations=detail_citations,
+                        question=question,
+                    ),
+                    detail_citations,
+                )
             rows = _store_inventory_rows(db, store_id=resolved.id, limit=1)
         except ValueError:
             rows = []
@@ -449,6 +573,21 @@ def _catalog_inventory_summary(
         return f"No inventory rows were found for {store_query}.", []
 
     rows = _store_inventory_rows(db, limit=8)
+    if _question_requests_product_detail(question):
+        detail_citations = _store_product_inventory_detail(
+            db,
+            store_id=None,
+            limit=8,
+        )
+        return (
+            _product_detail_message(
+                store_name=None,
+                citations=detail_citations,
+                question=question,
+            ),
+            detail_citations,
+        )
+
     low_rows = [row for row in rows if row["low_stock_skus"] > 0]
     if low_rows:
         citations = [_store_inventory_citation(row) for row in low_rows]

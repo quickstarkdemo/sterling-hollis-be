@@ -442,7 +442,10 @@ class CatalogRealtimeService:
                 description = {
                     "read_product_summary": "Read the active product summary.",
                     "read_catalog_summary": "Read a bounded catalog summary.",
-                    "read_inventory_status": "Read bounded store inventory for the active product or full catalog.",
+                    "read_inventory_status": (
+                        "Read bounded inventory for the active product or full catalog, including "
+                        "store status, product-level stock rows, and discount or markdown candidates."
+                    ),
                     "read_publish_readiness": "Read deterministic publish readiness.",
                 }[name]
             tools.append(

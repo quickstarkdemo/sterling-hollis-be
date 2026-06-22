@@ -462,6 +462,26 @@ def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatc
         assert voice_result["citations"][0]["label"] == "Dallas Downtown"
         assert voice_result["citations"][0]["value"]["low_stock_skus"] == 1
 
+        voice_discount = client.post(
+            f"/api/admin/catalog/workflows/{workflow['id']}/realtime/v3/tool-calls",
+            json={
+                "session_id": session_payload["session_id"],
+                "call_id": "call-storewide-discount-candidate",
+                "name": "read_inventory_status",
+                "arguments": {"question": "What item should I discount in Dallas?"},
+            },
+            headers=_headers("storewide-voice-discount-query"),
+        )
+        assert voice_discount.status_code == 200, voice_discount.text
+        voice_discount_result = voice_discount.json()
+        assert voice_discount_result["mutation"] is False
+        assert "Published Dress" in voice_discount_result["message"]
+        assert "discount" in voice_discount_result["message"]
+        assert voice_discount_result["citations"][0]["source_id"] == "prod_existing"
+        assert voice_discount_result["citations"][0]["value"]["title"] == "Published Dress"
+        assert voice_discount_result["citations"][0]["value"]["store_name"] == "Dallas Downtown"
+        assert voice_discount_result["citations"][0]["value"]["margin_pct"] == 0.5
+
 
 def test_storewide_assistant_uses_inventory_data_for_store_status(monkeypatch):
     with _admin_catalog_client(monkeypatch) as (client, sessions):
@@ -535,3 +555,21 @@ def test_storewide_assistant_uses_inventory_data_for_store_status(monkeypatch):
         assert "Atlanta" in labels
         assert "Dallas Downtown" in labels
         assert len(labels) == len(set(labels))
+
+        discount_candidate = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "What item should I discount in Dallas?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("store-discount-candidate-query"),
+        )
+        assert discount_candidate.status_code == 200, discount_candidate.text
+        discount_result = discount_candidate.json()
+        assert discount_result["mutation"] is False
+        assert "Published Dress" in discount_result["message"]
+        assert "10% to 15%" in discount_result["message"]
+        assert discount_result["citations"][0]["source_id"] == "prod_existing"
+        assert discount_result["citations"][0]["label"] == "Dallas Downtown: Published Dress"
+        assert discount_result["citations"][0]["value"]["inventory_qty"] == 5
+        assert discount_result["citations"][0]["value"]["margin_pct"] == 0.5
