@@ -143,5 +143,34 @@ services:
     depends_on:
       - postgres
 
+  daily-synthetic-orders:
+    build:
+      context: .
+      args:
+        DD_GIT_REPOSITORY_URL: ${DD_GIT_REPOSITORY_URL:-}
+        DD_GIT_COMMIT_SHA: ${DD_GIT_COMMIT_SHA:-}
+    env_file:
+      - .env
+    command: ./scripts/run_daily_synthetic_orders.sh
+    environment:
+      <<: *datadog-env
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/productdb
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DATA_DIR: /app/data/runs
+      SYNTHETIC_DAILY_ORDERS_ENABLED: ${SYNTHETIC_DAILY_ORDERS_ENABLED:-false}
+      SYNTHETIC_DAILY_RUN_HOUR_UTC: ${SYNTHETIC_DAILY_RUN_HOUR_UTC:-8}
+      SYNTHETIC_DAILY_MAX_CATCHUP_DAYS: ${SYNTHETIC_DAILY_MAX_CATCHUP_DAYS:-14}
+      SYNTHETIC_DAILY_MIN_ORDERS: ${SYNTHETIC_DAILY_MIN_ORDERS:-25}
+      SYNTHETIC_DAILY_MAX_ORDERS: ${SYNTHETIC_DAILY_MAX_ORDERS:-220}
+      SYNTHETIC_DAILY_BASE_ORDERS: ${SYNTHETIC_DAILY_BASE_ORDERS:-}
+      SYNTHETIC_DAILY_SEED: ${SYNTHETIC_DAILY_SEED:-20260313}
+    volumes:
+      - ./:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+
 volumes:
   pgdata:
