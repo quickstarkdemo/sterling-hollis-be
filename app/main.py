@@ -28,6 +28,7 @@ from app.services.demo_observability import (
     demo_network_outage_response_payload,
     log_network_outage_block,
 )
+from app.services.api_capabilities import annotate_api_capability_routes
 from app.services.auth.admin import require_catalog_admin
 
 
@@ -210,10 +211,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else []
         )
         app.include_router(admin_router, dependencies=legacy_dependencies)
+        app.include_router(rec_router, dependencies=legacy_dependencies)
     app.include_router(demo_observability_router)
     app.include_router(catalog_router)
     app.include_router(chat_router)
-    app.include_router(rec_router)
     app.mount(
         product_image_url_path,
         StaticFiles(directory=product_image_dir, check_dir=False),
@@ -223,6 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.mount("/ui-assets", StaticFiles(directory=static_dir), name="ui-assets")
     if fashion_mcp is not None:
         app.mount("/mcp", fashion_mcp.streamable_http_app())
+    annotate_api_capability_routes(app)
     return app
 
 

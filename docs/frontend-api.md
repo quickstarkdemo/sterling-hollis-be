@@ -110,12 +110,32 @@ Generated image files are served from:
 | Clerk demo fault toggle | `POST` | `/api/demo/observability` |
 | Clerk demo fault reset | `POST` | `/api/demo/observability/reset` |
 
+## OpenAPI Capability Metadata
+
+Generated OpenAPI operations include Sterling-specific extensions that identify
+the capability contract and API surface:
+
+- `x-sterling-capability-id` names the versioned backend capability.
+- `x-sterling-api-surface` separates `public_shopper`, `catalog_admin`,
+  `developer_trace`, and `operator_compatibility` routes.
+- `x-sterling-current-frontend-contract` is `true` only for primary frontend
+  contracts. Compatibility/operator routes remain documented but are not primary
+  frontend contracts.
+- `x-sterling-auth-posture` identifies public, optional Clerk, Catalog Studio
+  admin Clerk, or local/operator protection posture.
+
+Public shopper operations must not accept caller-supplied `customer_id`. Account
+and order personalization uses Clerk authentication and backend-derived customer
+identity instead.
+
 ## Admin/Operations Endpoints Useful During Buildout
 
-These are legacy operator controls for local scripts and maintenance. Public
-deployments set `ENABLE_LEGACY_ADMIN_ROUTES=false`; if a production-like
-environment explicitly enables them, the backend applies the same Catalog
-Studio administrator policy used by `/api/admin/*`.
+These are legacy operator controls for local scripts, maintenance, and
+compatibility integrations such as `/recommendations/*` and
+`/feeds/products/openai`. Public deployments set
+`ENABLE_LEGACY_ADMIN_ROUTES=false`; if a production-like environment explicitly
+enables them, the backend applies the same Catalog Studio administrator policy
+used by `/api/admin/*`.
 
 | Purpose | Method | Path |
 | --- | --- | --- |

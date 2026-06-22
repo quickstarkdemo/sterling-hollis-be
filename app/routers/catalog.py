@@ -20,6 +20,7 @@ from app.catalog.schemas import (
     ProductListResponse,
     ProductRecommendationRequest,
     ProductRecommendationResponse,
+    PublicProductRecommendationRequest,
     ProductSort,
 )
 from app.catalog.service import (
@@ -298,9 +299,9 @@ def search_products(
 
 @router.post("/recommendations/products", response_model=ProductRecommendationResponse)
 def product_recommendations(
-    req: ProductRecommendationRequest, db: Session = Depends(get_db)
+    req: PublicProductRecommendationRequest, db: Session = Depends(get_db)
 ):
-    return recommend_products(db, req)
+    return recommend_products(db, req.to_service_request())
 
 
 def _http_error_for_image_exception(exc: Exception) -> HTTPException:
