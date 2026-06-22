@@ -93,6 +93,24 @@ case "${SYNTHETIC_DAILY_ORDERS_ENABLED:-false}" in
     ;;
 esac
 
+run_daily_order_refresh() {
+  args="--max-days ${SYNTHETIC_DAILY_MAX_CATCHUP_DAYS:-14} --min-orders ${SYNTHETIC_DAILY_MIN_ORDERS:-25} --max-orders ${SYNTHETIC_DAILY_MAX_ORDERS:-220} --seed ${SYNTHETIC_DAILY_SEED:-20260313}"
+  if [ -n "${SYNTHETIC_DAILY_BASE_ORDERS:-}" ]; then
+    args="$args --base-orders ${SYNTHETIC_DAILY_BASE_ORDERS}"
+  fi
+  run_with_optional_datadog python -m app.daily_synthetic_orders $args
+}
+
+case "${SYNTHETIC_DAILY_RUN_ON_STARTUP:-true}" in
+  true | 1 | yes | on)
+    echo "daily synthetic orders running startup catch-up"
+    run_daily_order_refresh
+    ;;
+  *)
+    echo "daily synthetic orders startup catch-up disabled"
+    ;;
+esac
+
 while :; do
   sleep_seconds="$(python <<'PY'
 from datetime import datetime, timedelta, timezone
@@ -109,9 +127,5 @@ PY
   echo "daily synthetic orders sleeping ${sleep_seconds}s"
   sleep "$sleep_seconds"
 
-  args="--max-days ${SYNTHETIC_DAILY_MAX_CATCHUP_DAYS:-14} --min-orders ${SYNTHETIC_DAILY_MIN_ORDERS:-25} --max-orders ${SYNTHETIC_DAILY_MAX_ORDERS:-220} --seed ${SYNTHETIC_DAILY_SEED:-20260313}"
-  if [ -n "${SYNTHETIC_DAILY_BASE_ORDERS:-}" ]; then
-    args="$args --base-orders ${SYNTHETIC_DAILY_BASE_ORDERS}"
-  fi
-  run_with_optional_datadog python -m app.daily_synthetic_orders $args
+  run_daily_order_refresh
 done
