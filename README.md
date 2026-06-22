@@ -238,11 +238,14 @@ Compose starts:
 - `postgres`
 - `api`
 - `index-worker`
+- `daily-synthetic-orders` (disabled by default until
+  `SYNTHETIC_DAILY_ORDERS_ENABLED=true`)
 
 The API waits for Postgres, runs `alembic upgrade head`, serves FastAPI, mounts
 `/mcp` when `ENABLE_MCP_ADAPTER=true`, and mounts `/ui-assets` when
 `ENABLE_OPENAI_APPS_UI=true`. The worker polls durable indexing and product
-image jobs from Postgres.
+image jobs from Postgres. The daily synthetic order scheduler keeps rolling
+report windows current when explicitly enabled.
 
 ### 3. Generate, Load, and Index Data
 
@@ -280,6 +283,44 @@ curl http://localhost:8000/admin/synthetic/runs/<RUN_ID>/report
 
 Each generated run also includes `analyst_store_category_v1.csv`, a 30-row
 store/category analyst sample for spreadsheet and ChatGPT comparison workflows.
+
+### 4. Keep Demo Orders Current
+
+Product, merchandising, and executive MCP reports use rolling windows from
+`orders`, `order_items`, and `store_daily_metrics`. To refresh order volume
+without replacing the catalog, run the daily synthetic order append command:
+
+```bash
+python -m app.daily_synthetic_orders \
+  --from-date 2026-06-01 \
+  --through-date 2026-06-21 \
+  --max-days 21 \
+  --dry-run \
+  --pretty
+```
+
+Remove `--dry-run` to append orders. The command reuses existing stores,
+customers, and products, applies the same luxury retail seasonality curve used
+by the full generator, and rewrites date-scoped daily IDs such as
+`daily_ord_20260621_00001` so reruns do not duplicate orders.
+
+For production Compose, the `daily-synthetic-orders` service is included but
+disabled by default. Set these in `deploy/runtime.env` to enable daily refresh:
+
+```bash
+SYNTHETIC_DAILY_ORDERS_ENABLED=true
+SYNTHETIC_DAILY_RUN_HOUR_UTC=8
+SYNTHETIC_DAILY_MAX_CATCHUP_DAYS=14
+SYNTHETIC_DAILY_MIN_ORDERS=25
+SYNTHETIC_DAILY_MAX_ORDERS=220
+SYNTHETIC_DAILY_BASE_ORDERS=
+SYNTHETIC_DAILY_SEED=20260313
+```
+
+Leave `SYNTHETIC_DAILY_BASE_ORDERS` empty to derive the neutral daily baseline
+from existing orders. Use a manual catch-up with a larger `--max-days` when the
+dataset is months stale, then let the scheduler keep it current.
+
 To create a standalone sample without the API:
 
 ```bash
@@ -673,9 +714,12 @@ Production defaults:
 - Docker Hub image: `quickstark/sterling-hollis-be`
 - API container name: `sterling-hollis-be`
 - worker container name: `sterling-hollis-be-index-worker`
+- daily order scheduler container name: `sterling-hollis-be-daily-orders`
 - exposed host port: `8000`
 - Postgres: external instance, not a bundled container
 - transport: REST API and MCP served from the API container on port `8000`
+- daily order refresh: deployed but disabled until
+  `SYNTHETIC_DAILY_ORDERS_ENABLED=true`
 
 Deploy flow:
 

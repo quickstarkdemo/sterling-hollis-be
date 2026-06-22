@@ -138,6 +138,13 @@ class Settings(BaseSettings):
     index_worker_poll_seconds: float = 2.0
     index_worker_max_idle_seconds: float = 30.0
     index_worker_stale_recovery_seconds: float = 60.0
+    synthetic_daily_orders_enabled: bool = False
+    synthetic_daily_run_hour_utc: int = 8
+    synthetic_daily_max_catchup_days: int = 14
+    synthetic_daily_min_orders: int = 25
+    synthetic_daily_max_orders: int = 220
+    synthetic_daily_base_orders: int | None = None
+    synthetic_daily_seed: int = 20260313
     image_job_admin_stale_recovery_seconds: float = 60.0
 
     enable_mcp_adapter: bool = True

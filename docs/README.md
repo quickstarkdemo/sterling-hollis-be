@@ -19,6 +19,8 @@ backend.
 - Curated frontend contract: `docs/frontend-openapi.yaml`.
 - MCP tool surface: `app/mcp_server.py`, the MCP and Apps SDK section in the
   repository `README.md`, or `make mcp-smoke` against a running app.
+- Daily synthetic order refresh: the "Keep Demo Orders Current" section in the
+  repository `README.md`.
 
 External OpenAI, ChatGPT Apps SDK, and MCP reference pages are not vendored here.
 Use the official upstream docs for platform behavior so local docs stay focused

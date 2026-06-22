@@ -37,6 +37,21 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  daily-synthetic-orders:
+    image: ${PRODUCT_API_IMAGE}
+    container_name: ${PRODUCT_DAILY_SYNTHETIC_ORDERS_CONTAINER_NAME:-sterling-hollis-be-daily-orders}
+    restart: unless-stopped
+    command: ./scripts/run_daily_synthetic_orders.sh
+    depends_on:
+      api:
+        condition: service_healthy
+    env_file:
+      - ./runtime.env
+    volumes:
+      - products_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   products_data:
     name: deploy_products_data
