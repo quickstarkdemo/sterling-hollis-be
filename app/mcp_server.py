@@ -42,6 +42,9 @@ from app.schemas import (
     CustomerSearchResponse,
     CustomerValueSummaryRequest,
     CustomerValueSummaryResponse,
+    DailySyntheticOrderTargetDay,
+    DailySyntheticOrdersRequest,
+    DailySyntheticOrdersResponse,
     ExecutiveAutoOptimizeRequest,
     ExecutiveAutoOptimizeResponse,
     ExecutiveAutoOptimizeScenario,
@@ -161,6 +164,10 @@ from app.services.communications import (
     twilio_smoke_test,
     update_customer_email_draft,
     update_customer_sms_draft,
+)
+from app.services.daily_synthetic_orders import (
+    DailyOrderGenerationOptions,
+    generate_daily_synthetic_orders,
 )
 from app.services.indexing import index_products_for_run
 from app.services.index_jobs import enqueue_index_job, get_index_job, list_index_jobs
@@ -345,6 +352,7 @@ MCP_CATALOG_ADMIN_TOOL_NAMES = MCP_PUBLIC_TOOL_NAMES | frozenset(
         "fashion_latest_run",
         "fashion_generate_synthetic",
         "fashion_load_synthetic",
+        "fashion_generate_daily_orders",
         "fashion_index_products",
         "fashion_start_index_products",
         "fashion_get_index_job",
@@ -439,6 +447,7 @@ MCP_TOOL_CAPABILITY_IDS = {
     "fashion_latest_run": "operator_compatibility.admin",
     "fashion_generate_synthetic": "operator_compatibility.admin",
     "fashion_load_synthetic": "operator_compatibility.admin",
+    "fashion_generate_daily_orders": "operator_compatibility.admin",
     "fashion_index_products": "operator_compatibility.admin",
     "fashion_start_index_products": "operator_compatibility.admin",
     "fashion_get_index_job": "operator_compatibility.admin",
@@ -1463,6 +1472,62 @@ def fashion_load_synthetic(
         or ["stores", "customers", "products", "orders", "order_items", "store_daily_metrics", "supplier_product_offers"],
     )
     return _load_synthetic_impl(params)
+
+
+@mcp.tool(name="fashion_generate_daily_orders", annotations=_tool_annotations(read_only=False, idempotent=True))
+def fashion_generate_daily_orders(
+    seed: int | None = None,
+    from_date: str | None = None,
+    through_date: str | None = None,
+    max_days: int | None = None,
+    min_orders: int | None = None,
+    max_orders: int | None = None,
+    base_orders: int | None = None,
+    dry_run: bool = False,
+) -> DailySyntheticOrdersResponse:
+    """Append or dry-run daily synthetic order volume against existing stores, customers, and products."""
+    params = DailySyntheticOrdersRequest(
+        seed=seed,
+        from_date=from_date,
+        through_date=through_date,
+        max_days=max_days,
+        min_orders=min_orders,
+        max_orders=max_orders,
+        base_orders=base_orders,
+        dry_run=dry_run,
+    )
+    with SessionLocal() as db:
+        result = generate_daily_synthetic_orders(
+            db,
+            DailyOrderGenerationOptions(
+                seed=params.seed if params.seed is not None else settings.synthetic_daily_seed,
+                from_date=params.from_date,
+                through_date=params.through_date,
+                max_days=params.max_days if params.max_days is not None else settings.synthetic_daily_max_catchup_days,
+                min_orders=params.min_orders if params.min_orders is not None else settings.synthetic_daily_min_orders,
+                max_orders=params.max_orders if params.max_orders is not None else settings.synthetic_daily_max_orders,
+                base_orders=params.base_orders if params.base_orders is not None else settings.synthetic_daily_base_orders,
+                dry_run=params.dry_run,
+            ),
+        )
+    return DailySyntheticOrdersResponse(
+        run_id=result.run_id,
+        dry_run=result.dry_run,
+        latest_order_date=result.latest_order_date,
+        requested_start_date=result.requested_start_date,
+        requested_through_date=result.requested_through_date,
+        target_days=[
+            DailySyntheticOrderTargetDay(date=day.target_date, orders=day.order_count)
+            for day in result.target_days
+        ],
+        base_orders=result.base_orders,
+        planned_orders=result.planned_orders,
+        inserted_orders=result.inserted_orders,
+        inserted_items=result.inserted_items,
+        metrics_refreshed=result.metrics_refreshed,
+        validation_failures=result.validation_failures,
+        skipped_reason=result.skipped_reason,
+    )
 
 
 @mcp.tool(name="fashion_index_products", annotations=_tool_annotations(read_only=False, idempotent=False, open_world=True))

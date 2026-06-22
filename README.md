@@ -305,7 +305,7 @@ customers, and products, applies the same luxury retail seasonality curve used
 by the full generator, and rewrites date-scoped daily IDs such as
 `daily_ord_20260621_00001` so reruns do not duplicate orders.
 
-Against a deployed API, use the equivalent admin catch-up endpoint:
+When legacy admin routes are enabled, use the equivalent admin catch-up endpoint:
 
 ```bash
 curl -X POST https://sterling-hollis-be.quickstark.com/admin/synthetic/daily-orders \
@@ -314,6 +314,8 @@ curl -X POST https://sterling-hollis-be.quickstark.com/admin/synthetic/daily-ord
 ```
 
 Change `dry_run` to `false` to append the planned orders.
+In production, use the catalog-admin MCP tool `fashion_generate_daily_orders`;
+the deployed API usually keeps legacy `/admin/*` routes disabled.
 
 For production Compose, the `daily-synthetic-orders` service supplies these
 defaults and enables daily refresh. Set `SYNTHETIC_DAILY_ORDERS_ENABLED=false`
