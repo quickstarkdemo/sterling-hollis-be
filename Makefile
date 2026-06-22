@@ -65,3 +65,4 @@ mcp-smoke:
 
 openapi:
 	.venv/bin/python scripts/export_openapi.py
+	.venv/bin/python scripts/export_capability_map.py
