@@ -9373,6 +9373,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9422,6 +9423,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9453,6 +9455,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9484,6 +9487,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9513,6 +9517,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9564,6 +9569,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9635,6 +9641,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9687,6 +9694,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9746,6 +9754,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9806,6 +9815,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9857,6 +9867,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9908,6 +9919,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -9959,6 +9971,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -10011,6 +10024,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -10064,6 +10078,7 @@
         "x-sterling-capability-id": "operator_compatibility.admin",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -10115,11 +10130,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "assistant",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.assistant.query",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -10258,13 +10275,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10327,13 +10347,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/drafts",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10384,13 +10407,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10462,13 +10488,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.publish",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v2/products/{product_id}/archive",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10540,13 +10569,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}/draft",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10618,13 +10650,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.publish",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}/publish",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10675,11 +10710,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "review",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -10762,11 +10799,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "review",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -10849,11 +10888,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "review",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -10927,13 +10968,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "legacy",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}/revisions",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -10963,11 +11007,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "source-bundle",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11017,11 +11063,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "source-bundle",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11074,11 +11122,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "source-bundle",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11133,11 +11183,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "source-bundle",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11192,11 +11244,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "source-bundle",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11279,11 +11333,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "source-bundle",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11348,11 +11404,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11491,13 +11549,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -11560,13 +11621,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/drafts",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -11617,13 +11681,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -11695,11 +11762,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.publish",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -11773,13 +11842,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}/draft",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -11851,13 +11923,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.publish",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}/publish",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -11929,13 +12004,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/v3/products/{product_id}/revisions",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -11965,11 +12043,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v2",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12034,11 +12114,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12091,11 +12173,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12169,11 +12253,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12247,11 +12333,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12313,11 +12401,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12379,11 +12469,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12457,11 +12549,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.publish",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12535,11 +12629,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12592,11 +12688,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12668,11 +12766,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12755,11 +12855,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12824,11 +12926,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12893,11 +12997,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -12971,11 +13077,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13038,11 +13146,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13116,11 +13226,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13182,11 +13294,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13258,11 +13372,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13336,11 +13452,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13402,11 +13520,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13480,11 +13600,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13558,11 +13680,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13632,11 +13756,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.catalog.manage",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13710,13 +13836,16 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "workflow",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
-        "x-sterling-current-frontend-contract": true,
-        "x-sterling-legacy-compatibility": false,
+        "x-sterling-contract-status": "compatibility",
+        "x-sterling-current-frontend-contract": false,
+        "x-sterling-legacy-compatibility": true,
+        "x-sterling-migration-target": "/api/admin/catalog/workflows/{workflow_id}/realtime/v3/tool-calls",
         "x-sterling-personas": [
           "catalog_admin"
         ]
@@ -13788,11 +13917,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "v3",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.product.draft",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13824,11 +13955,13 @@
         "tags": [
           "catalog-studio-admin"
         ],
+        "x-sterling-admin-generation": "session",
         "x-sterling-api-surface": "catalog_admin",
         "x-sterling-auth-posture": "catalog_admin_clerk",
         "x-sterling-capability-id": "catalog_admin.session",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13906,6 +14039,7 @@
         "x-sterling-capability-id": "developer_trace.read",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -13966,6 +14100,7 @@
         "x-sterling-capability-id": "developer_trace.read",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14049,6 +14184,7 @@
         "x-sterling-capability-id": "developer_trace.read",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14117,6 +14253,7 @@
         "x-sterling-capability-id": "developer_trace.read",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14175,6 +14312,7 @@
         "x-sterling-capability-id": "developer_trace.read",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14244,6 +14382,7 @@
         "x-sterling-capability-id": "developer_trace.read",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14377,6 +14516,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14413,6 +14553,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14582,6 +14723,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14618,6 +14760,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14786,6 +14929,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14841,6 +14985,7 @@
         "x-sterling-capability-id": "shopper.chat.turn",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -14878,6 +15023,7 @@
         "x-sterling-capability-id": "operator_compatibility.demo_observability",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -14932,6 +15078,7 @@
         "x-sterling-capability-id": "operator_compatibility.demo_observability",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -14968,6 +15115,7 @@
         "x-sterling-capability-id": "operator_compatibility.demo_observability",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -15004,6 +15152,7 @@
         "x-sterling-capability-id": "operator_compatibility.demo_observability",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -15055,6 +15204,7 @@
         "x-sterling-capability-id": "public.catalog.image_recommendations",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15296,6 +15446,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15370,6 +15521,7 @@
         "x-sterling-capability-id": "public.catalog.product_detail",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15438,6 +15590,7 @@
         "x-sterling-capability-id": "public.catalog.recommendations",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15493,6 +15646,7 @@
         "x-sterling-capability-id": "public.catalog.image_recommendations",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15548,6 +15702,7 @@
         "x-sterling-capability-id": "public.catalog.recommendations",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15716,6 +15871,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15773,6 +15929,7 @@
         "x-sterling-capability-id": "public.catalog.search",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": true,
         "x-sterling-legacy-compatibility": false,
         "x-sterling-personas": [
@@ -15846,6 +16003,7 @@
         "x-sterling-capability-id": "operator_compatibility.product_feed",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -15918,6 +16076,7 @@
         "x-sterling-capability-id": "operator_compatibility.recommendations",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [
@@ -15970,6 +16129,7 @@
         "x-sterling-capability-id": "operator_compatibility.recommendations",
         "x-sterling-capability-surface": "rest",
         "x-sterling-capability-version": "2026-06-22.3",
+        "x-sterling-contract-status": "current",
         "x-sterling-current-frontend-contract": false,
         "x-sterling-legacy-compatibility": true,
         "x-sterling-personas": [

@@ -24,6 +24,13 @@ class AuthPosture(StrEnum):
     LOCAL_OR_PROTECTED_OPERATOR = "local_or_protected_operator"
 
 
+class ContractStatus(StrEnum):
+    CURRENT = "current"
+    COMPATIBILITY = "compatibility"
+    INTERNAL = "internal"
+    DEPRECATED = "deprecated"
+
+
 @dataclass(frozen=True)
 class RouteCapability:
     capability_id: str
@@ -31,20 +38,29 @@ class RouteCapability:
     auth_posture: AuthPosture
     current_frontend_contract: bool
     legacy_compatibility: bool = False
+    contract_status: ContractStatus = ContractStatus.CURRENT
+    migration_target: str | None = None
+    admin_generation: str | None = None
 
     @property
     def openapi_extra(self) -> dict[str, object]:
         capability = get_capability(self.capability_id)
-        return {
+        extras: dict[str, object] = {
             "x-sterling-capability-id": capability.id,
             "x-sterling-capability-version": REGISTRY_VERSION,
             "x-sterling-api-surface": self.api_surface.value,
             "x-sterling-auth-posture": self.auth_posture.value,
             "x-sterling-current-frontend-contract": self.current_frontend_contract,
             "x-sterling-legacy-compatibility": self.legacy_compatibility,
+            "x-sterling-contract-status": self.contract_status.value,
             "x-sterling-personas": [persona.value for persona in capability.allowed_personas],
             "x-sterling-capability-surface": Surface.REST.value,
         }
+        if self.migration_target:
+            extras["x-sterling-migration-target"] = self.migration_target
+        if self.admin_generation:
+            extras["x-sterling-admin-generation"] = self.admin_generation
+        return extras
 
 
 _PUBLIC_CATALOG_SEARCH_PATHS = frozenset(
@@ -98,6 +114,58 @@ _CATALOG_ADMIN_PUBLISH_PATHS = frozenset(
     }
 )
 
+_CATALOG_ADMIN_COMPATIBILITY_TARGETS = {
+    "/api/admin/catalog/products": "/api/admin/catalog/v3/products/{product_id}",
+    "/api/admin/catalog/products/drafts": "/api/admin/catalog/v3/products/drafts",
+    "/api/admin/catalog/products/{product_id}": "/api/admin/catalog/v3/products/{product_id}",
+    "/api/admin/catalog/products/{product_id}/draft": "/api/admin/catalog/v3/products/{product_id}/draft",
+    "/api/admin/catalog/products/{product_id}/revisions": "/api/admin/catalog/v3/products/{product_id}/revisions",
+    "/api/admin/catalog/products/{product_id}/publish": "/api/admin/catalog/v3/products/{product_id}/publish",
+    "/api/admin/catalog/products/{product_id}/archive": "/api/admin/catalog/v2/products/{product_id}/archive",
+    "/api/admin/catalog/v2/products": "/api/admin/catalog/v3/products/{product_id}",
+    "/api/admin/catalog/v2/products/drafts": "/api/admin/catalog/v3/products/drafts",
+    "/api/admin/catalog/v2/products/{product_id}": "/api/admin/catalog/v3/products/{product_id}",
+    "/api/admin/catalog/v2/products/{product_id}/draft": "/api/admin/catalog/v3/products/{product_id}/draft",
+    "/api/admin/catalog/v2/products/{product_id}/revisions": "/api/admin/catalog/v3/products/{product_id}/revisions",
+    "/api/admin/catalog/v2/products/{product_id}/publish": "/api/admin/catalog/v3/products/{product_id}/publish",
+    "/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls": "/api/admin/catalog/workflows/{workflow_id}/realtime/v3/tool-calls",
+}
+
+
+def _catalog_admin_generation(path: str) -> str:
+    if "/v3/" in path:
+        return "v3"
+    if "/v2/" in path:
+        return "v2"
+    if "/workflows/" in path or path.endswith("/workflows"):
+        return "workflow"
+    if "/source-bundles" in path:
+        return "source-bundle"
+    if "/reviews" in path:
+        return "review"
+    if path.endswith("/assistant/query"):
+        return "assistant"
+    return "legacy"
+
+
+def _catalog_admin_route(capability_id: str, path: str) -> RouteCapability:
+    migration_target = _CATALOG_ADMIN_COMPATIBILITY_TARGETS.get(path)
+    is_compatibility = migration_target is not None
+    return RouteCapability(
+        capability_id,
+        ApiSurface.CATALOG_ADMIN,
+        AuthPosture.CATALOG_ADMIN_CLERK,
+        current_frontend_contract=not is_compatibility,
+        legacy_compatibility=is_compatibility,
+        contract_status=(
+            ContractStatus.COMPATIBILITY
+            if is_compatibility
+            else ContractStatus.CURRENT
+        ),
+        migration_target=migration_target,
+        admin_generation=_catalog_admin_generation(path),
+    )
+
 
 def route_capability_for(path: str, method: str) -> RouteCapability | None:
     normalized_method = method.upper()
@@ -145,6 +213,7 @@ def route_capability_for(path: str, method: str) -> RouteCapability | None:
             ApiSurface.CATALOG_ADMIN,
             AuthPosture.CATALOG_ADMIN_CLERK,
             current_frontend_contract=True,
+            admin_generation="session",
         )
     if path.startswith("/api/admin/traces"):
         return RouteCapability(
@@ -154,33 +223,13 @@ def route_capability_for(path: str, method: str) -> RouteCapability | None:
             current_frontend_contract=True,
         )
     if path in _CATALOG_ADMIN_DRAFT_PATHS:
-        return RouteCapability(
-            "catalog_admin.product.draft",
-            ApiSurface.CATALOG_ADMIN,
-            AuthPosture.CATALOG_ADMIN_CLERK,
-            current_frontend_contract=True,
-        )
+        return _catalog_admin_route("catalog_admin.product.draft", path)
     if path in _CATALOG_ADMIN_PUBLISH_PATHS:
-        return RouteCapability(
-            "catalog_admin.product.publish",
-            ApiSurface.CATALOG_ADMIN,
-            AuthPosture.CATALOG_ADMIN_CLERK,
-            current_frontend_contract=True,
-        )
+        return _catalog_admin_route("catalog_admin.product.publish", path)
     if path == "/api/admin/catalog/assistant/query":
-        return RouteCapability(
-            "catalog_admin.assistant.query",
-            ApiSurface.CATALOG_ADMIN,
-            AuthPosture.CATALOG_ADMIN_CLERK,
-            current_frontend_contract=True,
-        )
+        return _catalog_admin_route("catalog_admin.assistant.query", path)
     if path.startswith("/api/admin/catalog"):
-        return RouteCapability(
-            "catalog_admin.catalog.manage",
-            ApiSurface.CATALOG_ADMIN,
-            AuthPosture.CATALOG_ADMIN_CLERK,
-            current_frontend_contract=True,
-        )
+        return _catalog_admin_route("catalog_admin.catalog.manage", path)
     if path.startswith("/api/demo/observability"):
         return RouteCapability(
             "operator_compatibility.demo_observability",

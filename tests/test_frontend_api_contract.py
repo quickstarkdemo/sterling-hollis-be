@@ -117,19 +117,51 @@ def test_openapi_marks_admin_trace_and_admin_catalog_surfaces():
     assert {"ClerkBearer": []} in trace_list["security"]
 
     expected_admin_capabilities = {
-        ("/api/admin/catalog/products/drafts", "post"): "catalog_admin.product.draft",
-        ("/api/admin/catalog/v2/products/drafts", "post"): "catalog_admin.product.draft",
         ("/api/admin/catalog/v3/products/drafts", "post"): "catalog_admin.product.draft",
         ("/api/admin/catalog/assistant/query", "post"): "catalog_admin.assistant.query",
         ("/api/admin/catalog/source-bundles", "get"): "catalog_admin.catalog.manage",
         ("/api/admin/catalog/products/{product_id}/reviews", "get"): "catalog_admin.catalog.manage",
-        ("/api/admin/catalog/products/{product_id}/publish", "post"): "catalog_admin.product.publish",
-        ("/api/admin/catalog/v2/products/{product_id}/archive", "post"): "catalog_admin.product.publish",
+        ("/api/admin/catalog/v3/products/{product_id}/publish", "post"): "catalog_admin.product.publish",
+        ("/api/admin/catalog/workflows/{workflow_id}/realtime/v3/tool-calls", "post"): "catalog_admin.product.draft",
+        ("/api/admin/catalog/v2/references", "get"): "catalog_admin.catalog.manage",
     }
     for (path, method), capability_id in expected_admin_capabilities.items():
         operation = _operation(schema, path, method)
         assert operation["x-sterling-capability-id"] == capability_id
         assert operation["x-sterling-api-surface"] == "catalog_admin"
+        assert operation["x-sterling-current-frontend-contract"] is True
+        assert operation["x-sterling-legacy-compatibility"] is False
+        assert operation["x-sterling-contract-status"] == "current"
+        assert {"ClerkBearer": []} in operation["security"]
+
+
+def test_openapi_marks_catalog_admin_compatibility_routes_with_migration_targets():
+    schema = _schema()
+
+    expected_compatibility = {
+        ("/api/admin/catalog/products/drafts", "post"): "/api/admin/catalog/v3/products/drafts",
+        ("/api/admin/catalog/v2/products/drafts", "post"): "/api/admin/catalog/v3/products/drafts",
+        (
+            "/api/admin/catalog/products/{product_id}/draft",
+            "put",
+        ): "/api/admin/catalog/v3/products/{product_id}/draft",
+        (
+            "/api/admin/catalog/v2/products/{product_id}/publish",
+            "post",
+        ): "/api/admin/catalog/v3/products/{product_id}/publish",
+        (
+            "/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls",
+            "post",
+        ): "/api/admin/catalog/workflows/{workflow_id}/realtime/v3/tool-calls",
+    }
+
+    for (path, method), migration_target in expected_compatibility.items():
+        operation = _operation(schema, path, method)
+        assert operation["x-sterling-api-surface"] == "catalog_admin"
+        assert operation["x-sterling-current-frontend-contract"] is False
+        assert operation["x-sterling-legacy-compatibility"] is True
+        assert operation["x-sterling-contract-status"] == "compatibility"
+        assert operation["x-sterling-migration-target"] == migration_target
         assert {"ClerkBearer": []} in operation["security"]
 
 
