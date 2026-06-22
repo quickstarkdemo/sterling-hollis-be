@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.catalog.admin_schemas import (
@@ -22,6 +22,7 @@ from app.models import (
     CatalogProduct,
     CatalogWorkflow,
     CatalogWorkflowEvent,
+    Product,
     ProductInventory,
     Store,
 )
@@ -30,6 +31,23 @@ from app.services.catalog_admin import draft_revision_version, get_product_readi
 from app.services.catalog_ai import CatalogAISuggestionService
 from app.services.catalog_realtime import CatalogRealtimeV3ToolCallRequest
 from app.services.catalog_workflow import append_workflow_event
+from app.services.lookup import resolve_store
+
+
+LOW_STOCK_THRESHOLD = 5
+INVENTORY_QUESTION_TOKENS = (
+    "available",
+    "availability",
+    "inventory",
+    "low",
+    "risk",
+    "status",
+    "stock",
+    "store",
+    "stores",
+    "unit",
+    "units",
+)
 
 
 class CatalogVoiceCitation(BaseModel):
@@ -189,10 +207,10 @@ def _catalog_summary(db: Session) -> tuple[str, list[CatalogVoiceCitation]]:
 
 
 def _inventory_summary(
-    db: Session, product: ProductDraftV3 | None
+    db: Session, product: ProductDraftV3 | None, question: str | None = None
 ) -> tuple[str, list[CatalogVoiceCitation]]:
     if product is None:
-        return _catalog_inventory_summary(db)
+        return _catalog_inventory_summary(db, question=question)
     store_ids = {row.store_id for row in product.inventory}
     stores = {
         row.id: row
@@ -222,23 +240,246 @@ def _inventory_summary(
     return f"Low stock is reported at {names}.", citations
 
 
-def _catalog_inventory_summary(db: Session) -> tuple[str, list[CatalogVoiceCitation]]:
-    rows = db.execute(
-        select(ProductInventory, CatalogProduct, Store)
+def _norm(value: str | None) -> str:
+    return " ".join(str(value or "").casefold().replace("-", " ").split())
+
+
+def _question_mentions_inventory(question: str) -> bool:
+    normalized = _norm(question)
+    return any(token in normalized for token in INVENTORY_QUESTION_TOKENS)
+
+
+def _mentioned_store_query(db: Session, question: str) -> str | None:
+    normalized = _norm(question)
+    if not normalized:
+        return None
+    stores = db.scalars(select(Store).order_by(Store.name.asc(), Store.id.asc())).all()
+    matches: list[tuple[int, str]] = []
+    for store in stores:
+        candidates = [
+            store.id,
+            store.name,
+            store.city,
+            f"{store.city} {store.state}",
+            f"{store.name} {store.state}",
+        ]
+        for candidate in candidates:
+            candidate_norm = _norm(candidate)
+            if candidate_norm and candidate_norm in normalized:
+                matches.append((len(candidate_norm), str(candidate)))
+    if not matches:
+        return None
+    matches.sort(reverse=True)
+    return matches[0][1]
+
+
+def _store_inventory_citation(row: dict[str, Any]) -> CatalogVoiceCitation:
+    return CatalogVoiceCitation(
+        kind="inventory",
+        source_id=row["store_id"],
+        label=row["store_name"],
+        value={
+            "store_id": row["store_id"],
+            "store_name": row["store_name"],
+            "city": row["city"],
+            "state": row["state"],
+            "sku_count": row["sku_count"],
+            "low_stock_skus": row["low_stock_skus"],
+            "out_of_stock_skus": row["out_of_stock_skus"],
+            "preorder_skus": row["preorder_skus"],
+            "inventory_qty": row["units_in_stock"],
+            "units_in_stock": row["units_in_stock"],
+        },
+    )
+
+
+def _store_status_message(row: dict[str, Any]) -> str:
+    return (
+        f"{row['store_name']} has {row['low_stock_skus']}/{row['sku_count']} SKU(s) low or out of stock, "
+        f"{row['units_in_stock']} unit(s) in stock, and {row['preorder_skus']} preorder SKU(s)."
+    )
+
+
+def _stock_aggregate_expressions(quantity_col: Any, availability_col: Any) -> tuple[Any, Any, Any, Any]:
+    availability = func.lower(func.coalesce(availability_col, ""))
+    low_stock_skus = func.sum(
+        case(
+            (
+                or_(
+                    quantity_col <= LOW_STOCK_THRESHOLD,
+                    availability.in_(("low stock", "out of stock")),
+                ),
+                1,
+            ),
+            else_=0,
+        )
+    )
+    out_of_stock_skus = func.sum(
+        case((or_(quantity_col <= 0, availability == "out of stock"), 1), else_=0)
+    )
+    preorder_skus = func.sum(case((availability == "preorder", 1), else_=0))
+    units_in_stock = func.sum(
+        case(
+            (
+                or_(availability == "in stock", availability == "low stock"),
+                quantity_col,
+            ),
+            else_=0,
+        )
+    )
+    return low_stock_skus, out_of_stock_skus, preorder_skus, units_in_stock
+
+
+def _store_inventory_row_payload(row: Any) -> dict[str, Any]:
+    return {
+        "store_id": row.store_id,
+        "store_name": row.store_name,
+        "city": row.city,
+        "state": row.state,
+        "sku_count": int(row.sku_count or 0),
+        "low_stock_skus": int(row.low_stock_skus or 0),
+        "out_of_stock_skus": int(row.out_of_stock_skus or 0),
+        "preorder_skus": int(row.preorder_skus or 0),
+        "units_in_stock": int(row.units_in_stock or 0),
+    }
+
+
+def _public_store_inventory_rows(
+    db: Session,
+    *,
+    store_id: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    low_stock_skus, out_of_stock_skus, preorder_skus, units_in_stock = (
+        _stock_aggregate_expressions(Product.inventory_qty, Product.availability)
+    )
+    query = (
+        select(
+            Store.id.label("store_id"),
+            Store.name.label("store_name"),
+            Store.city.label("city"),
+            Store.state.label("state"),
+            func.count(Product.id).label("sku_count"),
+            low_stock_skus.label("low_stock_skus"),
+            out_of_stock_skus.label("out_of_stock_skus"),
+            preorder_skus.label("preorder_skus"),
+            units_in_stock.label("units_in_stock"),
+        )
+        .join(Store, Store.id == Product.store_id)
+        .group_by(Store.id, Store.name, Store.city, Store.state)
+    )
+    if store_id:
+        query = query.where(Product.store_id == store_id)
+    query = query.order_by(
+        low_stock_skus.desc(),
+        out_of_stock_skus.desc(),
+        func.count(Product.id).desc(),
+        Store.name.asc(),
+    )
+    return [_store_inventory_row_payload(row) for row in db.execute(query.limit(limit)).all()]
+
+
+def _canonical_store_inventory_rows(
+    db: Session,
+    *,
+    store_id: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    low_stock_skus, out_of_stock_skus, preorder_skus, units_in_stock = (
+        _stock_aggregate_expressions(
+            ProductInventory.inventory_qty,
+            ProductInventory.availability,
+        )
+    )
+    query = (
+        select(
+            Store.id.label("store_id"),
+            Store.name.label("store_name"),
+            Store.city.label("city"),
+            Store.state.label("state"),
+            func.count(ProductInventory.id).label("sku_count"),
+            low_stock_skus.label("low_stock_skus"),
+            out_of_stock_skus.label("out_of_stock_skus"),
+            preorder_skus.label("preorder_skus"),
+            units_in_stock.label("units_in_stock"),
+        )
         .join(CatalogProduct, CatalogProduct.id == ProductInventory.catalog_product_id)
         .join(Store, Store.id == ProductInventory.store_id)
         .where(CatalogProduct.lifecycle_status == "published")
-        .order_by(
-            ProductInventory.inventory_qty.asc(),
-            Store.name.asc(),
-            CatalogProduct.title.asc(),
-        )
-        .limit(80)
-    ).all()
+        .group_by(Store.id, Store.name, Store.city, Store.state)
+    )
+    if store_id:
+        query = query.where(ProductInventory.store_id == store_id)
+    query = query.order_by(
+        low_stock_skus.desc(),
+        out_of_stock_skus.desc(),
+        func.count(ProductInventory.id).desc(),
+        Store.name.asc(),
+    )
+    return [_store_inventory_row_payload(row) for row in db.execute(query.limit(limit)).all()]
+
+
+def _store_inventory_rows(
+    db: Session,
+    *,
+    store_id: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    rows = _public_store_inventory_rows(db, store_id=store_id, limit=limit)
+    if rows:
+        return rows
+    return _canonical_store_inventory_rows(db, store_id=store_id, limit=limit)
+
+
+def _catalog_inventory_summary(
+    db: Session,
+    *,
+    question: str | None = None,
+) -> tuple[str, list[CatalogVoiceCitation]]:
+    store_query = _mentioned_store_query(db, question or "")
+    if store_query:
+        try:
+            resolved = resolve_store(db, store_query=store_query).resolved
+            rows = _store_inventory_rows(db, store_id=resolved.id, limit=1)
+        except ValueError:
+            rows = []
+        if rows:
+            row = rows[0]
+            return _store_status_message(row), [_store_inventory_citation(row)]
+        return f"No inventory rows were found for {store_query}.", []
+
+    rows = _store_inventory_rows(db, limit=8)
+    low_rows = [row for row in rows if row["low_stock_skus"] > 0]
+    if low_rows:
+        citations = [_store_inventory_citation(row) for row in low_rows]
+        preview = "; ".join(_store_status_message(row) for row in low_rows[:3])
+        suffix = " More store risk rows are cited." if len(citations) > 3 else ""
+        return f"Store inventory risk: {preview}{suffix}", citations
+
+    rows = [
+        {
+            "inventory": inventory,
+            "product": product,
+            "store": store,
+        }
+        for inventory, product, store in db.execute(
+            select(ProductInventory, CatalogProduct, Store)
+            .join(CatalogProduct, CatalogProduct.id == ProductInventory.catalog_product_id)
+            .join(Store, Store.id == ProductInventory.store_id)
+            .where(CatalogProduct.lifecycle_status == "published")
+            .order_by(
+                ProductInventory.inventory_qty.asc(),
+                Store.name.asc(),
+                CatalogProduct.title.asc(),
+            )
+            .limit(80)
+        ).all()
+    ]
     low_rows = [
-        (inventory, product, store)
-        for inventory, product, store in rows
-        if inventory.availability == "low stock" or int(inventory.inventory_qty or 0) <= 5
+        (row["inventory"], row["product"], row["store"])
+        for row in rows
+        if row["inventory"].availability == "low stock"
+        or int(row["inventory"].inventory_qty or 0) <= LOW_STOCK_THRESHOLD
     ][:8]
     citations = [
         CatalogVoiceCitation(
@@ -274,11 +515,10 @@ def answer_catalog_question(
     query_scopes: list[Literal["catalog", "inventory"]] | None = None,
 ) -> CatalogVoiceToolResult:
     scopes = query_scopes or ["catalog", "inventory"]
-    if "inventory" in scopes and any(
-        token in question.casefold()
-        for token in ("stock", "inventory", "store", "unit", "available", "availability")
+    if "inventory" in scopes and (
+        _question_mentions_inventory(question) or _mentioned_store_query(db, question)
     ):
-        message, citations = _catalog_inventory_summary(db)
+        message, citations = _catalog_inventory_summary(db, question=question)
     else:
         message, citations = _catalog_summary(db)
     return CatalogVoiceToolResult(message=message, citations=citations)
@@ -412,7 +652,11 @@ def execute_catalog_voice_tool(
     elif request.name == "read_catalog_summary":
         message, citations = _catalog_summary(db)
     elif request.name == "read_inventory_status":
-        message, citations = _inventory_summary(db, product)
+        message, citations = _inventory_summary(
+            db,
+            product,
+            question=request.arguments.question,
+        )
     elif request.name == "read_publish_readiness":
         if revision is None:
             raise HTTPException(

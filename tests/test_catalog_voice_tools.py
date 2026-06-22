@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from types import SimpleNamespace
 
 from sqlalchemy import select
@@ -10,7 +11,7 @@ from app.catalog.ai_schemas import (
     CatalogAISuggestionProposal,
 )
 from app.config import Settings
-from app.models import CatalogWorkflowEvent
+from app.models import CatalogWorkflowEvent, Product, Store
 from app.routers.admin_catalog import (
     get_catalog_realtime_service,
     get_catalog_suggestion_ai_service,
@@ -423,9 +424,10 @@ def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatc
         assert text_query.status_code == 200, text_query.text
         text_result = text_query.json()
         assert text_result["mutation"] is False
-        assert "Storewide Low Stock Coat" in text_result["message"]
+        assert "Dallas Downtown" in text_result["message"]
         assert text_result["citations"][0]["kind"] == "inventory"
-        assert text_result["citations"][0]["value"]["store_name"] == "Dallas Downtown"
+        assert text_result["citations"][0]["label"] == "Dallas Downtown"
+        assert text_result["citations"][0]["value"]["low_stock_skus"] == 1
 
         session = client.post(
             f"/api/admin/catalog/workflows/{workflow['id']}/realtime/sessions",
@@ -456,5 +458,80 @@ def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatc
         assert voice_query.status_code == 200, voice_query.text
         voice_result = voice_query.json()
         assert voice_result["mutation"] is False
-        assert "Storewide Low Stock Coat" in voice_result["message"]
-        assert voice_result["citations"][0]["value"]["inventory_qty"] == 2
+        assert "Dallas Downtown" in voice_result["message"]
+        assert voice_result["citations"][0]["label"] == "Dallas Downtown"
+        assert voice_result["citations"][0]["value"]["low_stock_skus"] == 1
+
+
+def test_storewide_assistant_uses_inventory_data_for_store_status(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            db.add(
+                Store(
+                    id="1002",
+                    seed_run_id="run_catalog",
+                    name="Atlanta",
+                    city="Atlanta",
+                    state="GA",
+                    postal_code="30303",
+                    address_line1="2 Peachtree St",
+                    profile_type="southeast_core",
+                    services=[],
+                    raw_source={},
+                )
+            )
+            db.add(
+                Product(
+                    id="prod_atlanta_low",
+                    seed_run_id="run_catalog",
+                    store_id="1002",
+                    title="Atlanta Low Stock Bag",
+                    description="A product with inventory risk.",
+                    link="https://example.com/atlanta-low",
+                    image_link="https://example.com/atlanta-low.jpg",
+                    price=Decimal("250.00"),
+                    availability="out of stock",
+                    brand="Sterling Hollis",
+                    category="handbags",
+                    color="Black",
+                    size="One Size",
+                    material="leather",
+                    gender="women",
+                    season="fall",
+                    margin_pct=Decimal("0.5000"),
+                    inventory_qty=0,
+                    objective_weight=Decimal("0.8000"),
+                    metadata_json={},
+                )
+            )
+            db.commit()
+
+        dallas_status = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Dallas status?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("store-status-query"),
+        )
+        assert dallas_status.status_code == 200, dallas_status.text
+        dallas_result = dallas_status.json()
+        assert dallas_result["mutation"] is False
+        assert "Dallas Downtown" in dallas_result["message"]
+        assert dallas_result["citations"][0]["source_id"] == "1001"
+        assert dallas_result["citations"][0]["value"]["store_name"] == "Dallas Downtown"
+
+        low_stock = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which stores have low stock?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("store-low-stock-query"),
+        )
+        assert low_stock.status_code == 200, low_stock.text
+        low_stock_result = low_stock.json()
+        labels = [citation["label"] for citation in low_stock_result["citations"]]
+        assert "Atlanta" in labels
+        assert "Dallas Downtown" in labels
+        assert len(labels) == len(set(labels))
