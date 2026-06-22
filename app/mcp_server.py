@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import csv
 from dataclasses import dataclass
 import hashlib
@@ -145,6 +145,10 @@ from app.services.capabilities import (
     Surface,
     capability_allowed_for_personas,
     get_capability,
+)
+from app.services.capability_executor import (
+    CapabilityExecutionContext,
+    execute_capability,
 )
 from app.services.communications import (
     customer_message_history,
@@ -524,6 +528,29 @@ def build_mcp_server_for_personas(
         resource_prefixes=tuple(resource_prefixes),
     )
     return _clone_mcp_server(definition)
+
+
+def _mcp_execute_capability(
+    *,
+    capability_id: str,
+    personas: tuple[Persona, ...],
+    selected_tool: str,
+    handler,
+    approval_state: Mapping[str, object] | None = None,
+    attributes: Mapping[str, object] | None = None,
+):
+    return execute_capability(
+        CapabilityExecutionContext(
+            capability_id=capability_id,
+            personas=personas,
+            surface=Surface.MCP,
+            selected_tool=selected_tool,
+            selected_agent="FastMCP",
+            approval_state=approval_state or {},
+            attributes=attributes or {},
+        ),
+        handler,
+    ).output
 
 
 def build_mcp_bundle_servers() -> dict[str, FastMCP]:
@@ -6196,12 +6223,29 @@ def fashion_exec_send_strategy_packet_email(
 ) -> ExecutiveStrategyPacketEmailSendResponse:
     """Send a prepared strategy packet email only with explicit approval."""
     _ensure_feature_enabled(settings.strategy_packet_enabled, "Strategy packet")
-    with SessionLocal() as db:
-        return send_strategy_packet_email(
-            db,
-            packet_id=packet_id,
-            approved=approved,
-        )
+    if not approved:
+        with SessionLocal() as db:
+            return send_strategy_packet_email(
+                db,
+                packet_id=packet_id,
+                approved=approved,
+            )
+
+    def handler() -> ExecutiveStrategyPacketEmailSendResponse:
+        with SessionLocal() as db:
+            return send_strategy_packet_email(
+                db,
+                packet_id=packet_id,
+                approved=approved,
+            )
+
+    return _mcp_execute_capability(
+        capability_id="executive.strategy.email.send",
+        personas=(Persona.EXECUTIVE, Persona.SEND_CAPABLE),
+        selected_tool="fashion_exec_send_strategy_packet_email",
+        handler=handler,
+        approval_state={"approved": approved},
+    )
 
 
 @mcp.tool(
@@ -6642,41 +6686,50 @@ def fashion_get_product_feed(
     limit: int = 200,
 ) -> dict:
     """Return public normalized OpenAI-commerce-style product feed rows."""
-    params = ProductFeedInput(store_id=store_id, limit=limit)
-    with SessionLocal() as db:
-        products = list_catalog_products(
-            db,
-            ProductFilters(
-                store_id=params.store_id,
-                include_preorder=True,
-                sort=ProductSort.relevance,
-                limit=params.limit,
-            ),
-            include_facets=False,
-        ).items
-        items = [
-            {
-                "id": product.id,
-                "title": product.title,
-                "description": product.description,
-                "link": product.link,
-                "image_link": (
-                    product.images.primary_url
-                    if product.images and product.images.primary_url
-                    else product.image_url
+    def handler() -> dict:
+        params = ProductFeedInput(store_id=store_id, limit=limit)
+        with SessionLocal() as db:
+            products = list_catalog_products(
+                db,
+                ProductFilters(
+                    store_id=params.store_id,
+                    include_preorder=True,
+                    sort=ProductSort.relevance,
+                    limit=params.limit,
                 ),
-                "price": f"{product.price:.2f} USD",
-                "availability": product.inventory_summary.availability,
-                "brand": product.brand,
-                "category": product.category,
-                "color": product.attributes.get("color"),
-                "size": None,
-                "material": product.attributes.get("material"),
-                "gender": product.attributes.get("gender"),
-            }
-            for product in products
-        ]
-        return {"count": len(items), "items": items}
+                include_facets=False,
+            ).items
+            items = [
+                {
+                    "id": product.id,
+                    "title": product.title,
+                    "description": product.description,
+                    "link": product.link,
+                    "image_link": (
+                        product.images.primary_url
+                        if product.images and product.images.primary_url
+                        else product.image_url
+                    ),
+                    "price": f"{product.price:.2f} USD",
+                    "availability": product.inventory_summary.availability,
+                    "brand": product.brand,
+                    "category": product.category,
+                    "color": product.attributes.get("color"),
+                    "size": None,
+                    "material": product.attributes.get("material"),
+                    "gender": product.attributes.get("gender"),
+                }
+                for product in products
+            ]
+            return {"count": len(items), "items": items}
+
+    return _mcp_execute_capability(
+        capability_id="public.catalog.feed",
+        personas=(Persona.SHOPPER,),
+        selected_tool="fashion_get_product_feed",
+        handler=handler,
+        attributes={"store_id": store_id, "limit": limit},
+    )
 
 
 def _catalog_discovery_result(
@@ -6752,27 +6805,41 @@ def fashion_catalog_search(
     limit: int = 12,
 ) -> CallToolResult:
     """Search public normalized products; private drafts and archives are excluded."""
-    bounded_limit = max(1, min(int(limit or 12), 50))
-    with SessionLocal() as db:
-        result = list_catalog_products(
-            db,
-            ProductFilters(
-                q=(query or "").strip() or None,
-                store_id=(store_id or "").strip() or None,
-                category=(category or "").strip() or None,
-                brand=(brand or "").strip() or None,
-                include_preorder=True,
-                sort=ProductSort.relevance,
-                limit=bounded_limit,
-            ),
-            include_facets=False,
+    def handler() -> CallToolResult:
+        bounded_limit = max(1, min(int(limit or 12), 50))
+        with SessionLocal() as db:
+            result = list_catalog_products(
+                db,
+                ProductFilters(
+                    q=(query or "").strip() or None,
+                    store_id=(store_id or "").strip() or None,
+                    category=(category or "").strip() or None,
+                    brand=(brand or "").strip() or None,
+                    include_preorder=True,
+                    sort=ProductSort.relevance,
+                    limit=bounded_limit,
+                ),
+                include_facets=False,
+            )
+        return _catalog_discovery_result(
+            mode="search",
+            products=[item.model_dump(mode="json") for item in result.items],
+            found=bool(result.items),
+            query=(query or "").strip() or None,
+            total=result.total,
         )
-    return _catalog_discovery_result(
-        mode="search",
-        products=[item.model_dump(mode="json") for item in result.items],
-        found=bool(result.items),
-        query=(query or "").strip() or None,
-        total=result.total,
+
+    return _mcp_execute_capability(
+        capability_id="public.catalog.search",
+        personas=(Persona.SHOPPER,),
+        selected_tool="fashion_catalog_search",
+        handler=handler,
+        attributes={
+            "store_id": store_id,
+            "category": category,
+            "brand": brand,
+            "limit": limit,
+        },
     )
 
 
@@ -6791,16 +6858,25 @@ def fashion_catalog_product_detail(
     store_id: str | None = None,
 ) -> CallToolResult:
     """Return one published normalized product by stable catalog ID."""
-    normalized_product_id = str(product_id or "").strip()
-    with SessionLocal() as db:
-        product = get_catalog_product_detail(
-            db,
-            normalized_product_id,
-            store_id=(store_id or "").strip() or None,
+    def handler() -> CallToolResult:
+        normalized_product_id = str(product_id or "").strip()
+        with SessionLocal() as db:
+            product = get_catalog_product_detail(
+                db,
+                normalized_product_id,
+                store_id=(store_id or "").strip() or None,
+            )
+        return _catalog_discovery_result(
+            mode="detail",
+            products=[product.model_dump(mode="json")] if product else [],
+            found=product is not None,
+            product_id=normalized_product_id,
         )
-    return _catalog_discovery_result(
-        mode="detail",
-        products=[product.model_dump(mode="json")] if product else [],
-        found=product is not None,
-        product_id=normalized_product_id,
+
+    return _mcp_execute_capability(
+        capability_id="public.catalog.product_detail",
+        personas=(Persona.SHOPPER,),
+        selected_tool="fashion_catalog_product_detail",
+        handler=handler,
+        attributes={"store_id": store_id},
     )
