@@ -120,6 +120,7 @@ def test_openapi_marks_admin_trace_and_admin_catalog_surfaces():
         ("/api/admin/catalog/products/drafts", "post"): "catalog_admin.product.draft",
         ("/api/admin/catalog/v2/products/drafts", "post"): "catalog_admin.product.draft",
         ("/api/admin/catalog/v3/products/drafts", "post"): "catalog_admin.product.draft",
+        ("/api/admin/catalog/assistant/query", "post"): "catalog_admin.assistant.query",
         ("/api/admin/catalog/source-bundles", "get"): "catalog_admin.catalog.manage",
         ("/api/admin/catalog/products/{product_id}/reviews", "get"): "catalog_admin.catalog.manage",
         ("/api/admin/catalog/products/{product_id}/publish", "post"): "catalog_admin.product.publish",
@@ -189,3 +190,12 @@ def test_curated_frontend_yaml_matches_public_recommendation_contract():
     )[0]
     assert "additionalProperties: false" in public_schema
     assert "customer_id:" not in public_schema
+
+
+def test_curated_frontend_yaml_includes_chat_capability_metadata():
+    text = Path("docs/frontend-openapi.yaml").read_text(encoding="utf-8")
+    chat_response = text.split("ChatResponse:", 1)[1].split("ChatIntent:", 1)[0]
+
+    assert "capability_id:" in chat_response
+    assert "capability_surface:" in chat_response
+    assert "persona:" in chat_response

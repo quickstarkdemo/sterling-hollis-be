@@ -74,5 +74,8 @@ class ChatResponse(BaseModel):
     evaluator_confidence: float | None = None
     selected_agent: str | None = None
     selected_tool: str | None = None
+    capability_id: str | None = None
+    capability_surface: str | None = None
+    persona: str | None = None
     requires_followup: bool = False
     clarifying_question: str | None = None

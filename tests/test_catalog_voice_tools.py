@@ -424,6 +424,10 @@ def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatc
         assert text_query.status_code == 200, text_query.text
         text_result = text_query.json()
         assert text_result["mutation"] is False
+        assert text_result["capability_id"] == "catalog_admin.assistant.query"
+        assert text_result["capability_surface"] == "admin_assistant"
+        assert text_result["persona"] == "catalog_admin"
+        assert text_result["selected_tool"] == "catalog_assistant_query"
         assert "Dallas Downtown" in text_result["message"]
         assert text_result["citations"][0]["kind"] == "inventory"
         assert text_result["citations"][0]["label"] == "Dallas Downtown"

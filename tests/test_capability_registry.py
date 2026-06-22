@@ -26,7 +26,7 @@ def test_registry_is_internally_valid():
 
     ids = [capability.id for capability in list_capabilities()]
 
-    assert REGISTRY_VERSION == "2026-06-22"
+    assert REGISTRY_VERSION == "2026-06-22.2"
     assert len(ids) == len(set(ids))
     assert all(capability.operation for capability in list_capabilities())
     assert all(capability.input_schema for capability in list_capabilities())
