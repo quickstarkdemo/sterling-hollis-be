@@ -19,6 +19,10 @@ surface. It excludes MCP/OpenAI Apps adapter concerns and focuses on catalog,
 product detail, recommendations, generated image URLs, image-job progress, and
 the retail chat surface.
 
+Use `docs/capability-map.md` when you need the cross-surface contract: persona
+policy, input/output schemas, REST paths, chat tools, admin assistant behavior,
+and MCP tool parity generated from the backend capability registry.
+
 ## Identity Model
 
 - Catalog products use `cat_...` IDs.
@@ -127,6 +131,23 @@ the capability contract and API surface:
 Public shopper operations must not accept caller-supplied `customer_id`. Account
 and order personalization uses Clerk authentication and backend-derived customer
 identity instead.
+
+## Persona And Surface Boundaries
+
+The backend capability registry is the source of truth for persona access:
+
+| Persona/surface | Frontend contract |
+| --- | --- |
+| Public shopper | Public catalog browsing, public recommendations, image recommendations, and anonymous storefront chat. |
+| Authenticated shopper | Storefront chat can answer order/account/personalized requests only after Clerk resolves a linked customer. |
+| Catalog admin | Catalog Studio REST routes and the admin assistant require the Catalog Studio Clerk policy. |
+| Developer trace | Trace list/read/export/stream routes require the same owner/admin posture and stay separate from catalog administration. |
+| Operator compatibility | Legacy `/admin`, `/recommendations/*`, and `/feeds/*` routes are local/trusted or production-protected compatibility APIs, not primary frontend contracts. |
+| MCP public/shopper | `/mcp/public/` and `/mcp/shopper/` expose only public catalog discovery and feed tools. |
+| MCP associate/executive send | `*-send` bundles are separate from draft/preparation bundles and should only be exposed behind identity plus explicit approval policy. |
+
+`docs/capability-map.md` links each registered capability to its REST paths,
+agent tools, MCP tools, input/output schemas, personas, and approval policy.
 
 ## Admin/Operations Endpoints Useful During Buildout
 

@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI
 from app.config import Settings
 from app.main import create_app
 from app.services.api_capabilities import annotate_api_capability_routes
-from app.services.capabilities import REGISTRY_VERSION
+from app.services.capabilities import REGISTRY_VERSION, Surface, list_capabilities
 
 
 PUBLIC_SHOPPER_CONTRACTS = {
@@ -199,3 +199,55 @@ def test_curated_frontend_yaml_includes_chat_capability_metadata():
     assert "capability_id:" in chat_response
     assert "capability_surface:" in chat_response
     assert "persona:" in chat_response
+
+
+def test_generated_capability_map_covers_frontend_exposed_capabilities():
+    text = Path("docs/capability-map.md").read_text(encoding="utf-8")
+    frontend_surfaces = {Surface.REST, Surface.CHAT, Surface.ADMIN_ASSISTANT, Surface.MCP, Surface.WIDGET}
+
+    assert f"Registry version: `{REGISTRY_VERSION}`" in text
+
+    for capability in list_capabilities():
+        if not set(capability.surfaces).intersection(frontend_surfaces):
+            continue
+        line = next(
+            line
+            for line in text.splitlines()
+            if line.startswith(f"| `{capability.id}`")
+        )
+        assert capability.name in line
+        assert capability.input_schema in line
+        assert capability.output_schema in line
+        assert capability.service_handler in line
+        for persona in capability.allowed_personas:
+            assert persona.value in line
+        for surface in capability.surfaces:
+            assert surface.value in line
+
+
+def test_generated_capability_map_links_rest_chat_and_mcp_parity():
+    text = Path("docs/capability-map.md").read_text(encoding="utf-8")
+
+    assert "`public.catalog.search`" in text
+    assert "`GET /api/catalog` (public_shopper, current)" in text
+    assert "`semantic_catalog_search`" in text
+    assert "`fashion_catalog_search` (/mcp/associate-send/, /mcp/associate/, /mcp/catalog-admin/" in text
+
+    assert "`shopper.chat.turn`" in text
+    assert "`POST /api/chat` (public_shopper, current)" in text
+    assert "`store_info`" in text
+
+    assert "`catalog_admin.assistant.query`" in text
+    assert "`POST /api/admin/catalog/assistant/query` (catalog_admin, current)" in text
+
+    assert "`public.catalog.feed`" in text
+    assert "`fashion_get_product_feed`" in text
+    assert "/mcp/public/" in text
+
+
+def test_frontend_docs_reference_generated_capability_map():
+    text = Path("docs/frontend-api.md").read_text(encoding="utf-8")
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+
+    assert "docs/capability-map.md" in text
+    assert "scripts/export_capability_map.py" in makefile
