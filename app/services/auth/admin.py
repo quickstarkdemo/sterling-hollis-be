@@ -81,7 +81,7 @@ def require_catalog_admin(
 
 _TRACE_SURFACE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _CATALOG_TRACE_PATH_RE = re.compile(
-    r"^/api/admin/catalog/(?:workflows(?:/.*)?|(?:(?:v2|v3)/)?products/[^/]+/publish)$"
+    r"^/api/admin/catalog/(?:assistant/query|workflows(?:/.*)?|(?:(?:v2|v3)/)?products/[^/]+/publish)$"
 )
 
 

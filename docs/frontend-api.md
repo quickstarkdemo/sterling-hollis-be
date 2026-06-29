@@ -836,6 +836,32 @@ objects. Provider timeouts and invalid structured output leave the prior draft
 unchanged and return a safe error whose `detail` object contains `code`,
 `message`, and `retryable` fields.
 
+## Catalog Studio Text Assistant
+
+`POST /api/admin/catalog/assistant/query` powers Catalog Chat. It requires the
+same Catalog Studio Clerk administrator policy as product authoring routes and
+keeps the existing request shape:
+
+```json
+{
+  "question": "Which stores have low stock for published handbags?",
+  "query_scopes": ["catalog", "inventory"]
+}
+```
+
+When `OPENAI_API_KEY` is configured, the backend routes the question through
+`CatalogStudioAssistantAgent`, which can call bounded read-only tools for
+catalog products, inventory, stores, customer purchase evidence, and orders.
+The response includes `selected_agent`, `selected_tool`, `agent_mode`, and
+record-level `citations`. Customer/order citations are PII-minimized; do not
+expect emails or phone numbers in assistant evidence.
+
+If provider orchestration is unavailable or returns no tool-backed evidence, the
+endpoint returns `agent_mode: "fallback"` and `fallback_reason` while still
+using deterministic grounded read tools. Treat fallback answers as transparent
+degraded service, not as model-authored responses. The frontend can continue
+rendering `message` and `citations` the same way.
+
 ## Realtime Voice Draft Commands
 
 Realtime voice is an alternate input for the same private draft workflow; it is

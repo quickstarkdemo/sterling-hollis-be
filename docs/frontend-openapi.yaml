@@ -27,7 +27,7 @@ paths:
       tags: [catalog-studio-admin]
       summary: Resolve Catalog Studio administrator session
       x-sterling-capability-id: catalog_admin.session
-      x-sterling-capability-version: "2026-06-22.3"
+      x-sterling-capability-version: "2026-06-29.1"
       x-sterling-api-surface: catalog_admin
       x-sterling-auth-posture: catalog_admin_clerk
       x-sterling-current-frontend-contract: true
@@ -55,6 +55,41 @@ paths:
           description: Missing or invalid Clerk token.
         "403":
           description: Valid Clerk user is not a Catalog Studio administrator.
+  /api/admin/catalog/assistant/query:
+    post:
+      tags: [catalog-studio-admin]
+      summary: Query the Catalog Studio assistant
+      x-sterling-capability-id: catalog_admin.assistant.query
+      x-sterling-capability-version: "2026-06-29.1"
+      x-sterling-api-surface: catalog_admin
+      x-sterling-auth-posture: catalog_admin_clerk
+      x-sterling-current-frontend-contract: true
+      x-sterling-legacy-compatibility: false
+      x-sterling-capability-surface: admin_assistant
+      description: >
+        Answers read-only Catalog Studio questions using a Catalog Studio admin
+        agent when provider configuration is present. The agent can interrogate
+        bounded product, inventory, store, customer, and order tools. If the
+        provider is unavailable or returns no tool-backed evidence, the response
+        reports `agent_mode: fallback` and returns deterministic grounded
+        readouts instead of pretending an agent answered.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogAssistantQueryRequest"
+      responses:
+        "200":
+          description: Bounded assistant answer with citations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogVoiceToolResult"
+        "401": {description: Missing or invalid Clerk token.}
+        "403": {description: Valid Clerk user is not a Catalog Studio administrator.}
   /api/admin/traces:
     get:
       tags: [catalog-studio-admin]
@@ -2074,6 +2109,87 @@ components:
           enum: [true]
         capabilities:
           $ref: "#/components/schemas/CatalogStudioCapabilities"
+    CatalogAssistantQueryRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        query_scopes:
+          type: array
+          nullable: true
+          items:
+            type: string
+            enum: [catalog, inventory]
+    CatalogVoiceCitation:
+      type: object
+      additionalProperties: false
+      required: [kind, source_id, label, value]
+      properties:
+        kind:
+          type: string
+          enum: [product, catalog, inventory, readiness, customer, order, store]
+        source_id:
+          type: string
+        label:
+          type: string
+        value:
+          type: object
+          additionalProperties: true
+    CatalogVoiceToolResult:
+      type: object
+      additionalProperties: false
+      required: [status, message, mutation, citations]
+      properties:
+        status:
+          type: string
+          enum: [succeeded, blocked]
+          default: succeeded
+        message:
+          type: string
+        mutation:
+          type: boolean
+          enum: [false]
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogVoiceCitation"
+        suggestion_set:
+          type: object
+          nullable: true
+          additionalProperties: true
+        capability_id:
+          type: string
+          nullable: true
+        capability_surface:
+          type: string
+          nullable: true
+        persona:
+          type: string
+          nullable: true
+        selected_agent:
+          type: string
+          nullable: true
+          enum: [CatalogStudioAssistantAgent, CatalogStudioAssistantFallback, null]
+        selected_tool:
+          type: string
+          nullable: true
+          enum:
+            - catalog_assistant_agent
+            - search_catalog_products
+            - read_inventory_status
+            - lookup_customer_purchases
+            - null
+        agent_mode:
+          type: string
+          nullable: true
+          enum: [agent, fallback, null]
+        fallback_reason:
+          type: string
+          nullable: true
     CatalogSourceAssetResponse:
       type: object
       additionalProperties: false

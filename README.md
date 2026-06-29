@@ -111,6 +111,14 @@ voice is available only when `CATALOG_STUDIO_REALTIME_ENABLED=true` and
 random secret. The safety secret is used only to HMAC the authenticated Clerk
 user ID before it is sent as an OpenAI safety identifier.
 
+Catalog Chat text queries use `CatalogStudioAssistantAgent` when `OPENAI_API_KEY`
+is configured. The agent can call bounded read-only tools over catalog products,
+inventory, stores, customer purchase evidence, and orders. If provider
+orchestration is unavailable or returns no tool-backed evidence, the endpoint
+returns `agent_mode=fallback` and a `fallback_reason` while still using
+deterministic grounded read tools; operators should treat that as degraded
+service rather than an agent-authored answer.
+
 | Setting | Default | Required when | Secret |
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | empty | Any OpenAI-backed Catalog Studio capability is enabled | yes |
@@ -200,6 +208,20 @@ The deployment check proves that required settings are non-empty, the session
 capability proves that the running API loaded them, and the browser check proves
 microphone and provider transport health. All three checks are required for an
 end-to-end production verification.
+
+#### Production Catalog Chat preflight
+
+1. Configure `OPENAI_API_KEY` and deploy backend `main`.
+2. With an authorized Clerk session, open Catalog Studio and ask a product
+   question such as "Name two Maison Arctis products and tell me their
+   categories and lifecycle statuses." Confirm `agent_mode` is `agent` when
+   provider orchestration is expected.
+3. Ask a customer/order question such as "Which customers have bought Tom Ford
+   Black Trousers?" Confirm the answer cites order evidence without email or
+   phone fields.
+4. Ask "Which stores have low stock for published handbags?" and confirm the
+   answer is filtered to matching inventory rows rather than a generic store
+   risk leaderboard.
 
 Important environment notes:
 

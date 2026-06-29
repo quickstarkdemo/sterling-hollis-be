@@ -96,11 +96,24 @@ def capability_trace_attributes(
 
 
 def capability_result_trace_attributes(output: object, *, status: str) -> dict[str, object]:
+    selected_agent = getattr(output, "selected_agent", None)
+    selected_tool = getattr(output, "selected_tool", None)
+    agent_mode = getattr(output, "agent_mode", None)
+    fallback_reason = getattr(output, "fallback_reason", None)
+    if isinstance(output, Mapping):
+        selected_agent = selected_agent or output.get("selected_agent")
+        selected_tool = selected_tool or output.get("selected_tool")
+        agent_mode = agent_mode or output.get("agent_mode")
+        fallback_reason = fallback_reason or output.get("fallback_reason")
     return _compact(
         {
             "status": status,
             "result_type": type(output).__name__ if output is not None else None,
             "result_count": capability_result_count(output),
+            "selected_agent": selected_agent,
+            "selected_tool": selected_tool,
+            "agent_mode": agent_mode,
+            "fallback_reason": fallback_reason,
         }
     )
 

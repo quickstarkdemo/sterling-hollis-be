@@ -67,7 +67,7 @@ INVENTORY_QUESTION_TOKENS = (
 
 
 class CatalogVoiceCitation(BaseModel):
-    kind: Literal["product", "catalog", "inventory", "readiness"]
+    kind: Literal["product", "catalog", "inventory", "readiness", "customer", "order", "store"]
     source_id: str
     label: str
     value: Any
@@ -82,7 +82,10 @@ class CatalogVoiceToolResult(BaseModel):
     capability_id: str | None = None
     capability_surface: str | None = None
     persona: str | None = None
+    selected_agent: str | None = None
     selected_tool: str | None = None
+    agent_mode: Literal["agent", "fallback"] | None = None
+    fallback_reason: str | None = None
 
 
 def _owned_workflow(
