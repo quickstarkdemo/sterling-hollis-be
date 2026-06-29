@@ -880,6 +880,48 @@ def test_catalog_assistant_route_reports_agent_mode_when_provider_invokes(monkey
         assert result["citations"][0]["value"]["brand"] == "Maison Arctis"
 
 
+def test_catalog_assistant_provider_can_use_customer_tool_with_legacy_scopes(monkeypatch):
+    settings = Settings(_env_file=None, openai_api_key="server-only-openai-key")
+
+    def fake_invoker(prompt, tools):
+        assert "lookup_customer_purchases" in prompt
+        assert "legacy frontend query_scopes" in prompt
+        payload = tools[2](product_query="Tom Ford Black Trousers", limit=2)
+        citation_id = payload["citations"][0]["source_id"]
+        return {
+            "message": "Avery Stone bought Tom Ford Black Trousers through Dallas Downtown.",
+            "primary_tool": "lookup_customer_purchases",
+            "citation_ids": [citation_id],
+            "requires_followup": False,
+            "clarifying_question": None,
+            "rationale": "test customer provider path",
+        }
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        client.app.dependency_overrides[get_catalog_assistant_service] = lambda: (
+            CatalogAssistantAgentService(settings, invoker=fake_invoker)
+        )
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which customers have bought Tom Ford Black Trousers?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("agent-customer-scope-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["agent_mode"] == "agent"
+        assert result["selected_tool"] == "lookup_customer_purchases"
+        assert result["citations"][0]["kind"] == "order"
+        assert result["citations"][0]["value"]["customer_name"] == "Avery Stone"
+
+
 def test_catalog_assistant_rejects_provider_answers_without_tool_evidence(monkeypatch):
     settings = Settings(_env_file=None, openai_api_key="server-only-openai-key")
 
