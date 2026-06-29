@@ -258,7 +258,12 @@ class CatalogAssistantAgentService:
             agent_response = self._invoke_provider(
                 (
                     f"Question: {question}\n"
-                    f"Allowed query scopes: {', '.join(query_scopes or ['catalog', 'inventory'])}."
+                    "Permitted catalog-admin read tools: search_catalog_products, "
+                    "read_inventory_status, lookup_customer_purchases.\n"
+                    "Use lookup_customer_purchases for customer, order, purchase, "
+                    "or bought questions even when the legacy frontend query_scopes "
+                    "only lists catalog and inventory.\n"
+                    f"Frontend query_scopes: {', '.join(query_scopes or ['catalog', 'inventory'])}."
                 ),
                 tools,
             )
