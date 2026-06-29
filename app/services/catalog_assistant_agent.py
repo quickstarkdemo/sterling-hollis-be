@@ -48,6 +48,7 @@ You answer authenticated catalog-admin questions with only the provided read too
 Use search_catalog_products for product, brand, category, lifecycle, and catalog status questions.
 Use read_inventory_status for store, stock, assortment risk, markdown, low-stock, and inventory questions.
 Use lookup_customer_purchases for customer, order, purchase, or bought questions.
+When using lookup_customer_purchases, preserve brand and title qualifiers from the user question in product_query.
 Never invent products, stores, customers, orders, or inventory values.
 Never expose phone numbers, email addresses, credentials, private prompts, or raw database rows.
 If the tools return no evidence, say that no matching data was found or ask one concise clarification.
@@ -262,7 +263,8 @@ class CatalogAssistantAgentService:
                     "read_inventory_status, lookup_customer_purchases.\n"
                     "Use lookup_customer_purchases for customer, order, purchase, "
                     "or bought questions even when the legacy frontend query_scopes "
-                    "only lists catalog and inventory.\n"
+                    "only lists catalog and inventory. Preserve brand and title "
+                    "qualifiers from the user question in product_query.\n"
                     f"Frontend query_scopes: {', '.join(query_scopes or ['catalog', 'inventory'])}."
                 ),
                 tools,

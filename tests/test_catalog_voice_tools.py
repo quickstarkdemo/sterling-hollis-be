@@ -794,6 +794,28 @@ def test_catalog_assistant_answers_customer_purchase_questions_without_contact_p
         assert "phone" not in value
 
 
+def test_catalog_assistant_customer_purchase_query_rejects_near_brand_misses(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which customers have bought Prada Black Trousers?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("grounded-customer-no-near-miss-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["selected_tool"] == "lookup_customer_purchases"
+        assert result["citations"] == []
+        assert "Tom Ford Black Trousers" not in result["message"]
+        assert "No order-linked products matched" in result["message"]
+
+
 def test_catalog_assistant_filters_inventory_by_category_and_lifecycle(monkeypatch):
     with _admin_catalog_client(monkeypatch) as (client, sessions):
         with sessions() as db:
