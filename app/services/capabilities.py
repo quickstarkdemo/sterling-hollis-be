@@ -48,7 +48,7 @@ class ApprovalMode(StrEnum):
     EXPLICIT_BOOLEAN = "explicit_boolean"
 
 
-REGISTRY_VERSION = "2026-06-22.3"
+REGISTRY_VERSION = "2026-06-29.1"
 
 
 @dataclass(frozen=True)
@@ -343,7 +343,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     _capability(
         "catalog_admin.assistant.query",
         "Query Catalog Studio assistant",
-        "Answer bounded read-only Catalog Studio catalog and inventory questions.",
+        "Answer bounded read-only Catalog Studio catalog, inventory, product, customer, and order questions.",
         Operation.CATALOG_ADMIN,
         SideEffect.READ,
         (Persona.CATALOG_ADMIN,),
@@ -351,6 +351,18 @@ CAPABILITIES: tuple[Capability, ...] = (
         "app.routers.admin_catalog.CatalogAssistantQueryRequest",
         "app.services.catalog_voice_tools.CatalogVoiceToolResult",
         "app.routers.admin_catalog.query_catalog_assistant",
+    ),
+    _capability(
+        "catalog_admin.customer.read",
+        "Read Catalog Studio customer purchase evidence",
+        "Read PII-minimized customer and order evidence for Catalog Studio assistant answers.",
+        Operation.CUSTOMER,
+        SideEffect.READ,
+        (Persona.CATALOG_ADMIN,),
+        (Surface.ADMIN_ASSISTANT,),
+        "product_query, customer_query, store_query",
+        "PII-minimized customer/order evidence",
+        "app.services.catalog_assistant_tools.lookup_customer_purchases",
     ),
     _capability(
         "catalog_admin.catalog.manage",

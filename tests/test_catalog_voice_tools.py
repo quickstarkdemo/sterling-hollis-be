@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
 from sqlalchemy import select
 
+from app.api_traces.service import ApiTraceRecorder, get_trace_projection
 from app.catalog.ai_schemas import (
     CatalogAIFieldProposal,
     CatalogAISuggestionProposal,
 )
 from app.config import Settings
 from app.models import CatalogWorkflowEvent, Product, Store
+from app.models import CatalogProduct, Customer, Order, OrderItem, ProductInventory
 from app.routers.admin_catalog import (
+    get_catalog_assistant_service,
     get_catalog_realtime_service,
     get_catalog_suggestion_ai_service,
 )
+from app.services.catalog_assistant_agent import CatalogAssistantAgentService
 from app.services.catalog_ai import CatalogAISuggestionService
 from app.services.catalog_realtime import CatalogRealtimeService
 from tests.test_admin_catalog_api import _admin_catalog_client, _headers
@@ -105,6 +110,155 @@ def _storewide_context() -> dict:
         "mode": "workbench",
         "query_scopes": ["catalog", "inventory"],
     }
+
+
+def _trace_headers(trace_id: str, parent_span_id: str) -> dict[str, str]:
+    return {
+        "traceparent": f"00-{trace_id}-{parent_span_id}-01",
+        "x-trace-surface": "catalog-studio",
+    }
+
+
+def _seed_grounded_assistant_data(db):
+    db.add_all(
+        [
+            CatalogProduct(
+                id="cat_maison_tray",
+                seed_run_id="run_catalog",
+                catalog_key="test:maison:tray",
+                title="Maison Arctis Silver Accent Tray",
+                description="A polished home accent.",
+                brand="Maison Arctis",
+                category="home",
+                price_min=Decimal("250.00"),
+                price_max=Decimal("250.00"),
+                link="https://example.com/maison-tray",
+                color="Silver",
+                material="metal",
+                gender="unisex",
+                season="all-season",
+                metadata_json={},
+                lifecycle_status="published",
+                version=1,
+            ),
+            CatalogProduct(
+                id="cat_maison_pump",
+                seed_run_id="run_catalog",
+                catalog_key="test:maison:pump",
+                title="Maison Arctis Black Pump",
+                description="A structured evening shoe.",
+                brand="Maison Arctis",
+                category="shoes",
+                price_min=Decimal("650.00"),
+                price_max=Decimal("650.00"),
+                link="https://example.com/maison-pump",
+                color="Black",
+                material="leather",
+                gender="women",
+                season="fall",
+                metadata_json={},
+                lifecycle_status="draft",
+                version=1,
+            ),
+            CatalogProduct(
+                id="cat_maison_low_tote",
+                seed_run_id="run_catalog",
+                catalog_key="test:maison:low-tote",
+                title="Maison Arctis Low Stock Tote",
+                description="A handbag with low stock.",
+                brand="Maison Arctis",
+                category="handbags",
+                price_min=Decimal("950.00"),
+                price_max=Decimal("950.00"),
+                link="https://example.com/maison-tote",
+                color="Black",
+                material="leather",
+                gender="women",
+                season="fall",
+                metadata_json={},
+                lifecycle_status="published",
+                version=1,
+            ),
+            ProductInventory(
+                id="inv_maison_low_tote_1001",
+                seed_run_id="run_catalog",
+                catalog_product_id="cat_maison_low_tote",
+                store_id="1001",
+                size="One Size",
+                size_key="one_size",
+                availability="low stock",
+                inventory_qty=2,
+                metadata_json={},
+            ),
+            Product(
+                id="prod_tom_ford_trousers",
+                seed_run_id="run_catalog",
+                store_id="1001",
+                title="Tom Ford Black Trousers",
+                description="A customer-purchased trouser.",
+                link="https://example.com/tom-ford-trousers",
+                image_link="https://example.com/tom-ford-trousers.jpg",
+                price=Decimal("890.00"),
+                availability="in stock",
+                brand="Tom Ford",
+                category="womens_apparel",
+                color="Black",
+                size="M",
+                material="wool",
+                gender="women",
+                season="fall",
+                margin_pct=Decimal("0.5500"),
+                inventory_qty=12,
+                objective_weight=Decimal("0.7000"),
+                metadata_json={},
+            ),
+            Customer(
+                id="cust_tom_ford",
+                seed_run_id="run_catalog",
+                home_store_id="1001",
+                first_name="Avery",
+                last_name="Stone",
+                email="avery@example.com",
+                phone_e164="+15551234567",
+                city="Dallas",
+                state="TX",
+                joined_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
+                loyalty_tier="gold",
+                sex="female",
+                price_sensitivity=Decimal("0.2500"),
+                occasion_affinity={},
+                style_vector={},
+                size_preferences={},
+                channel_preference="email",
+                pii_token="pii_tom_ford",
+            ),
+            Order(
+                id="order_tom_ford",
+                seed_run_id="run_catalog",
+                customer_id="cust_tom_ford",
+                store_id="1001",
+                ordered_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+                status="delivered",
+                occasion="workwear",
+                channel="store",
+                subtotal=Decimal("890.00"),
+                discount_amount=Decimal("0.00"),
+                tax_amount=Decimal("71.20"),
+                total_amount=Decimal("961.20"),
+                returned=False,
+            ),
+            OrderItem(
+                id="item_tom_ford",
+                order_id="order_tom_ford",
+                product_id="prod_tom_ford_trousers",
+                quantity=1,
+                unit_price=Decimal("890.00"),
+                discount_amount=Decimal("0.00"),
+                line_total=Decimal("890.00"),
+            ),
+        ]
+    )
+    db.commit()
 
 
 def test_v3_voice_reads_inventory_and_stages_only_the_server_pinned_field(monkeypatch):
@@ -427,11 +581,13 @@ def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatc
         assert text_result["capability_id"] == "catalog_admin.assistant.query"
         assert text_result["capability_surface"] == "admin_assistant"
         assert text_result["persona"] == "catalog_admin"
-        assert text_result["selected_tool"] == "catalog_assistant_query"
+        assert text_result["selected_agent"] == "CatalogStudioAssistantFallback"
+        assert text_result["selected_tool"] == "read_inventory_status"
+        assert text_result["agent_mode"] == "fallback"
         assert "Dallas Downtown" in text_result["message"]
         assert text_result["citations"][0]["kind"] == "inventory"
         assert text_result["citations"][0]["label"] == "Dallas Downtown"
-        assert text_result["citations"][0]["value"]["low_stock_skus"] == 1
+        assert text_result["citations"][0]["value"]["low_stock_skus"] >= 1
 
         session = client.post(
             f"/api/admin/catalog/workflows/{workflow['id']}/realtime/sessions",
@@ -577,3 +733,238 @@ def test_storewide_assistant_uses_inventory_data_for_store_status(monkeypatch):
         assert discount_result["citations"][0]["label"] == "Dallas Downtown: Published Dress"
         assert discount_result["citations"][0]["value"]["inventory_qty"] == 5
         assert discount_result["citations"][0]["value"]["margin_pct"] == 0.5
+
+
+def test_catalog_assistant_answers_product_lifecycle_questions_from_catalog_data(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "From the currently loaded catalog, name two Maison Arctis products and tell me their categories and lifecycle statuses.",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("grounded-product-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["mutation"] is False
+        assert result["agent_mode"] == "fallback"
+        assert result["fallback_reason"] == "missing_provider_configuration"
+        assert result["selected_agent"] == "CatalogStudioAssistantFallback"
+        assert result["selected_tool"] == "search_catalog_products"
+        assert "Maison Arctis" in result["message"]
+        assert "Christian Louboutin" not in result["message"]
+        products = [citation for citation in result["citations"] if citation["kind"] == "product"]
+        assert len(products) >= 2
+        assert {citation["value"]["brand"] for citation in products} == {"Maison Arctis"}
+        assert {"category", "lifecycle_status"}.issubset(products[0]["value"])
+
+
+def test_catalog_assistant_answers_customer_purchase_questions_without_contact_pii(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which customers have bought Tom Ford Black Trousers, and what store are they associated with?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("grounded-customer-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["selected_tool"] == "lookup_customer_purchases"
+        assert "Avery Stone" in result["message"]
+        assert "Dallas Downtown" in result["message"]
+        assert "Store inventory risk" not in result["message"]
+        order_citations = [citation for citation in result["citations"] if citation["kind"] == "order"]
+        assert len(order_citations) == 1
+        value = order_citations[0]["value"]
+        assert value["product_title"] == "Tom Ford Black Trousers"
+        assert value["customer_name"] == "Avery Stone"
+        assert value["order_store_name"] == "Dallas Downtown"
+        assert "email" not in value
+        assert "phone" not in value
+
+
+def test_catalog_assistant_filters_inventory_by_category_and_lifecycle(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which stores have low stock for published handbags?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("grounded-inventory-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["selected_tool"] == "read_inventory_status"
+        assert "Dallas Downtown" in result["message"]
+        assert "Maison Arctis Low Stock Tote" in result["citations"][0]["value"]["product_titles"]
+        assert "Published Dress" not in result["citations"][0]["value"]["product_titles"]
+
+
+def test_catalog_assistant_returns_grounded_no_result_without_generic_inventory(monkeypatch):
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Name two Nebula Atelier products from the loaded catalog.",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers=_headers("grounded-no-result-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["agent_mode"] == "fallback"
+        assert result["selected_tool"] == "search_catalog_products"
+        assert result["citations"] == []
+        assert "No matching catalog products were found." in result["message"]
+        assert "Dallas Downtown" not in result["message"]
+
+
+def test_catalog_assistant_route_reports_agent_mode_when_provider_invokes(monkeypatch):
+    settings = Settings(_env_file=None, openai_api_key="server-only-openai-key")
+
+    def fake_invoker(_prompt, tools):
+        payload = tools[0](query="Maison Arctis", limit=2)
+        citation_id = payload["citations"][0]["source_id"]
+        return {
+            "message": "Agent synthesized the catalog answer.",
+            "primary_tool": "search_catalog_products",
+            "citation_ids": [citation_id],
+            "requires_followup": False,
+            "clarifying_question": None,
+            "rationale": "test provider path",
+        }
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        client.app.dependency_overrides[get_catalog_assistant_service] = lambda: (
+            CatalogAssistantAgentService(settings, invoker=fake_invoker)
+        )
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Summarize Maison Arctis products.",
+                "query_scopes": ["catalog"],
+            },
+            headers=_headers("agent-mode-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["message"] == "Agent synthesized the catalog answer."
+        assert result["agent_mode"] == "agent"
+        assert result["selected_agent"] == "CatalogStudioAssistantAgent"
+        assert result["selected_tool"] == "search_catalog_products"
+        assert result["citations"][0]["value"]["brand"] == "Maison Arctis"
+
+
+def test_catalog_assistant_rejects_provider_answers_without_tool_evidence(monkeypatch):
+    settings = Settings(_env_file=None, openai_api_key="server-only-openai-key")
+
+    def fake_invoker(_prompt, _tools):
+        return {
+            "message": "Canned answer with no backend evidence.",
+            "primary_tool": "catalog_assistant_agent",
+            "citation_ids": [],
+            "requires_followup": False,
+            "clarifying_question": None,
+            "rationale": "test missing tools",
+        }
+
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+
+        client.app.dependency_overrides[get_catalog_assistant_service] = lambda: (
+            CatalogAssistantAgentService(settings, invoker=fake_invoker)
+        )
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "From the currently loaded catalog, name two Maison Arctis products.",
+                "query_scopes": ["catalog"],
+            },
+            headers=_headers("agent-no-tool-query"),
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+
+        assert result["agent_mode"] == "fallback"
+        assert result["fallback_reason"] == "agent_returned_no_tool_evidence"
+        assert result["selected_agent"] == "CatalogStudioAssistantFallback"
+        assert result["selected_tool"] == "search_catalog_products"
+        assert "Canned answer" not in result["message"]
+        assert {citation["value"]["brand"] for citation in result["citations"]} == {"Maison Arctis"}
+
+
+def test_catalog_assistant_trace_records_grounded_tool_metadata_and_redaction(monkeypatch):
+    monkeypatch.setenv("API_TRACE_CAPTURE_ENABLED", "true")
+    trace_id = "b" * 32
+    with _admin_catalog_client(monkeypatch) as (client, sessions):
+        with sessions() as db:
+            _seed_grounded_assistant_data(db)
+        monkeypatch.setattr(
+            "app.api_traces.operations.ApiTraceRecorder",
+            lambda *, settings: ApiTraceRecorder(
+                settings=settings,
+                session_factory=sessions,
+            ),
+        )
+
+        response = client.post(
+            "/api/admin/catalog/assistant/query",
+            json={
+                "question": "Which customers have bought Tom Ford Black Trousers?",
+                "query_scopes": ["catalog", "inventory"],
+            },
+            headers={
+                **_headers("grounded-trace-query"),
+                **_trace_headers(trace_id, "c" * 16),
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["x-trace-capture"] == "active"
+
+        with sessions() as db:
+            projection = get_trace_projection(
+                db,
+                trace_id=trace_id,
+                owner_provider="clerk",
+                owner_provider_user_id="user_admin",
+            )
+
+        assert projection is not None
+        capability_span = next(
+            span for span in projection.spans if span.operation == "capability.execute"
+        )
+        assert capability_span.attributes["capability_id"] == "catalog_admin.assistant.query"
+        assert capability_span.attributes["selected_agent"] == "CatalogStudioAssistantFallback"
+        assert capability_span.attributes["selected_tool"] == "lookup_customer_purchases"
+        assert capability_span.attributes["agent_mode"] == "fallback"
+        assert capability_span.attributes["fallback_reason"] == "missing_provider_configuration"
+        encoded_projection = projection.model_dump_json()
+        assert "avery@example.com" not in encoded_projection
+        assert "+15551234567" not in encoded_projection

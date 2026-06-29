@@ -26,7 +26,7 @@ def test_registry_is_internally_valid():
 
     ids = [capability.id for capability in list_capabilities()]
 
-    assert REGISTRY_VERSION == "2026-06-22.3"
+    assert REGISTRY_VERSION == "2026-06-29.1"
     assert len(ids) == len(set(ids))
     assert all(capability.operation for capability in list_capabilities())
     assert all(capability.input_schema for capability in list_capabilities())
@@ -63,8 +63,20 @@ def test_catalog_admin_and_developer_trace_are_separate_grants():
 
     assert "catalog_admin.product.draft" in catalog_admin_ids
     assert "catalog_admin.product.publish" in catalog_admin_ids
+    assert "catalog_admin.customer.read" in catalog_admin_ids
     assert "developer_trace.read" not in catalog_admin_ids
     assert trace_ids == {"developer_trace.read"}
+
+
+def test_catalog_admin_customer_read_stays_out_of_public_and_associate_surfaces():
+    shopper_ids = _ids_for(Persona.SHOPPER)
+    associate_ids = _ids_for(Persona.ASSOCIATE)
+    catalog_customer_read = get_capability("catalog_admin.customer.read")
+
+    assert "catalog_admin.customer.read" not in shopper_ids
+    assert "catalog_admin.customer.read" not in associate_ids
+    assert catalog_customer_read.side_effect == SideEffect.READ
+    assert tuple(surface.value for surface in catalog_customer_read.surfaces) == ("admin_assistant",)
 
 
 def test_send_capabilities_require_explicit_approval_and_send_capable_grant():

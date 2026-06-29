@@ -253,6 +253,7 @@ def test_payload_expiry_preserves_topology_then_metadata_expiry_deletes_trace(
             trace_id="trace_catalog_1",
             owner_provider="clerk",
             owner_provider_user_id="user_admin",
+            now=now + timedelta(hours=2),
         )
 
         assert payload_result.payloads_expired == 1

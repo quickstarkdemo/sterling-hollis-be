@@ -45,6 +45,7 @@ BUILT_IN_REDACTED_KEYS = frozenset(
 DEFAULT_ALLOWED_KEYS = frozenset(
     {
         "action",
+        "agent_mode",
         "approval_status",
         "agent",
         "agent_name",
@@ -59,6 +60,10 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "blocked",
         "brand",
         "capability",
+        "capability_id",
+        "capability_name",
+        "capability_operation",
+        "capability_side_effect",
         "candidate_count",
         "card_count",
         "categories",
@@ -85,6 +90,7 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "expected_draft_version",
         "flagged",
         "fallback",
+        "fallback_reason",
         "gender",
         "host",
         "http_method",

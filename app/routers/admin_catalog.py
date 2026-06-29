@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api_traces.operations import api_trace_session
 from app.catalog.admin_schemas import (
     AdminDraftSnapshot,
     AdminDraftSnapshotV2,
@@ -115,6 +116,7 @@ from app.services.catalog_ai import (
     CatalogAIService,
     CatalogAISuggestionService,
 )
+from app.services.catalog_assistant_agent import CatalogAssistantAgentService
 from app.services.catalog_images import (
     approve_catalog_image,
     enqueue_catalog_image_job,
@@ -136,7 +138,6 @@ from app.services.catalog_realtime import (
 )
 from app.services.catalog_voice_tools import (
     CatalogVoiceToolResult,
-    answer_catalog_question,
     execute_catalog_voice_tool,
 )
 from app.services.catalog_sources import (
@@ -191,6 +192,12 @@ def get_catalog_realtime_service(
     settings: Settings = Depends(get_settings),
 ) -> CatalogRealtimeService:
     return CatalogRealtimeService(settings)
+
+
+def get_catalog_assistant_service(
+    settings: Settings = Depends(get_settings),
+) -> CatalogAssistantAgentService:
+    return CatalogAssistantAgentService(settings)
 
 
 def get_product_review_ai_service(
@@ -1140,28 +1147,35 @@ def query_catalog_assistant(
     request: CatalogAssistantQueryRequest,
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(require_catalog_admin),
+    service: CatalogAssistantAgentService = Depends(get_catalog_assistant_service),
 ) -> CatalogVoiceToolResult:
-    execution = execute_capability(
-        CapabilityExecutionContext(
-            capability_id="catalog_admin.assistant.query",
-            personas=personas_for_catalog_admin(principal),
-            surface=Surface.ADMIN_ASSISTANT,
-            selected_tool="catalog_assistant_query",
-            selected_agent="CatalogStudioAssistant",
-            actor_id=f"{principal.provider}:{principal.provider_user_id}",
-            attributes={"query_scopes": request.query_scopes or []},
-        ),
-        lambda: answer_catalog_question(
-            db,
-            question=request.question,
-            query_scopes=request.query_scopes,
-        ),
-    )
+    with api_trace_session(
+        settings=service.settings,
+        name="Catalog assistant query",
+        attributes={"capability_id": "catalog_admin.assistant.query"},
+    ):
+        execution = execute_capability(
+            CapabilityExecutionContext(
+                capability_id="catalog_admin.assistant.query",
+                personas=personas_for_catalog_admin(principal),
+                surface=Surface.ADMIN_ASSISTANT,
+                selected_tool="catalog_assistant_agent",
+                selected_agent="CatalogStudioAssistantAgent",
+                actor_id=f"{principal.provider}:{principal.provider_user_id}",
+                attributes={"query_scopes": request.query_scopes or []},
+            ),
+            lambda: service.answer(
+                db,
+                question=request.question,
+                query_scopes=request.query_scopes,
+            ),
+        )
     result = execution.output
     result.capability_id = execution.capability.id
     result.capability_surface = execution.surface.value
     result.persona = execution.persona.value
-    result.selected_tool = execution.selected_tool
+    result.selected_agent = result.selected_agent or execution.selected_agent
+    result.selected_tool = result.selected_tool or execution.selected_tool
     return result
 
 
