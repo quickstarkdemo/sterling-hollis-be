@@ -56,12 +56,15 @@ _STOPWORDS = {
     "store",
     "stores",
     "tell",
+    "them",
     "the",
     "their",
+    "they",
     "two",
     "what",
     "which",
     "with",
+    "who",
 }
 
 _CATEGORY_ALIASES: dict[str, str] = {
@@ -541,11 +544,15 @@ def lookup_customer_purchases(
 ) -> CatalogAssistantToolResult:
     bounded_limit = max(1, min(int(limit or 8), 12))
     product_tokens = _tokens(product_query)
+    minimum_score = len(product_tokens) if len(product_tokens) > 2 else 1
     products = db.scalars(select(Product).order_by(Product.title.asc()).limit(3000)).all()
     ranked_products = [
         (score, product)
         for product in products
-        if (score := _score(product_tokens, product.title, product.brand, product.category)) > 0
+        if (
+            score := _score(product_tokens, product.id, product.title, product.brand, product.category)
+        )
+        >= minimum_score
     ]
     ranked_products.sort(key=lambda item: (-item[0], item[1].title, item[1].id))
     product_ids = [product.id for _, product in ranked_products[:25]]
