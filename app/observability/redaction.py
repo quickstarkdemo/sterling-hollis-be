@@ -45,6 +45,10 @@ BUILT_IN_REDACTED_KEYS = frozenset(
 DEFAULT_ALLOWED_KEYS = frozenset(
     {
         "action",
+        "action_count",
+        "action_label",
+        "action_summaries",
+        "action_type",
         "agent_mode",
         "approval_status",
         "agent",
@@ -66,6 +70,7 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "capability_side_effect",
         "candidate_count",
         "card_count",
+        "card_summaries",
         "categories",
         "category",
         "category_scores",
@@ -73,6 +78,7 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "client_request_id",
         "color",
         "content_type",
+        "conversation_id",
         "context",
         "decision",
         "description",
@@ -178,6 +184,7 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "tool",
         "tool_name",
         "tool_names",
+        "tool_trace_summary",
         "tool_count",
         "total_tokens",
         "tools",
@@ -191,6 +198,12 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "workflow_id",
         "turn_id",
         "trigger_type",
+        "visible_created_at",
+        "visible_message_id",
+        "visible_messages",
+        "visible_role",
+        "visible_source",
+        "visible_text",
     }
 )
 

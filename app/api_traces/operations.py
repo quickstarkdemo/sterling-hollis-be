@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import json
 import logging
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ from app.api_traces.context import (
 )
 from app.api_traces.schemas import (
     ApiTraceProjection,
+    TraceArtifactProjection,
     TraceEventProjection,
     TraceLinkProjection,
     TraceSpanProjection,
@@ -107,9 +109,11 @@ class ApiTraceSession:
         self.spans: list[TraceSpanProjection] = []
         self.links: list[TraceLinkProjection] = []
         self.events: list[TraceEventProjection] = []
+        self.artifacts: list[TraceArtifactProjection] = []
         self._span_stack = [self.server_span_id]
         self._span_counter = 0
         self._event_sequence = 0
+        self._artifact_counter = 0
         self._finished = False
         self.add_event(
             name=f"{self.name} started"[:128],
@@ -157,6 +161,45 @@ class ApiTraceSession:
                 status=status,
                 occurred_at=occurred_at or datetime.now(timezone.utc),
                 attributes=_compact_attributes(dict(attributes or {})),
+            )
+        )
+
+    def add_artifact(
+        self,
+        *,
+        artifact_type: str,
+        name: str,
+        span_id: str | None = None,
+        media_type: str | None = None,
+        attributes: Mapping[str, Any] | None = None,
+        size_bytes: int | None = None,
+    ) -> None:
+        self._artifact_counter += 1
+        artifact_attributes = _compact_attributes(dict(attributes or {}))
+        if size_bytes is None:
+            size_bytes = len(
+                json.dumps(
+                    artifact_attributes,
+                    default=str,
+                    separators=(",", ":"),
+                ).encode()
+            )
+        self.artifacts.append(
+            TraceArtifactProjection(
+                artifact_id=_stable_hex(
+                    self.trace_id,
+                    "artifact",
+                    self._artifact_counter,
+                    artifact_type,
+                    name,
+                    length=32,
+                ),
+                span_id=span_id or self.current_span_id,
+                artifact_type=str(artifact_type or "artifact")[:64],
+                name=str(name or "Trace artifact")[:128],
+                media_type=str(media_type)[:128] if media_type else None,
+                size_bytes=max(0, size_bytes),
+                attributes=artifact_attributes,
             )
         )
 
@@ -326,6 +369,7 @@ class ApiTraceSession:
                     attributes=self.attributes,
                 ),
             ],
+            artifacts=self.artifacts,
         )
         return ApiTraceRecorder(settings=self.settings).record(
             context=self.context,

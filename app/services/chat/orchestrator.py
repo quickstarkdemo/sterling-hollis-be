@@ -60,6 +60,11 @@ from ddtrace.llmobs import LLMObs
 
 logger = logging.getLogger(__name__)
 
+CHAT_TRANSCRIPT_ARTIFACT_MEDIA_TYPE = (
+    "application/vnd.sterling.chat-transcript+json"
+)
+CHAT_TRANSCRIPT_SUMMARY_LIMIT = 8
+
 
 def _llmobs_annotate_safe(**kwargs) -> None:
     try:
@@ -356,6 +361,139 @@ def _assistant_message_payload(response: ChatResponse, metadata: dict) -> dict:
     payload = response.model_dump(mode="json")
     payload["turn"] = metadata
     return payload
+
+
+def _drop_empty_trace_values(payload: dict) -> dict:
+    return {
+        key: value
+        for key, value in payload.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _trace_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _visible_chat_message(
+    *,
+    role: str,
+    text: str,
+    message: ChatMessage | None,
+    source: str,
+) -> dict:
+    return _drop_empty_trace_values(
+        {
+            "visible_role": role,
+            "visible_text": text,
+            "visible_message_id": message.id if message else None,
+            "visible_created_at": _trace_datetime(message.created_at if message else None),
+            "visible_source": source,
+        }
+    )
+
+
+def _chat_card_summaries(cards: list[CatalogProduct]) -> list[dict]:
+    summaries: list[dict] = []
+    for card in cards[:CHAT_TRANSCRIPT_SUMMARY_LIMIT]:
+        summaries.append(
+            _drop_empty_trace_values(
+                {
+                    "product_id": getattr(card, "id", None),
+                    "title": getattr(card, "title", None),
+                    "brand": getattr(card, "brand", None),
+                    "category": getattr(card, "category", None),
+                    "price": getattr(card, "price", None),
+                }
+            )
+        )
+    return summaries
+
+
+def _chat_action_summaries(actions: list[ChatAction]) -> list[dict]:
+    summaries: list[dict] = []
+    for action in actions[:CHAT_TRANSCRIPT_SUMMARY_LIMIT]:
+        summaries.append(
+            _drop_empty_trace_values(
+                {
+                    "action_type": action.type,
+                    "action_label": action.label,
+                    "product_id": action.product_id,
+                }
+            )
+        )
+    return summaries
+
+
+def _chat_tool_trace_summary(tool_trace: list[ChatToolTrace]) -> list[dict]:
+    summaries: list[dict] = []
+    for item in tool_trace[:CHAT_TRANSCRIPT_SUMMARY_LIMIT]:
+        summaries.append(
+            _drop_empty_trace_values(
+                {
+                    "tool_name": item.name,
+                    "decision": item.decision,
+                }
+            )
+        )
+    return summaries
+
+
+def _chat_transcript_artifact_payload(
+    db: Session,
+    *,
+    req: ChatRequest,
+    response: ChatResponse,
+) -> dict:
+    turn = db.get(ChatTurn, response.turn_id) if response.turn_id else None
+    user_message = (
+        db.get(ChatMessage, turn.user_message_id)
+        if turn is not None and turn.user_message_id
+        else None
+    )
+    assistant_message = (
+        db.get(ChatMessage, turn.assistant_message_id)
+        if turn is not None and turn.assistant_message_id
+        else None
+    )
+    visible_messages = [
+        _visible_chat_message(
+            role="user",
+            text=user_message.content if user_message else req.message,
+            message=user_message,
+            source="chat_message" if user_message else "request",
+        ),
+        _visible_chat_message(
+            role="assistant",
+            text=assistant_message.content if assistant_message else response.message,
+            message=assistant_message,
+            source="chat_message" if assistant_message else "response",
+        ),
+    ]
+    return _drop_empty_trace_values(
+        {
+            "conversation_id": response.conversation_id,
+            "turn_id": response.turn_id,
+            "trigger_type": response.trigger_type,
+            "duplicate_replay": response.duplicate_replay,
+            "route": response.route,
+            "intent": response.intent,
+            "selected_agent": response.selected_agent,
+            "selected_tool": response.selected_tool,
+            "capability_id": response.capability_id,
+            "card_count": len(response.cards),
+            "action_count": len(response.actions),
+            "tool_count": len(response.tool_trace),
+            "visible_messages": visible_messages,
+            "card_summaries": _chat_card_summaries(response.cards),
+            "action_summaries": _chat_action_summaries(response.actions),
+            "tool_trace_summary": _chat_tool_trace_summary(response.tool_trace),
+        }
+    )
 
 
 def _find_completed_turn_by_client_request(
@@ -2041,4 +2179,21 @@ def handle_chat(db: Session, req: ChatRequest, identity: ChatIdentity) -> ChatRe
                 duplicate_replay=response.duplicate_replay,
                 turn_id=response.turn_id,
             )
+            try:
+                trace.add_artifact(
+                    artifact_type="chat_transcript",
+                    name="Visible storefront chat transcript",
+                    media_type=CHAT_TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+                    span_id=trace.server_span_id,
+                    attributes=_chat_transcript_artifact_payload(
+                        db,
+                        req=req,
+                        response=response,
+                    ),
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to attach chat transcript API trace artifact",
+                    exc_info=True,
+                )
         return response
