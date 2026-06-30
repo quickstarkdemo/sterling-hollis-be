@@ -5,6 +5,7 @@ import base64
 import binascii
 from datetime import datetime
 import json
+import logging
 import re
 import time
 from typing import Annotated
@@ -42,6 +43,7 @@ from app.services.auth.admin import require_api_trace_capture
 
 
 router = APIRouter(prefix="/api/admin/traces", tags=["admin-api-traces"])
+logger = logging.getLogger(__name__)
 _QUERY_CREDENTIALS = {"access_token", "authorization", "bearer", "token"}
 TraceId = Annotated[
     str,
@@ -220,6 +222,13 @@ async def _trace_event_stream(
             yield ": keepalive\n\n"
             last_write = time.monotonic()
         await asyncio.sleep(poll_seconds)
+    logger.debug(
+        "API trace stream closed",
+        extra={
+            "api_trace_stream_close_reason": "client_disconnect",
+            "api_trace_surface": context.surface,
+        },
+    )
 
 
 @router.get("/{trace_id}/stream")
