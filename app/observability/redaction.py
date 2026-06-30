@@ -87,6 +87,7 @@ DEFAULT_ALLOWED_KEYS = frozenset(
         "detail_urls",
         "draft",
         "draft_id",
+        "draft_summary",
         "draft_version",
         "duplicate_replay",
         "endpoint",
