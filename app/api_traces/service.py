@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import logging
 from typing import Any, TypeVar
 
@@ -40,6 +41,7 @@ from app.observability.redaction import (
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+CHAT_TRANSCRIPT_ARTIFACT_MEDIA_TYPE = "application/vnd.sterling.chat-transcript+json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +102,34 @@ def _payload(value: Any, *, policy: RedactionPolicy, expired: bool = False) -> d
     if expired:
         return dict(RETENTION_MARKER)
     return sanitize_observability_payload(value, policy=policy)
+
+
+def _artifact_payload_bytes(value: dict) -> int:
+    return len(json.dumps(value, default=str, separators=(",", ":")).encode())
+
+
+def _conversation_turn_artifact(
+    *,
+    trace_id: str,
+    event: ClientTraceEventInput,
+    policy: RedactionPolicy,
+    payload_expired: bool,
+    recorded_at: datetime,
+) -> ApiTraceArtifact:
+    attributes = _payload(event.attributes, policy=policy, expired=payload_expired)
+    artifact_id = f"transcript_{event.event_id}"[:64]
+    return ApiTraceArtifact(
+        id=_row_id("artifact", trace_id, artifact_id),
+        trace_id=trace_id,
+        artifact_id=artifact_id,
+        span_id=event.span_id,
+        artifact_type="chat_transcript",
+        name=safe_observability_text(event.name or "Visible conversation turn", max_length=128),
+        media_type=CHAT_TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+        size_bytes=None if payload_expired else _artifact_payload_bytes(attributes),
+        attributes_json=attributes,
+        created_at=recorded_at,
+    )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -850,6 +880,21 @@ def append_client_trace_event(
     ) or 0
     if event_count >= max(1, settings.api_trace_max_events):
         raise ValueError("trace event limit reached")
+    if event.event_type == "conversation.turn":
+        artifact_count = db.scalar(
+            select(func.count(ApiTraceArtifact.id)).where(ApiTraceArtifact.trace_id == trace.id)
+        ) or 0
+        if artifact_count >= max(1, settings.api_trace_max_artifacts):
+            raise ValueError("trace artifact limit reached")
+        db.add(
+            _conversation_turn_artifact(
+                trace_id=trace.id,
+                event=event,
+                policy=policy,
+                payload_expired=payload_expired,
+                recorded_at=recorded_at,
+            )
+        )
     last_sequence = db.scalar(
         select(func.max(ApiTraceEvent.sequence)).where(ApiTraceEvent.trace_id == trace.id)
     )

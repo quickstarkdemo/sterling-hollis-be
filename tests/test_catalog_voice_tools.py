@@ -16,6 +16,7 @@ from app.config import Settings
 from app.models import CatalogWorkflowEvent, Product, Store
 from app.models import CatalogProduct, Customer, Order, OrderItem, ProductInventory
 from app.routers.admin_catalog import (
+    _catalog_visible_transcript_payload,
     get_catalog_assistant_service,
     get_catalog_realtime_service,
     get_catalog_suggestion_ai_service,
@@ -23,6 +24,7 @@ from app.routers.admin_catalog import (
 from app.services.catalog_assistant_agent import CatalogAssistantAgentService
 from app.services.catalog_ai import CatalogAISuggestionService
 from app.services.catalog_realtime import CatalogRealtimeService
+from app.services.catalog_voice_tools import CatalogVoiceCitation, CatalogVoiceToolResult
 from tests.test_admin_catalog_api import _admin_catalog_client, _headers
 from tests.test_catalog_authoring_v3 import _v3_payload
 
@@ -643,6 +645,53 @@ def test_storewide_text_and_voice_queries_work_without_active_product(monkeypatc
         assert voice_discount_result["citations"][0]["value"]["margin_pct"] == 0.5
 
 
+def test_realtime_visible_transcript_payload_uses_only_screen_visible_fields():
+    result = CatalogVoiceToolResult(
+        message="Dallas Downtown is low on stock.",
+        citations=[
+            CatalogVoiceCitation(
+                kind="inventory",
+                source_id="1001",
+                label="Dallas Downtown",
+                value={"inventory_qty": 2, "private_note": "not-for-trace"},
+            )
+        ],
+        capability_id="catalog_admin.realtime.voice",
+        selected_agent="CatalogStudioRealtimeAgent",
+        selected_tool="read_inventory_status",
+    )
+
+    payload = _catalog_visible_transcript_payload(
+        user_role="presenter",
+        user_text="Which stores are low stock?",
+        user_source="realtime_tool_call",
+        result=result,
+        workflow_id="workflow_visible_voice",
+        route="catalog_realtime_voice_tool_call",
+    )
+
+    assert payload["route"] == "catalog_realtime_voice_tool_call"
+    assert payload["workflow_id"] == "workflow_visible_voice"
+    assert payload["selected_tool"] == "read_inventory_status"
+    assert payload["visible_messages"] == [
+        {
+            "visible_role": "presenter",
+            "visible_text": "Which stores are low stock?",
+            "visible_source": "realtime_tool_call",
+        },
+        {
+            "visible_role": "assistant",
+            "visible_text": "Dallas Downtown is low on stock.",
+            "visible_source": "catalog_assistant_response",
+        },
+    ]
+    assert payload["citation_summaries"] == [
+        {"kind": "inventory", "label": "Dallas Downtown"}
+    ]
+    assert "source_id" not in payload["citation_summaries"][0]
+    assert "value" not in payload["citation_summaries"][0]
+
+
 def test_storewide_assistant_uses_inventory_data_for_store_status(monkeypatch):
     with _admin_catalog_client(monkeypatch) as (client, sessions):
         with sessions() as db:
@@ -1029,6 +1078,25 @@ def test_catalog_assistant_trace_records_grounded_tool_metadata_and_redaction(mo
         assert capability_span.attributes["selected_tool"] == "lookup_customer_purchases"
         assert capability_span.attributes["agent_mode"] == "fallback"
         assert capability_span.attributes["fallback_reason"] == "missing_provider_configuration"
+        transcript = next(
+            item for item in projection.artifacts if item.artifact_type == "chat_transcript"
+        )
+        assert transcript.media_type == "application/vnd.sterling.chat-transcript+json"
+        assert transcript.name == "Visible Catalog Studio assistant transcript"
+        assert transcript.attributes["route"] == "catalog_assistant_query"
+        assert transcript.attributes["query_scopes"] == ["catalog", "inventory"]
+        assert transcript.attributes["selected_agent"] == "CatalogStudioAssistantFallback"
+        assert transcript.attributes["selected_tool"] == "lookup_customer_purchases"
+        assert transcript.attributes["capability_id"] == "catalog_admin.assistant.query"
+        assert transcript.attributes["citation_count"] >= 1
+        assert set(transcript.attributes["citation_summaries"][0]) == {"kind", "label"}
+        assert transcript.attributes["visible_messages"][0] == {
+            "visible_role": "user",
+            "visible_text": "Which customers have bought Tom Ford Black Trousers?",
+            "visible_source": "catalog_assistant_request",
+        }
+        assert transcript.attributes["visible_messages"][1]["visible_role"] == "assistant"
+        assert "Tom Ford Black Trousers" in transcript.attributes["visible_messages"][1]["visible_text"]
         encoded_projection = projection.model_dump_json()
         assert "avery@example.com" not in encoded_projection
         assert "+15551234567" not in encoded_projection

@@ -152,6 +152,7 @@ ClientTraceEventType = Literal[
     "realtime.connected",
     "realtime.disconnected",
     "realtime.error",
+    "conversation.turn",
 ]
 
 
