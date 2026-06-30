@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import logging
 
 from fastapi import Depends
 from fastapi.testclient import TestClient
@@ -400,7 +401,7 @@ def test_stream_rejects_query_credentials_and_event_ingest_is_bounded():
         assert rejected_payload.status_code == 422
 
 
-def test_stream_orders_resumes_keeps_alive_expires_and_stops_on_disconnect():
+def test_stream_orders_resumes_keeps_alive_expires_and_stops_on_disconnect(caplog):
     trace_id = "e" * 32
 
     class RequestState:
@@ -461,6 +462,7 @@ def test_stream_orders_resumes_keeps_alive_expires_and_stops_on_disconnect():
                 assert "event: expired" in await anext(expired_stream)
 
             with sessions() as db:
+                caplog.set_level(logging.DEBUG, logger="app.routers.api_traces")
                 disconnected_stream = _trace_event_stream(
                     request=RequestState(disconnected=True),
                     db=db,
@@ -476,6 +478,7 @@ def test_stream_orders_resumes_keeps_alive_expires_and_stops_on_disconnect():
                     pass
                 else:
                     raise AssertionError("disconnected stream should stop without polling")
+                assert "API trace stream closed" in caplog.text
 
         asyncio.run(exercise_stream())
 
