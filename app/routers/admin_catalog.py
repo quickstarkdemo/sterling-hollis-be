@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal
+import logging
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -169,6 +170,10 @@ from app.services.capability_executor import (
 )
 
 
+logger = logging.getLogger(__name__)
+CHAT_TRANSCRIPT_ARTIFACT_MEDIA_TYPE = "application/vnd.sterling.chat-transcript+json"
+CHAT_TRANSCRIPT_SUMMARY_LIMIT = 8
+
 router = APIRouter(
     prefix="/api/admin",
     tags=["catalog-studio-admin"],
@@ -237,6 +242,110 @@ class CatalogStudioSessionResponse(BaseModel):
 class CatalogAssistantQueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     query_scopes: list[Literal["catalog", "inventory"]] | None = None
+
+
+def _drop_empty_trace_values(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _visible_trace_message(*, role: str, text: str, source: str) -> dict[str, str]:
+    return _drop_empty_trace_values(
+        {
+            "visible_role": role,
+            "visible_text": text,
+            "visible_source": source,
+        }
+    )
+
+
+def _citation_summaries(result: CatalogVoiceToolResult) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for citation in result.citations[:CHAT_TRANSCRIPT_SUMMARY_LIMIT]:
+        summaries.append(
+            _drop_empty_trace_values(
+                {
+                    "kind": citation.kind,
+                    "label": citation.label,
+                }
+            )
+        )
+    return summaries
+
+
+def _tool_trace_summary(result: CatalogVoiceToolResult) -> list[dict[str, Any]]:
+    if not result.selected_tool:
+        return []
+    decision = result.agent_mode or result.status
+    return [
+        _drop_empty_trace_values(
+            {
+                "tool_name": result.selected_tool,
+                "decision": decision,
+            }
+        )
+    ]
+
+
+def _catalog_visible_transcript_payload(
+    *,
+    user_role: Literal["user", "presenter"],
+    user_text: str,
+    user_source: str,
+    result: CatalogVoiceToolResult,
+    workflow_id: str | None = None,
+    query_scopes: list[str] | None = None,
+    route: str,
+) -> dict[str, Any]:
+    return _drop_empty_trace_values(
+        {
+            "workflow_id": workflow_id,
+            "route": route,
+            "query_scopes": query_scopes,
+            "selected_agent": result.selected_agent,
+            "selected_tool": result.selected_tool,
+            "capability_id": result.capability_id,
+            "citation_count": len(result.citations),
+            "citation_summaries": _citation_summaries(result),
+            "tool_count": 1 if result.selected_tool else 0,
+            "tool_trace_summary": _tool_trace_summary(result),
+            "visible_messages": [
+                _visible_trace_message(
+                    role=user_role,
+                    text=user_text,
+                    source=user_source,
+                ),
+                _visible_trace_message(
+                    role="assistant",
+                    text=result.message,
+                    source="catalog_assistant_response",
+                ),
+            ],
+        }
+    )
+
+
+def _attach_catalog_visible_transcript(
+    trace,
+    *,
+    payload: dict[str, Any],
+    name: str = "Visible Catalog Studio assistant transcript",
+) -> None:
+    if trace is None:
+        return
+    try:
+        trace.add_artifact(
+            artifact_type="chat_transcript",
+            name=name,
+            media_type=CHAT_TRANSCRIPT_ARTIFACT_MEDIA_TYPE,
+            span_id=trace.server_span_id,
+            attributes=payload,
+        )
+    except Exception:
+        logger.debug("Failed to attach Catalog Studio transcript artifact", exc_info=True)
 
 
 @router.get(
@@ -1153,7 +1262,7 @@ def query_catalog_assistant(
         settings=service.settings,
         name="Catalog assistant query",
         attributes={"capability_id": "catalog_admin.assistant.query"},
-    ):
+    ) as trace:
         execution = execute_capability(
             CapabilityExecutionContext(
                 capability_id="catalog_admin.assistant.query",
@@ -1170,13 +1279,24 @@ def query_catalog_assistant(
                 query_scopes=request.query_scopes,
             ),
         )
-    result = execution.output
-    result.capability_id = execution.capability.id
-    result.capability_surface = execution.surface.value
-    result.persona = execution.persona.value
-    result.selected_agent = result.selected_agent or execution.selected_agent
-    result.selected_tool = result.selected_tool or execution.selected_tool
-    return result
+        result = execution.output
+        result.capability_id = execution.capability.id
+        result.capability_surface = execution.surface.value
+        result.persona = execution.persona.value
+        result.selected_agent = result.selected_agent or execution.selected_agent
+        result.selected_tool = result.selected_tool or execution.selected_tool
+        _attach_catalog_visible_transcript(
+            trace,
+            payload=_catalog_visible_transcript_payload(
+                user_role="user",
+                user_text=request.question,
+                user_source="catalog_assistant_request",
+                result=result,
+                query_scopes=request.query_scopes or ["catalog", "inventory"],
+                route="catalog_assistant_query",
+            ),
+        )
+        return result
 
 
 @router.post(
@@ -1272,15 +1392,42 @@ def execute_catalog_realtime_v3_tool_call(
     ),
 ) -> CatalogVoiceToolResult:
     try:
-        return execute_catalog_voice_tool(
-            db,
-            workflow_id=workflow_id,
-            request=request,
-            idempotency_key=idempotency_key,
-            principal=principal,
+        with api_trace_session(
             settings=settings,
-            suggestion_service=suggestion_service,
-        )
+            name="Catalog realtime voice tool call",
+            attributes={
+                "capability_id": "catalog_admin.realtime.voice",
+                "selected_tool": request.name,
+                "workflow_id": workflow_id,
+            },
+        ) as trace:
+            result = execute_catalog_voice_tool(
+                db,
+                workflow_id=workflow_id,
+                request=request,
+                idempotency_key=idempotency_key,
+                principal=principal,
+                settings=settings,
+                suggestion_service=suggestion_service,
+            )
+            result.capability_id = result.capability_id or "catalog_admin.realtime.voice"
+            result.capability_surface = result.capability_surface or Surface.ADMIN_ASSISTANT.value
+            result.selected_agent = result.selected_agent or "CatalogStudioRealtimeAgent"
+            result.selected_tool = result.selected_tool or request.name
+            presenter_text = request.arguments.question or request.arguments.instruction or request.name
+            _attach_catalog_visible_transcript(
+                trace,
+                payload=_catalog_visible_transcript_payload(
+                    user_role="presenter",
+                    user_text=presenter_text,
+                    user_source="realtime_tool_call",
+                    result=result,
+                    workflow_id=workflow_id,
+                    route="catalog_realtime_voice_tool_call",
+                ),
+                name="Visible Catalog Studio realtime transcript",
+            )
+            return result
     except CatalogAICommandError as exc:
         raise HTTPException(
             status_code=exc.status_code,

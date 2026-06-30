@@ -16,7 +16,7 @@ from app.api_traces.schemas import (
     TraceEventProjection,
     TraceSpanProjection,
 )
-from app.api_traces.service import ApiTraceRecorder
+from app.api_traces.service import ApiTraceRecorder, get_trace_projection
 from app.config import Settings, get_settings
 from app.database import Base, get_db
 from app.main import create_app
@@ -178,6 +178,75 @@ def test_trace_api_lists_reads_ingests_catches_up_and_exports_safely():
         assert exported.json()["projection_version"] == "1.0"
         assert exported.json()["attributes"]["authorization"] == "[REDACTED]"
         assert exported.headers["content-disposition"].endswith(f'{trace_id}.json"')
+
+
+def test_conversation_turn_event_records_visible_transcript_artifact():
+    trace_id = "f" * 32
+    span_id = trace_id[-16:]
+    with _trace_client() as (client, sessions, settings, _):
+        _seed(sessions, settings, trace_id)
+
+        ingested = client.post(
+            f"/api/admin/traces/{trace_id}/events",
+            json={
+                "event_id": "voice-turn-1",
+                "span_id": span_id,
+                "name": "Visible realtime turn",
+                "event_type": "conversation.turn",
+                "attributes": {
+                    "route": "catalog_realtime_voice",
+                    "workflow_id": "workflow_visible_voice",
+                    "raw_audio": "base64-private-audio",
+                    "client_secret": "ek_short_lived_private",
+                    "sdp": "private-offer",
+                    "visible_messages": [
+                        {
+                            "visible_role": "presenter",
+                            "visible_text": "Which stores are low stock?",
+                            "visible_source": "realtime_transcript",
+                        },
+                        {
+                            "visible_role": "assistant",
+                            "visible_text": "Dallas Downtown is low stock.",
+                            "visible_source": "realtime_transcript",
+                        },
+                    ],
+                },
+            },
+        )
+
+        assert ingested.status_code == 201, ingested.text
+        with sessions() as db:
+            projection = get_trace_projection(
+                db,
+                trace_id=trace_id,
+                owner_provider="clerk",
+                owner_provider_user_id="owner_a",
+            )
+
+        assert projection is not None
+        artifact = next(
+            item for item in projection.artifacts if item.artifact_type == "chat_transcript"
+        )
+        assert artifact.media_type == "application/vnd.sterling.chat-transcript+json"
+        assert artifact.span_id == span_id
+        assert artifact.attributes["route"] == "catalog_realtime_voice"
+        assert artifact.attributes["visible_messages"] == [
+            {
+                "visible_role": "presenter",
+                "visible_text": "Which stores are low stock?",
+                "visible_source": "realtime_transcript",
+            },
+            {
+                "visible_role": "assistant",
+                "visible_text": "Dallas Downtown is low stock.",
+                "visible_source": "realtime_transcript",
+            },
+        ]
+        encoded_projection = projection.model_dump_json()
+        assert "base64-private-audio" not in encoded_projection
+        assert "ek_short_lived_private" not in encoded_projection
+        assert "private-offer" not in encoded_projection
 
 
 def test_authorized_activation_binds_owner_to_validated_w3c_context():
