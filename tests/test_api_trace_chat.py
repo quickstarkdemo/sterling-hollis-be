@@ -108,7 +108,7 @@ def _trace_chat_client(
 def _chat_payload(
     *,
     conversation_id: str | None = None,
-    message: str = "hello private-chat-secret-4477",
+    message: str = "Show me black boots",
 ) -> dict:
     payload = {
         "message": message,
@@ -128,13 +128,22 @@ def _trace_headers(trace_id: str, parent_span_id: str) -> dict[str, str]:
     }
 
 
+def _chat_transcript_artifact(projection):
+    return next(
+        artifact
+        for artifact in projection.artifacts
+        if artifact.artifact_type == "chat_transcript"
+    )
+
+
 def test_authorized_chat_projects_safe_routing_tool_persistence_and_ui_spans(monkeypatch):
     trace_id = "1" * 32
+    message = "Show me green jackets"
     with _trace_chat_client(monkeypatch) as (client, sessions, _):
         response = client.post(
             "/api/chat",
             headers=_trace_headers(trace_id, "2" * 16),
-            json=_chat_payload(),
+            json=_chat_payload(message=message),
         )
 
         assert response.status_code == 200
@@ -162,7 +171,50 @@ def test_authorized_chat_projects_safe_routing_tool_persistence_and_ui_spans(mon
     } <= operations
     assert projection.surface == "storefront-chat"
     assert projection.attributes["selected_tool"]
-    assert "private-chat-secret-4477" not in projection.model_dump_json()
+    transcript = _chat_transcript_artifact(projection)
+    assert transcript.media_type == "application/vnd.sterling.chat-transcript+json"
+    assert transcript.attributes["conversation_id"] == response.json()["conversation_id"]
+    assert transcript.attributes["turn_id"] == response.json()["turn_id"]
+    assert transcript.attributes["visible_messages"][0]["visible_role"] == "user"
+    assert transcript.attributes["visible_messages"][0]["visible_text"] == message
+    assert transcript.attributes["visible_messages"][1]["visible_role"] == "assistant"
+    assert (
+        transcript.attributes["visible_messages"][1]["visible_text"]
+        == response.json()["message"]
+    )
+    assert transcript.attributes["card_count"] == len(response.json()["cards"])
+    assert transcript.attributes["tool_count"] >= 1
+
+
+def test_chat_transcript_redacts_sensitive_visible_patterns(monkeypatch):
+    trace_id = "2" * 32
+    message = (
+        "Email avery@example.com and use Bearer private-token plus "
+        "sk-visible-secret-123456"
+    )
+    with _trace_chat_client(monkeypatch) as (client, sessions, _):
+        response = client.post(
+            "/api/chat",
+            headers=_trace_headers(trace_id, "3" * 16),
+            json=_chat_payload(message=message),
+        )
+        with sessions() as db:
+            projection = get_trace_projection(
+                db,
+                trace_id=trace_id,
+                owner_provider="clerk",
+                owner_provider_user_id="owner_a",
+            )
+
+    assert response.status_code == 200
+    assert projection is not None
+    encoded = projection.model_dump_json()
+    assert "avery@example.com" not in encoded
+    assert "Bearer private-token" not in encoded
+    assert "sk-visible-secret-123456" not in encoded
+    assert "[REDACTED]" in _chat_transcript_artifact(projection).attributes[
+        "visible_messages"
+    ][0]["visible_text"]
 
 
 def test_duplicate_client_request_links_new_trace_to_original_execution(monkeypatch):
@@ -194,6 +246,13 @@ def test_duplicate_client_request_links_new_trace_to_original_execution(monkeypa
     assert len(projection.links) == 1
     assert projection.links[0].relationship == "replay_of"
     assert projection.links[0].linked_trace_id == first_trace_id
+    transcript = _chat_transcript_artifact(projection)
+    assert transcript.attributes["duplicate_replay"] is True
+    assert transcript.attributes["visible_messages"][0]["visible_text"] == "Show me black boots"
+    assert (
+        transcript.attributes["visible_messages"][1]["visible_text"]
+        == replay.json()["message"]
+    )
 
 
 def test_chat_trace_headers_do_not_activate_for_non_admin_customer(monkeypatch):
@@ -251,7 +310,7 @@ def test_trace_recorder_failure_is_fail_open_for_chat(monkeypatch):
     assert persisted is None
 
 
-def test_safety_block_is_visible_without_recording_customer_text(monkeypatch):
+def test_safety_block_records_visible_transcript_without_private_internals(monkeypatch):
     monkeypatch.setattr(
         "app.services.chat.orchestrator.evaluate_chat_safety",
         lambda message, history: ChatSafetyDecision(
@@ -265,11 +324,12 @@ def test_safety_block_is_visible_without_recording_customer_text(monkeypatch):
         ),
     )
     trace_id = "9" * 32
+    message = "unsafe request visible to the customer"
     with _trace_chat_client(monkeypatch) as (client, sessions, _):
         response = client.post(
             "/api/chat",
             headers=_trace_headers(trace_id, "a" * 16),
-            json=_chat_payload(),
+            json=_chat_payload(message=message),
         )
         with sessions() as db:
             projection = get_trace_projection(
@@ -286,7 +346,15 @@ def test_safety_block_is_visible_without_recording_customer_text(monkeypatch):
     safety_span = next(span for span in projection.spans if span.operation == "chat.safety")
     assert safety_span.status == "blocked"
     assert safety_span.attributes["category"] == "harmful_content"
-    assert "private-chat-secret-4477" not in projection.model_dump_json()
+    transcript = _chat_transcript_artifact(projection)
+    assert transcript.attributes["visible_messages"][0]["visible_text"] == message
+    assert (
+        transcript.attributes["visible_messages"][1]["visible_text"]
+        == "I cannot help with that request."
+    )
+    encoded = projection.model_dump_json()
+    assert "system_prompt" not in encoded
+    assert "private_reasoning" not in encoded
 
 
 def test_auth_blocked_chat_marks_authorization_and_trace_blocked(monkeypatch):
@@ -422,7 +490,18 @@ def test_generic_operation_helpers_share_trace_correlation_and_services(monkeypa
     with bind_trace_capture_context(context), api_trace_session(
         settings=settings,
         name="Generic operation test",
-    ):
+    ) as trace_session:
+        assert trace_session is not None
+        trace_session.add_artifact(
+            artifact_type="chat_transcript",
+            name="Visible chat",
+            media_type="application/vnd.sterling.chat-transcript+json",
+            attributes={
+                "visible_messages": [
+                    {"visible_role": "user", "visible_text": "Show me boots"}
+                ]
+            },
+        )
         with api_trace_http_operation("Call inventory API", service="inventory"):
             assert current_api_trace_correlation()["app.trace_id"] == "b" * 32
         with api_trace_database_operation("Read inventory rows"):
@@ -442,6 +521,10 @@ def test_generic_operation_helpers_share_trace_correlation_and_services(monkeypa
         "sterling-hollis-be",
         "object-store",
     ]
+    assert projection.artifacts[0].artifact_type == "chat_transcript"
+    assert projection.artifacts[0].attributes["visible_messages"][0]["visible_text"] == (
+        "Show me boots"
+    )
 
 
 def test_tool_failure_closes_operation_and_trace_as_failed(monkeypatch):
