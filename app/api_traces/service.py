@@ -397,7 +397,6 @@ class ApiTraceRecorder:
                 continue
             if (
                 existing.parent_span_id != persisted_parent_span_id(span)
-                or existing.name != safe_observability_text(span.name, max_length=128)
                 or existing.operation
                 != safe_observability_text(span.operation, max_length=64)
                 or existing.service != safe_observability_text(span.service, max_length=128)

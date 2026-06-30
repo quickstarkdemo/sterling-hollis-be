@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api_traces.service import ApiTraceRecorder, get_trace_projection
 from app.config import Settings, get_settings
 from app.catalog.ai_schemas import (
     CatalogAICommandResult,
@@ -213,6 +214,21 @@ def _headers(key: str):
     return {"Idempotency-Key": key}
 
 
+def _trace_headers(trace_id: str, parent_span_id: str) -> dict[str, str]:
+    return {
+        "traceparent": f"00-{trace_id}-{parent_span_id}-01",
+        "x-trace-surface": "catalog-studio",
+    }
+
+
+def _record_traces_in_test_database(monkeypatch, sessions) -> None:
+    def recorder(*, settings):
+        return ApiTraceRecorder(settings=settings, session_factory=sessions)
+
+    monkeypatch.setattr("app.api_traces.adapters.ApiTraceRecorder", recorder)
+    monkeypatch.setattr("app.api_traces.operations.ApiTraceRecorder", recorder)
+
+
 def test_catalog_mutations_require_catalog_admin(monkeypatch):
     with _admin_catalog_client(monkeypatch) as (client, _):
         client.app.dependency_overrides.pop(require_clerk_principal)
@@ -350,6 +366,8 @@ def test_catalog_realtime_session_api_rejects_non_admin_before_provider_call(mon
 
 
 def test_catalog_realtime_tool_call_delegates_to_existing_draft_command_service(monkeypatch):
+    monkeypatch.setenv("API_TRACE_CAPTURE_ENABLED", "true")
+    trace_id = "c" * 32
     calls = []
 
     class CapturingCatalogAIService:
@@ -363,6 +381,7 @@ def test_catalog_realtime_tool_call_delegates_to_existing_draft_command_service(
             )
 
     with _admin_catalog_client(monkeypatch) as (client, sessions):
+        _record_traces_in_test_database(monkeypatch, sessions)
         settings = client.app.dependency_overrides[get_settings]()
         settings.catalog_studio_realtime_enabled = True
         client.app.dependency_overrides[get_catalog_ai_service] = CapturingCatalogAIService
@@ -377,7 +396,7 @@ def test_catalog_realtime_tool_call_delegates_to_existing_draft_command_service(
         workflow_id = started.json()["id"]
         response = client.post(
             f"/api/admin/catalog/workflows/{workflow_id}/realtime/tool-calls",
-            headers=_headers("voice-command-1"),
+            headers={**_headers("voice-command-1"), **_trace_headers(trace_id, "f" * 16)},
             json={
                 "call_id": "call_voice_1",
                 "name": "create_catalog_draft",
@@ -393,6 +412,12 @@ def test_catalog_realtime_tool_call_delegates_to_existing_draft_command_service(
                     CatalogWorkflowEvent.workflow_id == workflow_id
                 )
             ).all()
+            projection = get_trace_projection(
+                db,
+                trace_id=trace_id,
+                owner_provider="clerk",
+                owner_provider_user_id="user_admin",
+            )
 
     assert response.status_code == 200
     assert calls[0]["workflow_id"] == workflow_id
@@ -401,6 +426,30 @@ def test_catalog_realtime_tool_call_delegates_to_existing_draft_command_service(
     assert calls[0]["command"].expected_draft_version == 0
     assert [event.capability for event in events] == ["workflow", "realtime"]
     assert "black wool" not in repr(events[-1].request_json).lower()
+    assert projection is not None
+    transcript_artifacts = [
+        item for item in projection.artifacts if item.artifact_type == "chat_transcript"
+    ]
+    assert len(transcript_artifacts) == 1
+    transcript = transcript_artifacts[0]
+    assert transcript.name == "Visible Catalog Studio realtime transcript"
+    assert transcript.attributes["workflow_id"] == workflow_id
+    assert transcript.attributes["route"] == "catalog_legacy_realtime_draft_tool_call"
+    assert transcript.attributes["status"] == "blocked"
+    assert transcript.attributes["selected_tool"] == "create_catalog_draft"
+    assert transcript.attributes["capability_id"] == "catalog_admin.product.draft"
+    assert transcript.attributes["visible_messages"] == [
+        {
+            "visible_role": "presenter",
+            "visible_text": "Create a black wool evening coat.",
+            "visible_source": "legacy_realtime_tool_call",
+        },
+        {
+            "visible_role": "assistant",
+            "visible_text": "Moderation stopped this draft before it was saved.",
+            "visible_source": "catalog_draft_command_response",
+        },
+    ]
 
 
 def test_catalog_realtime_invalid_tool_arguments_do_not_mutate_or_call_responses(monkeypatch):
@@ -447,6 +496,8 @@ def test_catalog_realtime_invalid_tool_arguments_do_not_mutate_or_call_responses
 
 
 def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch):
+    monkeypatch.setenv("API_TRACE_CAPTURE_ENABLED", "true")
+    trace_id = "d" * 32
     proposal = CatalogAIProductProposal(
         title="Midnight Atelier Coat",
         description="A sculpted wool evening coat.",
@@ -511,6 +562,7 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
     )
 
     with _admin_catalog_client(monkeypatch) as (client, sessions):
+        _record_traces_in_test_database(monkeypatch, sessions)
         client.app.dependency_overrides[get_catalog_ai_service] = lambda: CatalogAIService(
             ai_settings, fake_client
         )
@@ -526,7 +578,7 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
 
         created = client.post(
             f"/api/admin/catalog/workflows/{workflow_id}/draft-commands",
-            headers=_headers("api-ai-command"),
+            headers={**_headers("api-ai-command"), **_trace_headers(trace_id, "e" * 16)},
             json={
                 "instruction": "Create a black wool evening coat.",
                 "expected_draft_version": 0,
@@ -551,6 +603,48 @@ def test_catalog_ai_command_api_returns_draft_and_business_timeline(monkeypatch)
             revision = db.get(CatalogDraftRevision, body["draft"]["id"])
             assert revision is not None
             assert revision.moderation_state == "approved"
+            projection = get_trace_projection(
+                db,
+                trace_id=trace_id,
+                owner_provider="clerk",
+                owner_provider_user_id="user_admin",
+            )
+        assert projection is not None
+        transcript_artifacts = [
+            item for item in projection.artifacts if item.artifact_type == "chat_transcript"
+        ]
+        assert len(transcript_artifacts) == 1
+        transcript = transcript_artifacts[0]
+        assert transcript.media_type == "application/vnd.sterling.chat-transcript+json"
+        assert transcript.name == "Visible Catalog Studio draft transcript"
+        assert transcript.attributes["workflow_id"] == workflow_id
+        assert transcript.attributes["draft_id"] == body["draft"]["id"]
+        assert transcript.attributes["product_id"] == body["draft"]["product_id"]
+        assert transcript.attributes["route"] == "catalog_draft_command"
+        assert transcript.attributes["status"] == "succeeded"
+        assert transcript.attributes["selected_agent"] == "CatalogStudioDraftAgent"
+        assert transcript.attributes["selected_tool"] == "create_catalog_draft"
+        assert transcript.attributes["capability_id"] == "catalog_admin.product.draft"
+        assert transcript.attributes["draft_summary"] == {
+            "title": "Midnight Atelier Coat",
+            "brand": "Sterling Hollis",
+            "category": "womens_apparel",
+            "draft_version": 1,
+            "base_version": 0,
+        }
+        assert transcript.attributes["visible_messages"] == [
+            {
+                "visible_role": "presenter",
+                "visible_text": "Create a black wool evening coat.",
+                "visible_source": "catalog_draft_command_request",
+            },
+            {
+                "visible_role": "assistant",
+                "visible_text": "The product draft is ready for review.",
+                "visible_source": "catalog_draft_command_response",
+            },
+        ]
+        assert "test-key" not in projection.model_dump_json()
 
 
 def test_catalog_ai_command_api_reports_unavailable_responses_without_a_draft(monkeypatch):

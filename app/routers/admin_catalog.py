@@ -48,6 +48,7 @@ from app.catalog.admin_schemas import (
     CatalogSuggestionSetResponse,
 )
 from app.catalog.ai_schemas import (
+    CatalogAICommandResult,
     CatalogAICommandRequest,
     CatalogAIDirectSuggestionCommandRequest,
     CatalogAIWorkflowResponse,
@@ -322,6 +323,63 @@ def _catalog_visible_transcript_payload(
                     role="assistant",
                     text=result.message,
                     source="catalog_assistant_response",
+                ),
+            ],
+        }
+    )
+
+
+def _draft_trace_summary(result: CatalogAICommandResult) -> dict[str, Any]:
+    if result.draft is None:
+        return {}
+    product = result.draft.product
+    return _drop_empty_trace_values(
+        {
+            "title": product.title,
+            "brand": getattr(product, "brand", None),
+            "category": product.category,
+            "draft_version": result.draft.draft_version,
+            "base_version": result.draft.base_version,
+        }
+    )
+
+
+def _catalog_draft_visible_transcript_payload(
+    *,
+    user_role: Literal["user", "presenter"],
+    user_text: str,
+    user_source: str,
+    result: CatalogAICommandResult,
+    workflow_id: str,
+    route: str,
+    selected_tool: str,
+    draft_id: str | None = None,
+    product_id: str | None = None,
+    assistant_source: str = "catalog_draft_command_response",
+) -> dict[str, Any]:
+    result_draft_id = result.draft.id if result.draft else draft_id
+    result_product_id = result.draft.product_id if result.draft else product_id
+    return _drop_empty_trace_values(
+        {
+            "workflow_id": workflow_id,
+            "draft_id": result_draft_id,
+            "product_id": result_product_id,
+            "route": route,
+            "status": result.status,
+            "selected_agent": "CatalogStudioDraftAgent",
+            "selected_tool": selected_tool,
+            "capability_id": "catalog_admin.product.draft",
+            "draft_summary": _draft_trace_summary(result),
+            "visible_messages": [
+                _visible_trace_message(
+                    role=user_role,
+                    text=user_text,
+                    source=user_source,
+                ),
+                _visible_trace_message(
+                    role="assistant",
+                    text=result.message,
+                    source=assistant_source,
                 ),
             ],
         }
@@ -1314,14 +1372,50 @@ def create_catalog_ai_draft(
     settings: Settings = Depends(get_settings),
     service: CatalogAIService = Depends(get_catalog_ai_service),
 ) -> CatalogAIWorkflowResponse:
+    selected_tool = (
+        "refine_catalog_draft" if request.current_draft_id else "create_catalog_draft"
+    )
     try:
-        result = service.execute(
-            db,
-            workflow_id=workflow_id,
-            command=request,
-            idempotency_key=idempotency_key,
-            principal=principal,
-        )
+        with api_trace_session(
+            settings=settings,
+            name="Catalog draft command",
+            attributes={
+                "capability_id": "catalog_admin.product.draft",
+                "selected_tool": selected_tool,
+                "workflow_id": workflow_id,
+            },
+        ) as trace:
+            result = service.execute(
+                db,
+                workflow_id=workflow_id,
+                command=request,
+                idempotency_key=idempotency_key,
+                principal=principal,
+            )
+            workflow = get_catalog_workflow_projection(
+                db,
+                workflow_id=workflow_id,
+                principal=principal,
+                developer=False,
+                settings=settings,
+            )
+            _attach_catalog_visible_transcript(
+                trace,
+                payload=_catalog_draft_visible_transcript_payload(
+                    user_role="presenter",
+                    user_text=request.instruction,
+                    user_source="catalog_draft_command_request",
+                    result=result,
+                    workflow_id=workflow_id,
+                    route="catalog_draft_command",
+                    selected_tool=selected_tool,
+                    draft_id=request.current_draft_id,
+                ),
+                name="Visible Catalog Studio draft transcript",
+            )
+            return CatalogAIWorkflowResponse(
+                **result.model_dump(mode="python"), workflow=workflow
+            )
     except CatalogAICommandError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -1331,14 +1425,6 @@ def create_catalog_ai_draft(
                 "retryable": exc.retryable,
             },
         ) from exc
-    workflow = get_catalog_workflow_projection(
-        db,
-        workflow_id=workflow_id,
-        principal=principal,
-        developer=False,
-        settings=settings,
-    )
-    return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), workflow=workflow)
 
 
 @router.post(
@@ -1468,22 +1554,56 @@ def execute_catalog_realtime_tool_call(
                 "retryable": False,
             },
         )
-    record_realtime_tool_call(
-        db,
-        workflow_id=workflow_id,
-        request=request,
-        idempotency_key=idempotency_key,
-        principal=principal,
-        settings=settings,
-    )
     try:
-        result = service.execute(
-            db,
-            workflow_id=workflow_id,
-            command=request.to_catalog_command(),
-            idempotency_key=idempotency_key,
-            principal=principal,
-        )
+        with api_trace_session(
+            settings=settings,
+            name="Catalog legacy realtime draft tool call",
+            attributes={
+                "capability_id": "catalog_admin.product.draft",
+                "selected_tool": request.name,
+                "workflow_id": workflow_id,
+            },
+        ) as trace:
+            record_realtime_tool_call(
+                db,
+                workflow_id=workflow_id,
+                request=request,
+                idempotency_key=idempotency_key,
+                principal=principal,
+                settings=settings,
+            )
+            command = request.to_catalog_command()
+            result = service.execute(
+                db,
+                workflow_id=workflow_id,
+                command=command,
+                idempotency_key=idempotency_key,
+                principal=principal,
+            )
+            workflow = get_catalog_workflow_projection(
+                db,
+                workflow_id=workflow_id,
+                principal=principal,
+                developer=False,
+                settings=settings,
+            )
+            _attach_catalog_visible_transcript(
+                trace,
+                payload=_catalog_draft_visible_transcript_payload(
+                    user_role="presenter",
+                    user_text=request.arguments.instruction,
+                    user_source="legacy_realtime_tool_call",
+                    result=result,
+                    workflow_id=workflow_id,
+                    route="catalog_legacy_realtime_draft_tool_call",
+                    selected_tool=request.name,
+                    draft_id=command.current_draft_id,
+                ),
+                name="Visible Catalog Studio realtime transcript",
+            )
+            return CatalogAIWorkflowResponse(
+                **result.model_dump(mode="python"), workflow=workflow
+            )
     except CatalogAICommandError as exc:
         raise HTTPException(
             status_code=exc.status_code,
@@ -1493,14 +1613,6 @@ def execute_catalog_realtime_tool_call(
                 "retryable": exc.retryable,
             },
         ) from exc
-    workflow = get_catalog_workflow_projection(
-        db,
-        workflow_id=workflow_id,
-        principal=principal,
-        developer=False,
-        settings=settings,
-    )
-    return CatalogAIWorkflowResponse(**result.model_dump(mode="python"), workflow=workflow)
 
 
 @router.post(
