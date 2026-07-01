@@ -200,7 +200,12 @@ def route_capability_for(path: str, method: str) -> RouteCapability | None:
             AuthPosture.PUBLIC,
             current_frontend_contract=True,
         )
-    if path == "/api/chat":
+    if path in {
+        "/api/chat",
+        "/api/chat/realtime/capability",
+        "/api/chat/realtime/sessions",
+        "/api/chat/realtime/tool-calls",
+    }:
         return RouteCapability(
             "shopper.chat.turn",
             ApiSurface.PUBLIC_SHOPPER,

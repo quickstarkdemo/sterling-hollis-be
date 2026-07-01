@@ -96,6 +96,28 @@ def test_shared_content_moderation_settings_load_from_env(monkeypatch):
     get_settings.cache_clear()
 
 
+def test_shopper_realtime_settings_load_from_env(monkeypatch):
+    assert Settings(_env_file=None).shopper_realtime_enabled is False
+
+    monkeypatch.setenv("SHOPPER_REALTIME_ENABLED", "true")
+    monkeypatch.setenv("SHOPPER_REALTIME_MODEL", "gpt-realtime-test")
+    monkeypatch.setenv("SHOPPER_REALTIME_TRANSCRIPTION_MODEL", "transcribe-test")
+    monkeypatch.setenv("SHOPPER_REALTIME_CLIENT_SECRET_TTL_SECONDS", "120")
+    monkeypatch.setenv("SHOPPER_REALTIME_TIMEOUT_SECONDS", "3.5")
+    monkeypatch.setenv("SHOPPER_REALTIME_SAFETY_IDENTIFIER_SECRET", "voice-secret")
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.shopper_realtime_enabled is True
+    assert settings.shopper_realtime_model == "gpt-realtime-test"
+    assert settings.shopper_realtime_transcription_model == "transcribe-test"
+    assert settings.shopper_realtime_client_secret_ttl_seconds == 120
+    assert settings.shopper_realtime_timeout_seconds == 3.5
+    assert settings.shopper_realtime_safety_identifier_secret == "voice-secret"
+    get_settings.cache_clear()
+
+
 def test_api_trace_capture_defaults_off_and_loads_independent_retention(monkeypatch):
     assert Settings(_env_file=None).api_trace_capture_enabled is False
 

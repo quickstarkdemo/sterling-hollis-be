@@ -26,6 +26,9 @@ PUBLIC_SHOPPER_CONTRACTS = {
     ("/api/image-analysis", "post"),
     ("/api/recommendations/image", "post"),
     ("/api/chat", "post"),
+    ("/api/chat/realtime/capability", "get"),
+    ("/api/chat/realtime/sessions", "post"),
+    ("/api/chat/realtime/tool-calls", "post"),
 }
 
 
@@ -90,6 +93,9 @@ def test_openapi_marks_primary_shopper_routes_with_capability_contract():
         ("/api/products/{product_id}", "get"): "public.catalog.product_detail",
         ("/api/recommendations/products", "post"): "public.catalog.recommendations",
         ("/api/chat", "post"): "shopper.chat.turn",
+        ("/api/chat/realtime/capability", "get"): "shopper.chat.turn",
+        ("/api/chat/realtime/sessions", "post"): "shopper.chat.turn",
+        ("/api/chat/realtime/tool-calls", "post"): "shopper.chat.turn",
     }
 
     for (path, method), capability_id in expected.items():

@@ -4025,7 +4025,8 @@
               "http.failed",
               "realtime.connected",
               "realtime.disconnected",
-              "realtime.error"
+              "realtime.error",
+              "conversation.turn"
             ],
             "title": "Event Type",
             "type": "string"
@@ -8167,6 +8168,287 @@
           "generated_at"
         ],
         "title": "RunReportResponse",
+        "type": "object"
+      },
+      "ShopperRealtimeCapabilityResponse": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "feature_disabled",
+                  "openai_unconfigured",
+                  "safety_identifier_unconfigured"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "tool_names": {
+            "items": {
+              "const": "shopper_chat_turn",
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          },
+          "webrtc_url": {
+            "default": "https://api.openai.com/v1/realtime/calls",
+            "title": "Webrtc Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "title": "ShopperRealtimeCapabilityResponse",
+        "type": "object"
+      },
+      "ShopperRealtimeSessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ChatContext"
+          }
+        },
+        "title": "ShopperRealtimeSessionRequest",
+        "type": "object"
+      },
+      "ShopperRealtimeSessionResponse": {
+        "properties": {
+          "client_secret": {
+            "title": "Client Secret",
+            "type": "string"
+          },
+          "expires_at": {
+            "minimum": 1.0,
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "tool_names": {
+            "items": {
+              "const": "shopper_chat_turn",
+              "type": "string"
+            },
+            "title": "Tool Names",
+            "type": "array"
+          },
+          "webrtc_url": {
+            "default": "https://api.openai.com/v1/realtime/calls",
+            "title": "Webrtc Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_secret",
+          "expires_at",
+          "model",
+          "tool_names",
+          "session_id"
+        ],
+        "title": "ShopperRealtimeSessionResponse",
+        "type": "object"
+      },
+      "ShopperRealtimeToolArguments": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ShopperRealtimeToolArguments",
+        "type": "object"
+      },
+      "ShopperRealtimeToolCallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "$ref": "#/components/schemas/ShopperRealtimeToolArguments"
+          },
+          "call_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Call Id",
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/ChatContext"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "name": {
+            "const": "shopper_chat_turn",
+            "title": "Name",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "call_id",
+          "name",
+          "arguments"
+        ],
+        "title": "ShopperRealtimeToolCallRequest",
+        "type": "object"
+      },
+      "ShopperRealtimeToolCallResponse": {
+        "properties": {
+          "chat_response": {
+            "$ref": "#/components/schemas/ChatResponse"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "status": {
+            "const": "succeeded",
+            "default": "succeeded",
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_output": {
+            "$ref": "#/components/schemas/ShopperRealtimeToolOutput"
+          }
+        },
+        "required": [
+          "message",
+          "chat_response",
+          "tool_output"
+        ],
+        "title": "ShopperRealtimeToolCallResponse",
+        "type": "object"
+      },
+      "ShopperRealtimeToolOutput": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ChatAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "capability_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capability Id"
+          },
+          "card_count": {
+            "default": 0,
+            "title": "Card Count",
+            "type": "integer"
+          },
+          "clarifying_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarifying Question"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "requires_followup": {
+            "default": false,
+            "title": "Requires Followup",
+            "type": "boolean"
+          },
+          "selected_tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Tool"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "message",
+          "conversation_id"
+        ],
+        "title": "ShopperRealtimeToolOutput",
         "type": "object"
       },
       "StartRevisionRequest": {
@@ -15292,6 +15574,152 @@
           }
         },
         "summary": "Chat",
+        "tags": [
+          "chat"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "optional_clerk",
+        "x-sterling-capability-id": "shopper.chat.turn",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-29.1",
+        "x-sterling-contract-status": "current",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "authenticated_shopper"
+        ]
+      }
+    },
+    "/api/chat/realtime/capability": {
+      "get": {
+        "operationId": "shopper_realtime_capability_api_chat_realtime_capability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShopperRealtimeCapabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read shopper voice assistant Realtime availability",
+        "tags": [
+          "chat"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "optional_clerk",
+        "x-sterling-capability-id": "shopper.chat.turn",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-29.1",
+        "x-sterling-contract-status": "current",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "authenticated_shopper"
+        ]
+      }
+    },
+    "/api/chat/realtime/sessions": {
+      "post": {
+        "operationId": "create_shopper_realtime_session_api_chat_realtime_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ShopperRealtimeSessionRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShopperRealtimeSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a shopper voice assistant Realtime session",
+        "tags": [
+          "chat"
+        ],
+        "x-sterling-api-surface": "public_shopper",
+        "x-sterling-auth-posture": "optional_clerk",
+        "x-sterling-capability-id": "shopper.chat.turn",
+        "x-sterling-capability-surface": "rest",
+        "x-sterling-capability-version": "2026-06-29.1",
+        "x-sterling-contract-status": "current",
+        "x-sterling-current-frontend-contract": true,
+        "x-sterling-legacy-compatibility": false,
+        "x-sterling-personas": [
+          "shopper",
+          "authenticated_shopper"
+        ]
+      }
+    },
+    "/api/chat/realtime/tool-calls": {
+      "post": {
+        "operationId": "execute_shopper_realtime_tool_call_api_chat_realtime_tool_calls_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShopperRealtimeToolCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShopperRealtimeToolCallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute a shopper voice assistant tool call",
         "tags": [
           "chat"
         ],
