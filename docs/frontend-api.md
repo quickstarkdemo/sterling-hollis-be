@@ -308,6 +308,71 @@ Supported selected tools:
 - `order_status`
 - `chat_response`
 
+## Shopper Voice Assistant
+
+`GET /api/chat/realtime/capability` is the public preflight for the consumer
+voice assistant. It returns safe configuration status without probing OpenAI or
+requesting browser media:
+
+```json
+{
+  "configured": true,
+  "model": "gpt-realtime-2",
+  "webrtc_url": "https://api.openai.com/v1/realtime/calls",
+  "tool_names": ["shopper_chat_turn"]
+}
+```
+
+Unavailable responses use `configured: false` with `feature_disabled`,
+`openai_unconfigured`, or `safety_identifier_unconfigured`. No secret value is
+returned.
+
+When configured, create a never-cacheable browser session:
+
+```http
+POST /api/chat/realtime/sessions
+Content-Type: application/json
+```
+
+```json
+{
+  "context": {
+    "route": "/products/prod_5",
+    "store_id": "1001",
+    "product_id": "prod_5"
+  }
+}
+```
+
+The response contains an ephemeral `client_secret`, Unix `expires_at`, the
+Realtime WebRTC URL, a generated `session_id`, and exactly one public tool:
+`shopper_chat_turn`. The browser exchanges its SDP directly with OpenAI; raw
+microphone audio and provider SDP do not pass through the Sterling Hollis
+backend.
+
+When Realtime emits `shopper_chat_turn`, relay the call to the backend:
+
+```http
+POST /api/chat/realtime/tool-calls
+Content-Type: application/json
+```
+
+```json
+{
+  "session_id": "shopper_realtime_...",
+  "call_id": "call_voice_1",
+  "name": "shopper_chat_turn",
+  "arguments": {"message": "Do you have this moisturizer under $150?"},
+  "conversation_id": "chat_...",
+  "context": {"route": "/", "store_id": "1001"}
+}
+```
+
+The tool bridge reuses the normal `POST /api/chat` orchestration, safety,
+identity, persistence, and visible transcript trace path. Repeating the same
+`session_id` and `call_id` replays the completed chat turn instead of executing
+the tools again.
+
 ## Catalog Studio Administrator Session
 
 `GET /api/admin/session` is the server-authoritative browser entry point for

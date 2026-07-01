@@ -81,7 +81,7 @@ Useful optional groups:
   `PINECONE_INDEX_NAME`, `PINECONE_CATALOG_NAMESPACE`, `EMBEDDING_MODEL`,
   `EMBEDDING_DIMENSION`.
 - Storefront/chat: `CHAT_ORCHESTRATION_MODE`, `CHAT_ORCHESTRATION_MODEL`,
-  `CHAT_ORCHESTRATION_MIN_CONFIDENCE`.
+  `CHAT_ORCHESTRATION_MIN_CONFIDENCE`, and `SHOPPER_REALTIME_*`.
 - Public frontend/MCP deployment: `PUBLIC_BASE_URL`, `MCP_ALLOWED_HOSTS`,
   `MCP_ALLOWED_ORIGINS`, `CORS_ALLOWED_ORIGINS`,
   `ENABLE_MCP_ADAPTER`, `ENABLE_OPENAI_APPS_UI`.
@@ -124,6 +124,12 @@ service rather than an agent-authored answer.
 | `OPENAI_API_KEY` | empty | Any OpenAI-backed Catalog Studio capability is enabled | yes |
 | `CONTENT_MODERATION_MODEL` | `omni-moderation-latest` | Review or customer chat content gates are enabled | no |
 | `CONTENT_MODERATION_TIMEOUT_SECONDS` | `10` | Optional shared content moderation override | no |
+| `SHOPPER_REALTIME_ENABLED` | `false` | Set to `true` to enable public shopper voice | no |
+| `SHOPPER_REALTIME_MODEL` | `gpt-realtime-2` | Shopper voice is enabled | no |
+| `SHOPPER_REALTIME_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | Shopper voice is enabled | no |
+| `SHOPPER_REALTIME_CLIENT_SECRET_TTL_SECONDS` | `600` | Optional shopper voice override | no |
+| `SHOPPER_REALTIME_TIMEOUT_SECONDS` | `15` | Optional shopper voice override | no |
+| `SHOPPER_REALTIME_SAFETY_IDENTIFIER_SECRET` | empty | Shopper voice is enabled and no Catalog Studio Realtime secret is set | yes |
 | `CATALOG_STUDIO_CLERK_AUTHORIZED_EMAILS` | empty | Email allowlisting is used | no |
 | `CATALOG_STUDIO_CLERK_AUTHORIZED_SUBJECTS` | empty | Clerk subject allowlisting is used | no |
 | `CATALOG_STUDIO_ADMIN_CLAIM_PATH` | empty | A custom Clerk admin claim is used | no |

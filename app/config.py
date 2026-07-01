@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     chat_orchestration_model: str = "gpt-5.4-mini"
     chat_orchestration_min_confidence: float = 0.55
     chat_orchestration_mode: Literal["deterministic", "strands_product"] = "deterministic"
+    shopper_realtime_enabled: bool = False
+    shopper_realtime_model: str = "gpt-realtime-2"
+    shopper_realtime_transcription_model: str = "gpt-4o-mini-transcribe"
+    shopper_realtime_client_secret_ttl_seconds: int = 600
+    shopper_realtime_timeout_seconds: float = 15.0
+    shopper_realtime_safety_identifier_secret: str = ""
     content_moderation_model: str = "omni-moderation-latest"
     content_moderation_timeout_seconds: float = 10.0
     demo_observability_enabled: bool = False
