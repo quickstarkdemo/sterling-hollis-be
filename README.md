@@ -124,7 +124,7 @@ service rather than an agent-authored answer.
 | `OPENAI_API_KEY` | empty | Any OpenAI-backed Catalog Studio capability is enabled | yes |
 | `CONTENT_MODERATION_MODEL` | `omni-moderation-latest` | Review or customer chat content gates are enabled | no |
 | `CONTENT_MODERATION_TIMEOUT_SECONDS` | `10` | Optional shared content moderation override | no |
-| `SHOPPER_REALTIME_ENABLED` | `false` | Set to `true` to enable public shopper voice | no |
+| `SHOPPER_REALTIME_ENABLED` | `false` locally; production treats omitted as enabled | Set to `false` for an intentional production rollback | no |
 | `SHOPPER_REALTIME_MODEL` | `gpt-realtime-2` | Shopper voice is enabled | no |
 | `SHOPPER_REALTIME_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | Shopper voice is enabled | no |
 | `SHOPPER_REALTIME_CLIENT_SECRET_TTL_SECONDS` | `600` | Optional shopper voice override | no |
@@ -199,6 +199,10 @@ that the provider or browser media connection is currently healthy.
    set `CATALOG_STUDIO_REALTIME_SAFETY_IDENTIFIER_SECRET` to a dedicated random
    secret. The model, transcription model, client-secret TTL, and timeout are
    optional and use the defaults in the table above when omitted.
+   Shopper Realtime defaults on in `prod`/`production` when
+   `SHOPPER_REALTIME_ENABLED` is omitted and can reuse the Catalog Studio safety
+   secret; set `SHOPPER_REALTIME_ENABLED=false` only for an intentional storefront
+   voice rollback.
 2. Deploy backend `main`. The production workflow writes the runtime settings,
    rejects an enabled deployment with a blank API key or safety secret, runs
    database migrations, and completes the API health check.

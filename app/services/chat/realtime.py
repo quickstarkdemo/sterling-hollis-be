@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from app.services.chat.schemas import ChatAction, ChatContext, ChatRequest, Chat
 ShopperRealtimeToolName = Literal["shopper_chat_turn"]
 SHOPPER_REALTIME_WEBRTC_URL = "https://api.openai.com/v1/realtime/calls"
 SHOPPER_REALTIME_TOOL_NAME: ShopperRealtimeToolName = "shopper_chat_turn"
+PRODUCTION_ENVIRONMENTS = {"prod", "production"}
 
 SHOPPER_REALTIME_INSTRUCTIONS = """You are the consumer-facing voice assistant for Sterling Hollis.
 Use the shopper_chat_turn tool for product, availability, store, style, account, order, and recommendation
@@ -155,7 +157,7 @@ class ShopperRealtimeService:
         )
 
     def configuration_error(self) -> ShopperRealtimeError | None:
-        if not self.settings.shopper_realtime_enabled:
+        if not self._shopper_realtime_enabled():
             return ShopperRealtimeError(
                 code="realtime_disabled",
                 detail="The shopper Realtime capability is disabled.",
@@ -177,6 +179,13 @@ class ShopperRealtimeService:
                 retryable=False,
             )
         return None
+
+    def _shopper_realtime_enabled(self) -> bool:
+        if self.settings.shopper_realtime_enabled:
+            return True
+        if os.environ.get("SHOPPER_REALTIME_ENABLED") is not None:
+            return False
+        return self.settings.environment.strip().lower() in PRODUCTION_ENVIRONMENTS
 
     def create_session(
         self,
