@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.models import ChatTurn
 from app.services.chat.realtime import (
     SHOPPER_REALTIME_TOOL_NAME,
@@ -78,6 +78,37 @@ def test_shopper_realtime_capability_reports_safe_unconfigured_reasons(monkeypat
         "tool_names": [],
     }
     assert "server-key" not in response.text
+
+
+def test_shopper_realtime_capability_defaults_on_for_production_when_flag_is_omitted(monkeypatch):
+    monkeypatch.delenv("SHOPPER_REALTIME_ENABLED", raising=False)
+    settings = Settings(
+        _env_file=None,
+        environment="prod",
+        openai_api_key="server-key",
+        catalog_studio_realtime_safety_identifier_secret="catalog-secret",
+    )
+
+    capability = ShopperRealtimeService(settings).capability()
+
+    assert capability.configured is True
+    assert capability.reason is None
+    assert capability.tool_names == [SHOPPER_REALTIME_TOOL_NAME]
+
+
+def test_shopper_realtime_capability_honors_explicit_production_disable(monkeypatch):
+    monkeypatch.setenv("SHOPPER_REALTIME_ENABLED", "false")
+    settings = Settings(
+        _env_file=None,
+        environment="prod",
+        openai_api_key="server-key",
+        catalog_studio_realtime_safety_identifier_secret="catalog-secret",
+    )
+
+    capability = ShopperRealtimeService(settings).capability()
+
+    assert capability.configured is False
+    assert capability.reason == "feature_disabled"
 
 
 def test_shopper_realtime_session_api_returns_browser_secret_and_only_shopper_tool(monkeypatch):
