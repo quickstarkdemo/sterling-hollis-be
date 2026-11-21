@@ -1,7 +1,32 @@
 from __future__ import annotations
 
+import pytest
+
 from app.config import Settings, get_settings
 from app.services import demo_observability
+
+
+@pytest.mark.parametrize(
+    ("environment_value", "expected_base_orders"),
+    [
+        (None, None),
+        ("", None),
+        ("120", 120),
+    ],
+)
+def test_daily_order_baseline_accepts_optional_scheduler_environment(
+    monkeypatch,
+    environment_value,
+    expected_base_orders,
+):
+    if environment_value is None:
+        monkeypatch.delenv("SYNTHETIC_DAILY_BASE_ORDERS", raising=False)
+    else:
+        monkeypatch.setenv("SYNTHETIC_DAILY_BASE_ORDERS", environment_value)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.synthetic_daily_base_orders == expected_base_orders
 
 
 def test_database_url_builds_from_pg_env(monkeypatch):

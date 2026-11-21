@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote_plus
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -171,6 +172,13 @@ class Settings(BaseSettings):
     strategy_packet_enabled: bool = False
     merch_strategy_context_enabled: bool = False
     associate_priority_tags_enabled: bool = False
+
+    @field_validator("synthetic_daily_base_orders", mode="before")
+    @classmethod
+    def normalize_synthetic_daily_base_orders(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 @lru_cache
