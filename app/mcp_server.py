@@ -230,6 +230,9 @@ def _new_mcp_server(name: str) -> FastMCP:
     return FastMCP(
         name,
         json_response=True,
+        # Tools carry their context per request; abandoned HTTP clients must not
+        # retain server sessions for the lifetime of this long-running process.
+        stateless_http=True,
         streamable_http_path="/",
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
