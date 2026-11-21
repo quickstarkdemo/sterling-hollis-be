@@ -3,6 +3,10 @@ services:
     image: ${PRODUCT_API_IMAGE}
     container_name: ${PRODUCT_API_CONTAINER_NAME:-sterling-hollis-be}
     restart: unless-stopped
+    # Bound long-lived process growth without allowing it to exhaust the host.
+    mem_limit: 4g
+    memswap_limit: 5g
+    mem_reservation: 1g
     env_file:
       - ./runtime.env
     ports:
