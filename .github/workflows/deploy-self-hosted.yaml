@@ -135,6 +135,9 @@ jobs:
             --build-arg DD_GIT_REPOSITORY_URL=https://github.com/${{ github.repository }} \
             --build-arg DD_GIT_COMMIT_SHA=${{ github.sha }} \
             .
+          docker run --rm --network none --entrypoint python \
+            "${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}" \
+            -c 'from app.main import app; print("ASGI import passed")'
           docker push "${DOCKERHUB_IMAGE}:latest"
           docker push "${DOCKERHUB_IMAGE}:${{ steps.version.outputs.version }}"
 
